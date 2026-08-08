@@ -28,7 +28,7 @@ with:
 
 ## Setup
 
-Kerakli muhit o'zgaruvchilari: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_STT_LOCALE`
+Kerakli muhit o'zgaruvchilari: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_LANGUAGE`
 
 ## Eslatmalar
 - Uzun nutq uchun audioni 10-15 soniyali qismlarga bo'lib chaqiring.

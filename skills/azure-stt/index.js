@@ -16,7 +16,7 @@ const https = require('https');
 // konstantalar
 const REGION = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY    = process.env.AZURE_SPEECH_KEY;
-const LOCALE = process.env.AZURE_STT_LOCALE || 'uz-UZ';
+const LOCALE = process.env.AZURE_SPEECH_LANGUAGE || process.env.AZURE_STT_LOCALE || 'uz-UZ';
 
 function ensureKey() {
   if (!KEY) throw new Error('AZURE_SPEECH_KEY muhit ozgaruvchisi topilmadi.');

@@ -27,4 +27,4 @@ with:
 
 ## Setup
 
-Kerakli muhit o'zgaruvchilari: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_TTS_VOICE_MALE`, `AZURE_TTS_VOICE_FEMALE`
+Kerakli muhit o'zgaruvchilari: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_VOICE`
