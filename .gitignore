@@ -1,0 +1,29 @@
+# ─── Maxfiy ma'lumotlar ───
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+
+# ─── Xotira va ma'lumotlar ───
+memory/
+logs/
+*.log
+
+# ─── Node / build ───
+node_modules/
+dist/
+build/
+
+# ─── IDE ───
+.vscode/
+.idea/
+
+# ─── OS ───
+.DS_Store
+Thumbs.db
+
+# ─── OpenClaw state backups ───
+*.backup
+*.last-good
