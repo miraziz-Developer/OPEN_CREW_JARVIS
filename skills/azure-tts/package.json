@@ -1,0 +1,9 @@
+{
+  "name": "jarvis-azure-tts",
+  "version": "1.0.0",
+  "description": "Azure Cognitive Services TTS — o'zbek tilda ovoz chiqarish (uz-UZ-SardorNeural / MadinaNeural)",
+  "main": "index.js",
+  "dependencies": {
+    "axios": "^1.7.0"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/Users/mirazizerkinaliyev_dev/.openclaw/workspace",
+      "model": {
+        "primary": "kimi-azure/Kimi-K2.6"
+      },
+      "models": {
+        "kimi-azure/Kimi-K2.6": {}
+      },
+      "skills": [
+        "azure-tts",
+        "azure-stt"
+      ]
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "1be86e2a3a52b5ff51f9c786369d0bad961d81ac6dfe41e4"
+    },
+    "port": 18789,
+    "bind": "loopback",
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "tools": {
+    "profile": "coding"
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "npm"
+    }
+  },
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "kimi-azure": {
+        "api": "openai-completions",
+        "auth": "api-key",
+        "baseUrl": "https://mirazizerkinaliyev553-4-resource.services.ai.azure.com/openai/v1",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "AZURE_OPENAI_KEY"
+        },
+        "contextWindow": 128000,
+        "models": [
+          {
+            "id": "Kimi-K2.6",
+            "name": "Kimi K2.6",
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 32000
+          }
+        ]
+      }
+    }
+  },
+  "wizard": {
+    "lastRunAt": "2026-08-08T04:32:08.450Z",
+    "lastRunVersion": "2026.7.1-2",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.7.1-2",
+    "lastTouchedAt": "2026-08-08T04:58:11.488Z"
+  }
+}
