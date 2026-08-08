@@ -12,8 +12,7 @@ const path = require('path');
 const https = require('https');
 
 // konstantalar
-const DEFAULT_VOICE = process.env.AZURE_TTS_VOICE_MALE || 'uz-UZ-SardorNeural';
-const ALT_VOICE     = process.env.AZURE_TTS_VOICE_FEMALE || 'uz-UZ-MadinaNeural';
+const DEFAULT_VOICE = process.env.AZURE_SPEECH_VOICE || 'uz-UZ-SardorNeural';
 const REGION        = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY           = process.env.AZURE_SPEECH_KEY;
 
