@@ -1,127 +1,112 @@
-# 🇺🇿 JARVIS — OpenClaw + Azure (Kimi 2.6) asosidagi O'zbek AI-yordamchi
+# 🤖 JARVIS — O'zbek tilidagi Jarvis-darajali AI-yordamchi
 
-macOSda 24/7 ishlaydigan, ovoz bilan chaqiriladigan, kompyuterni boshqaruvchi va **100% o'zbek tilida** javob beruvchi AI-yordamchi.
+## Tarif
+**Jarvis** — Mac kompyuteringizda 24/7 doimiy ishlaydigan, ovoz bilan chaqiriladigan, kompyuteringizni avtonom boshqaradigan shaxsiy AI-agent.
 
-## 📁 Loyiha tuzilishi
+> **Texnologiyalar:** OpenClaw + Kimi K2.6 (Azure) + Azure Speech (uz-UZ) + macOS Desktop Control + Telegram
+
+---
+
+## ✨ Imkoniyatlar
+
+### 🎙 Ovozli boshqaruv
+- **"Jarvis"** deb chaqiring → eshitib turadi
+- Buyruqingizni eshitadi, tushunadi, bajaradi
+- Javobni ovozli (SardorNeural) qaytaradi
+
+### 📱 Telegram Bot
+- **Matnli:** suhbat + buyruqlar + fayl topish/yuborish
+- **Ovozli:** xabarni matnga aylantirib javob beradi
+- **Skrinshot:** "skrinshot ol" buyrug'i bilan ekranni oladi
+
+### 🖥 Kompyuter nazorati
+- Ekranni tahlil qiladi
+- Brauzer, ilovalar ochadi
+- Fayllar bilan ishlash
+- Skrinshot olish
+
+### 🔭 Proactive (avtonom) rejim
+- Har 30 daqiquda ekranni tahlil qiladi
+- Muhim eslatmalarni avtomatik yuboradi
+- Vazifalarni o'zi boshqaradi
+
+---
+
+## 🚀 Tez ishga tushirish
+
+### Bitta buyruq bilan to'liq o'rnatish
+
+```bash
+cd ~/projects/OPEN_CREW_JARVIS
+./setup.sh
+```
+
+Bu skript avtomatik ravishda `.env` yaratadi, kalitlar to'g'rligini tekshiradi, OpenClaw config validatsiyasini o'tkazadi, macOS LaunchAgent o'rnatadi, gateway health-check qiladi va "Jarvis tayyor" ovozli tasdiq beradi.
+
+### Qo'lda boshqarish (LaunchAgent)
+
+| Buyruq | Vazifa |
+|--------|--------|
+| `launchctl start com.jarvis.openclaw` | Qo'lda ishga tushirish |
+| `launchctl stop com.jarvis.openclaw` | To'xtatish |
+| `./scripts/disable-autostart.sh` | Avtostartni o'chirish |
+| `./scripts/enable-autostart.sh` | Avtostartni qayta yoqish |
+```
+
+---
+
+## 📋 Tuzilma
 
 ```
 OPEN_CREW_JARVIS/
-├── .env                    # 🔒 Haqiqiy kalitlar (gitignore'da)
-├── .env.example            # 📋 Kerakli o'zgaruvchilar namunasi
-├── .gitignore              # Maxfiy/lokal fayllarni qo'sh
-├── README.md               # Ushbu fayl
-├── openclaw.json           # 🔧 OpenClaw konfiguratsiyasi (workspace ichida emas)
+├── .env                    # Maxfiy sozlamalar (gitignore)
+├── .env.example            # Namuna
+├── openclaw.json           # OpenClaw konfiguratsiyasi
+├── telegram-bot.js         # Telegram bot (v8)
+├── jarvis_daemon.js        # Doimiy eshitish daemon
 └── skills/
-    ├── azure-stt/          # 🎤 Azure STT — o'zbekcha ovozni matnga
-    │   ├── SKILL.md
-    │   ├── index.js
-    │   └── package.json
-    └── azure-tts/          # 🔊 Azure TTS — o'zbekcha ovoz chiqarish
-        ├── SKILL.md
-        ├── index.js
-        └── package.json
+    ├── azure-tts/          # Ovoz chiqarish (uz-UZ-ZardorNeural)
+    └── azure-stt/          # Ovozni tushunish (uz-UZ)
 ```
 
-- **OpenClaw workspace:** `~/.openclaw/workspace/` — shaxsiyat fayllari (`SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `TOOLS.md`)
-- **OpenClaw config:** `~/.openclaw/openclaw.json` — provayder, model, gateway sozlamalari
+---
 
-## 🚀 Ishga tushirish
+## 🔧 Sozlamalar
 
-### 1. Tayyorgarlik
-
-1. OpenClaw o'rnatilgan va yangilanganligini tekshiring:
-   ```bash
-   openclaw --version   # 2026.7.1 va undan yuqori
-   ```
-
-2. `.env.example` dan nusxa olib, haqiqiy qiymatlarni kiriting:
-   ```bash
-   cp .env.example .env
-   # .env faylini tahrirlang (Visual Studio Code, nano, vim)
-   ```
-
-   Kerakli o'zgaruvchilar:
-   - `AZURE_OPENAI_KEY` — Azure AI / Kimi endpoint kaliti
-   - `AZURE_SPEECH_KEY` — Azure Speech xizmati kaliti
-   - `AZURE_SPEECH_REGION` — masalan `southeastasia`
-
-3. Kalitni terminal session'ga uzating:
-   ```bash
-   export AZURE_OPENAI_KEY="sizning_kalitingiz"
-   export AZURE_SPEECH_KEY="speech_kalitingiz"
-   ```
-
-### 2. Konfiguratsiya
-
-Konfiguratsiya allaqachon `~/.openclaw/openclaw.json` ga yozildi. Quyidagilarni tekshiring:
+`.env` faylga quyidagilarni kiriting:
 
 ```bash
-openclaw config validate
-openclaw models list
+# AZURE SPEECH
+AZURE_SPEECH_KEY=...
+AZURE_SPEECH_REGION=eastus2
+AZURE_SPEECH_VOICE=uz-UZ-SardorNeural
+
+# AZURE AI (Kimi K2.6)
+AZURE_OPENAI_KEY=...
+AZURE_OPENAI_ENDPOINT=...
+
+# TELEGRAM
+TELEGRAM_BOT_TOKEN=...
+JARVIS_CHAT_ID=...         # Sizning Telegram chat ID
 ```
 
-Default model `kimi-azure/Kimi-K2.6` ko'rinishi kerak.
+---
 
-### 3. macOS ruxsatlari (MUHIM — foydalanuvchi qo'lda bajarishi kerak)
+## 🧪 Sinov
 
-System Settings → Maxfiylik va xavfsizlik:
+1. **Telegramda:** `@JarvisOzbekBot` ga `/start` yozing
+2. **Ovozli:** "Jarvis, skrinshot ol" deb ayting
+3. **Proactive:** 30 daqiqa kuting — avtomatik xabar keladi
 
-1. **Accessibility** → OpenClaw.app yoki terminal qo'shish
-2. **Screen & System Audio Recording** → OpenClaw/qurilma qo'shish
-3. **Full Disk Access** → Kerak bo'lsa qo'shish
-4. **Microphone** → OpenClaw/qurilma mikrofon ruxsati
+---
 
-### 4. Gateway ishga tushirish
+## ⚠️ Eslatmalar
 
-```bash
-openclaw gateway start
-```
+- Mac-da **Accessibility**, **Screen Recording**, **Microphone** ruxsatlari kerak
+- `.env` faylni **HECH QACHON** gitga qo'shmang
+- Hotword eshitish mikrofonni doimiy ishlatadi
 
-Terminalda `Gateway running on http://127.0.0.1:18789` degan xabar ko'rinadi.
-
-### 5. Suhbat boshlash
-
-```bash
-openclaw agent
-```
-
-Yoki OpenClaw desktop ilovasini oching.
-
-## 🧪 Sinov rejimi
-
-Quyidagilarni tekshiring:
-
-| # | Sinov | Muvaffaqiyat mezoni |
-|---|---|---|
-| 1 | Matnli chat: "Salom, bugun qanday ob-havo?" | Agent javobi faqat o'zbek tilida, lotin alifbosida |
-| 2 | Ovozli buyruq: "Ekranni skrinshoot qil" | STT o'zbek nutqini to'g'ri matnga aylantiradi |
-| 3 | Agent javobini ovoz eshitish | SardorNeural ovozida o'zbek tilida javob beradi |
-| 4 | Kompyuter buyrug'i: "Brauzerni och" | Desktop nazorati orqali amal bajariladi |
-| 5 | Til barqarorligi | 5 ta turli savolga o'zbek tilida javob (boshqa tilga o'tmaydi) |
-
-## 🛡️ Xavfsizlik
-
-- **`.env`** fayli `.gitignore`da — hech qachon commit qilmang!
-- Maxfiy kalitlarni hech qachon kod ichiga yozmang.
-- OpenClaw `approval`/`pause` rejimini yoqing (`.env.example` ga qaraganda).
-- Barcha bajarilgan amallar `logs/` ga yoziladi.
-
-## 🔧 Texnik tafsilotlar
-
-| Komponent | Provider / Esktra |
-|---|---|
-| **LLM (Miya)** | Kimi 2.6 via Azure (`kimi-azure`) |
-| **TTS (Og'iz)** | Azure Speech (custom skill) — `uz-UZ-SardorNeural` |
-| **STT (Quloq)** | Azure Speech (custom skill) — `uz-UZ` locale |
-| **Desktop** | macOS Peekaboo bridge / AppleScript |
-| **Til** | 100% o'zbek (lotin) — `IDENTITY.md` orqali qattiq qoida |
-
-## ❗ Eslatmalar
-
-- Agar `openclaw config validate` xatolik bersa — `openclaw doctor --fix` bilan tuzatishingiz mumkin.
-- Voice wake word uchun OpenClaw desktop ilovasidagi sozlamalardan foydalaning.
-- Desktop nazorati faqat macOS'da ishlaydi — OpenClaw.app o'rnatilgan bo'lishi kerak.
+---
 
 ## 📜 Litsenziya
-
-Shaxsiy foydalanish uchun. Maxfiy kalitlarni hech kim bilan ulashmang!
+Loyiha maxfiy. FAQAT shaxsiy foydalanish uchun.

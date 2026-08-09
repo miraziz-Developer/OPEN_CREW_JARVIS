@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@picovoice/porcupine-node": "^4.0.2",
+    "node-record-lpcm16": "^1.0.1",
+    "node-telegram-bot-api": "^1.2.0"
+  }
+}

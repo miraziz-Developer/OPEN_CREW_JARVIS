@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jarvis.openclaw</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/scripts/jarvis.sh</string>
+  </array>
+
+  <!-- Kompyuter yonganda avtomatik ishga tushsin -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Agar jarayon to'xtsa, launchd avtomatik qayta ishga tushirsin -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Orqaga qayta ishga tushirish oralig'i (sekund) -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/logs/launchd.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/logs/launchd.stderr.log</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- Har system restartda salom berishi uchun flag -->
+    <key>JARVIS_AUTOSTART</key>
+    <string>1</string>
+    <!-- Terminal yo'q bo'lsa ham output boshqarish -->
+    <key>FORCE_COLOR</key>
+    <string>0</string>
+  </dict>
+</dict>
+</plist>
