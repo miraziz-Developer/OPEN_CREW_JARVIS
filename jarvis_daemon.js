@@ -36,13 +36,13 @@ const PICOVOICE_ACCESS_KEY = env('PICOVOICE_ACCESS_KEY');
 
 // ── Config ──────────────────────────────────────────────
 const SAMPLE_RATE = 16000;
-const CHUNK_MS = 350;              // overlap window length (ms)
-const STEP_MS = 150;               // new chunk every (ms)
-const ENERGY_MIN_STT = 600;        // STT gate threshold
+const CHUNK_MS = 800;              // overlap window length (ms) — "Jarvis" to'liq sig'ish uchun
+const STEP_MS = 200;               // new chunk every (ms)
+const ENERGY_MIN_STT = 800;        // STT gate threshold — gapda 2000+, jimlikda ~500
 const ENERGY_TARGET = 2500;        // adaptive gain target
 const SILENCE_MS = 500;            // silence = command end
 const CMD_MAX = 5.0;               // max command length (s)
-const GAIN_MAX = 20, GAIN_MIN = 2; // gain limits
+const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
 const HOTWORD_COOLDOWN_MS = 1500;  // debounce after trigger
 
 let _gain = 6.0;
@@ -323,6 +323,7 @@ async function mainLoop() {
   let stepBuffer = Buffer.alloc(0);
   let nextStepTime = 0;
   let lastHotwordTime = 0;
+  let lastSttCheck = 0;
   let state = 'listening'; // 'listening' | 'command_record' | 'processing'
   let cmdBuffers = [];
   let lastVoiceTime = 0;
@@ -355,7 +356,8 @@ async function mainLoop() {
 
           // Porcupine on overlap chunk every step
           let detected = false;
-          const chunkPCM = rolling.sliceLast(CHUNK_MS);
+          const chunkPCM = Buffer.from(rolling.sliceLast(CHUNK_MS));
+          applyGain(chunkPCM, _gain);
           if (_detector) {
             detected = _detector.processChunk(chunkPCM);
           }
@@ -376,9 +378,13 @@ async function mainLoop() {
           // STT backup hotword every step
           const energy = getEnergy(chunkPCM);
           adaptGain(energy);
-          if (energy >= ENERGY_MIN_STT) {
+          // Debug: energy log every 2 sec
+          if ((now % 2000) < 200) inf('Energy=' + Math.round(energy) + ' gain=' + _gain.toFixed(1));
+          if (energy >= ENERGY_MIN_STT && (now - lastSttCheck > 600)) {
+            lastSttCheck = now;
             const wavBuf = pcmToWavBuffer(Buffer.from(chunkPCM));
-            _sttPool.recognize(wavBuf, 'uz-UZ').then(r => {
+            inf('STT backup hotword check (energy=' + Math.round(energy) + ')...');
+            _sttPool.recognize(wavBuf, 'en-US').then(r => {
               if (r && r.status === 'ok' && r.text) {
                 const t = r.text.toLowerCase();
                 if (['jarvis','jar vis','jarviz','cervis','jervis','djervis','yarvis','jorvis','djarvis','jarv'].some(w => t.includes(w))) {
@@ -392,8 +398,10 @@ async function mainLoop() {
                     inf('Buyruq kutilmoqda...');
                   }
                 }
+              } else {
+                wrn('STT backup: javob yo\'q yoki xatolik');
               }
-            }).catch(() => {});
+            }).catch(e => er('STT backup xatolik: ' + (e.message || e)));
           }
         }
       }
