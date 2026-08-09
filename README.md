@@ -1,3 +1,10 @@
+
+## 🚀 Quick Install (1-click)
+
+\`\`\`bash
+bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_JARVIS/main/install.sh)
+\`\`\`
+
 # 🤖 JARVIS — O'zbek tilidagi Jarvis-darajali AI-yordamchi
 
 ## Tarif
