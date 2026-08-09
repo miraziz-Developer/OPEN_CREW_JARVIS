@@ -19,8 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const https = require('https');
-const { Porcupine, BuiltinKeyword, getBuiltinKeywordPath, getInt16Frames } = require('@picovoice/porcupine-node');
-const record = require('node-record-lpcm16');
+const { Porcupine, BuiltinKeyword, getBuiltinKeywordPath } = require('@picovoice/porcupine-node');
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 process.chdir(PROJECT_DIR);
@@ -284,30 +283,47 @@ class HotwordDetector {
 // ════════════════════════════════════════════
 let _sttPool = null;
 let _detector = null;
-let _recording = null;
-let _stream = null;
+let _sox = null;
+let _soxStream = null;
 
 // ════════════════════════════════════════════
-// CONTINUOUS LISTENING ARCHITECTURE
+// CONTINUOUS LISTENING ARCHITECTURE (ffmpeg → PCM)
 // ════════════════════════════════════════════
+const STEP_BYTES = Math.floor((STEP_MS * SAMPLE_RATE * 2) / 1000);   // 4800 bytes
+const CHUNK_SAMPLES = Math.floor((CHUNK_MS * SAMPLE_RATE) / 1000);   // 5600 samples
+
+function startMicProcess() {
+  const ffmpeg = spawn('sox', [
+    '-d',                              // default device
+    '-t', 'raw',                        // output raw PCM
+    '-r', String(SAMPLE_RATE),
+    '-c', '1',
+    '-b', '16',
+    '-e', 'signed',
+    '-'                                 // stdout
+  ]);
+  ffmpeg.on('error', (err) => er('Mic process error: ' + err.message));
+  ffmpeg.stderr.on('data', () => {});
+  return ffmpeg;
+}
+
 async function mainLoop() {
   _sttPool = new STTPool(2);
-  _detector = new HotwordDetector(PICOVOICE_ACCESS_KEY);
+  if (PICOVOICE_ACCESS_KEY && PICOVOICE_ACCESS_KEY.length > 10) {
+    _detector = new HotwordDetector(PICOVOICE_ACCESS_KEY);
+  } else {
+    wrn('PICOVOICE_ACCESS_KEY yo\'q — faqat STT backup hotword ishlatiladi');
+  }
 
-  // Start continuous recording
-  _recording = record.record({
-    sampleRate: SAMPLE_RATE,
-    channels: 1,
-    audioType: 'raw',
-    recorder: 'sox'
-  });
-  _stream = _recording.stream();
+  // Start sox for continuous raw PCM
+  _sox = startMicProcess();
+  _soxStream = _sox.stdout;
 
   const rolling = new RollingBuffer(5000);
-  let lastChunkTime = 0;
+  let stepBuffer = Buffer.alloc(0);
+  let nextStepTime = 0;
   let lastHotwordTime = 0;
   let state = 'listening'; // 'listening' | 'command_record' | 'processing'
-  let cmdRecording = null;
   let cmdBuffers = [];
   let lastVoiceTime = 0;
   let cmdStartTime = 0;
@@ -316,58 +332,63 @@ async function mainLoop() {
   sendTelegram('🚀 Jarvis v5.0 BLAZING faol');
 
   return new Promise((resolve, reject) => {
-    _stream.on('data', (chunk) => {
+    _soxStream.on('data', (rawChunk) => {
       const now = Date.now();
 
-      // Always feed rolling buffer
-      rolling.push(chunk);
+      // Accumulate into 150ms steps
+      stepBuffer = Buffer.concat([stepBuffer, rawChunk]);
+      let stepData = null;
+      while (stepBuffer.length >= STEP_BYTES) {
+        stepData = stepBuffer.slice(0, STEP_BYTES);
+        stepBuffer = stepBuffer.slice(STEP_BYTES);
+        rolling.push(stepData);
+        if (state !== 'listening') cmdBuffers.push(stepData);
+      }
 
-      // ── STATE: LISTENING (hotword detection + overlap STT backup) ──
+      // ── STATE: LISTENING ──
       if (state === 'listening') {
-        // Porcupine process every chunk (frame-level, ~32ms)
-        const detected = _detector.processChunk(chunk);
+        // Only check on step boundaries (every 150ms)
+        if (now < nextStepTime) return;
+        const elapsed = now - nextStepTime + STEP_MS; // simple: if this is a step, process
+        if (stepData) {
+          nextStepTime = now + STEP_MS;
 
-        if (detected && (now - lastHotwordTime > HOTWORD_COOLDOWN_MS)) {
-          lastHotwordTime = now;
-          ok('🔥 HOTWORD: "Jarvis" (Porcupine)');
+          // Porcupine on overlap chunk every step
+          let detected = false;
+          const chunkPCM = rolling.sliceLast(CHUNK_MS);
+          if (_detector) {
+            detected = _detector.processChunk(chunkPCM);
+          }
 
-          // Transition to command recording
-          state = 'command_record';
-          cmdBuffers = [];
-          lastVoiceTime = now;
-          cmdStartTime = now;
+          if (detected && (now - lastHotwordTime > HOTWORD_COOLDOWN_MS)) {
+            lastHotwordTime = now;
+            ok('🔥 HOTWORD: "Jarvis" (Porcupine)');
+            state = 'command_record';
+            cmdBuffers = [];
+            lastVoiceTime = now;
+            cmdStartTime = now;
+            const preRoll = rolling.sliceLast(300);
+            cmdBuffers.push(preRoll);
+            inf('Buyruq kutilmoqda...');
+            return;
+          }
 
-          // Prepend some audio before hotword (pre-roll, ~0.3s)
-          const preRoll = rolling.sliceLast(300);
-          cmdBuffers.push(preRoll);
-
-          inf('Buyruq kutilmoqda...');
-          return;
-        }
-
-        // Overlap-based energy + STT backup (every STEP_MS)
-        if (now - lastChunkTime >= STEP_MS) {
-          lastChunkTime = now;
-          const pcm = rolling.sliceLast(CHUNK_MS);
-          const energy = getEnergy(pcm);
+          // STT backup hotword every step
+          const energy = getEnergy(chunkPCM);
           adaptGain(energy);
-
           if (energy >= ENERGY_MIN_STT) {
-            // Async STT on this overlap chunk (backup hotword)
-            const wavBuf = pcmToWavBuffer(Buffer.from(pcm));
+            const wavBuf = pcmToWavBuffer(Buffer.from(chunkPCM));
             _sttPool.recognize(wavBuf, 'uz-UZ').then(r => {
               if (r && r.status === 'ok' && r.text) {
                 const t = r.text.toLowerCase();
-                if (['jarvis','jarvis','jar viz','jarviz','cervis','jervis','djervis','yarvis','jorvis','djarvis','jarv'].some(w => t.includes(w))) {
-                  if (now - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
-                    lastHotwordTime = now;
+                if (['jarvis','jar vis','jarviz','cervis','jervis','djervis','yarvis','jorvis','djarvis','jarv'].some(w => t.includes(w))) {
+                  if ((Date.now() - lastHotwordTime) > HOTWORD_COOLDOWN_MS) {
+                    lastHotwordTime = Date.now();
                     ok('🔥 HOTWORD (STT backup): "' + r.text + '"');
                     state = 'command_record';
                     cmdBuffers = [];
-                    lastVoiceTime = now;
-                    cmdStartTime = now;
-                    const preRoll2 = rolling.sliceLast(300);
-                    cmdBuffers.push(preRoll2);
+                    lastVoiceTime = Date.now();
+                    cmdStartTime = Date.now();
                     inf('Buyruq kutilmoqda...');
                   }
                 }
@@ -379,11 +400,10 @@ async function mainLoop() {
 
       // ── STATE: COMMAND RECORDING ──
       else if (state === 'command_record') {
-        cmdBuffers.push(chunk);
         const elapsed = now - cmdStartTime;
 
-        // Energy on full command buffer each 120ms
-        if (now % 120 < 30) {
+        // Energy check every ~120ms
+        if (elapsed % 120 < 30 && cmdBuffers.length > 2) {
           const totalPCM = Buffer.concat(cmdBuffers);
           const energy = getEnergy(totalPCM);
           if (energy > 300) lastVoiceTime = now;
@@ -391,18 +411,17 @@ async function mainLoop() {
 
         const silence = now - lastVoiceTime;
         if ((elapsed > 800 && silence > SILENCE_MS) || elapsed > CMD_MAX * 1000) {
-          // STOP recording
           state = 'processing';
           const totalPCM = Buffer.concat(cmdBuffers);
           const wavBuf = pcmToWavBuffer(totalPCM);
-
           inf('STT ishlanyapti...');
           _sttPool.recognize(wavBuf, 'uz-UZ').then(r => {
             state = 'listening';
+            nextStepTime = Date.now(); // reset timing
             if (r && r.status === 'ok' && r.text && r.text.length > 1) {
               const cmd = r.text.trim();
               ok('Buyruq: "' + cmd + '"');
-              processCommand(cmd).then(() => {}).catch(() => {});
+              processCommand(cmd).catch(() => {});
             } else {
               wrn('STT natija topilmadi');
             }
@@ -414,12 +433,12 @@ async function mainLoop() {
       }
     });
 
-    _stream.on('error', (err) => {
+    _soxStream.on('error', (err) => {
       er('Stream error: ' + err.message);
       reject(err);
     });
 
-    _stream.on('end', () => {
+    _soxStream.on('end', () => {
       inf('Stream ended');
       resolve();
     });
@@ -480,7 +499,7 @@ async function processCommand(command) {
 // ════════════════════════════════════════════
 function cleanup() {
   inf('To\'xtatilmoqda...');
-  if (_recording) { try { _recording.stop(); } catch(e){} }
+  if (_sox) { try { _sox.kill(); } catch(e){} }
   if (_detector) { try { _detector.release(); } catch(e){} }
   if (_sttPool) { _sttPool.killAll(); }
   process.exit(0);
