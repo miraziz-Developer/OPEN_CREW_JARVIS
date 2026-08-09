@@ -36,16 +36,16 @@ const PICOVOICE_ACCESS_KEY = env('PICOVOICE_ACCESS_KEY');
 
 // ── Config ──────────────────────────────────────────────
 const SAMPLE_RATE = 16000;
-const CHUNK_MS = 800;              // overlap window length (ms) — "Jarvis" to'liq sig'ish uchun
+const CHUNK_MS = 1200;             // overlap window (ms) — "Jarvis" to'liq sig'ish uchun
 const STEP_MS = 200;               // new chunk every (ms)
-const ENERGY_MIN_STT = 800;        // STT gate threshold — gapda 2000+, jimlikda ~500
-const ENERGY_TARGET = 2500;        // adaptive gain target
+const ENERGY_MIN_STT = 400;        // STT gate threshold — gapda yaxshi catch qiladi
+const ENERGY_TARGET = 1500;        // adaptive gain target — low, no clip
 const SILENCE_MS = 500;            // silence = command end
 const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
 const HOTWORD_COOLDOWN_MS = 1500;  // debounce after trigger
 
-let _gain = 6.0;
+let _gain = 2.0;  // START LOW — adapt, don't clip
 
 // ── Colors ──────────────────────────────────────────────
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', B = '\x1b[36m', X = '\x1b[0m';
@@ -209,8 +209,9 @@ function getEnergy(pcm16leBuffer) {
 }
 
 function adaptGain(energy) {
-  if (energy < ENERGY_MIN_STT) _gain = Math.min(_gain * 1.3, GAIN_MAX);
-  else if (energy > ENERGY_TARGET * 3) _gain = Math.max(_gain * 0.7, GAIN_MIN);
+  if (energy < ENERGY_MIN_STT) _gain = Math.min(_gain * 1.2, GAIN_MAX);
+  else if (energy > ENERGY_TARGET * 2.5) _gain = Math.max(_gain * 0.8, GAIN_MIN);
+  else _gain = Math.max(_gain * 0.97, GAIN_MIN); // slow drift down
   return _gain;
 }
 
@@ -357,6 +358,7 @@ async function mainLoop() {
           // Porcupine on overlap chunk every step
           let detected = false;
           const chunkPCM = Buffer.from(rolling.sliceLast(CHUNK_MS));
+          // Apply gain ONLY for Porcupine (frame-level)
           applyGain(chunkPCM, _gain);
           if (_detector) {
             detected = _detector.processChunk(chunkPCM);
@@ -376,7 +378,9 @@ async function mainLoop() {
           }
 
           // STT backup hotword every step
-          const energy = getEnergy(chunkPCM);
+          // Energy adapt on NON-amplified audio (real mic level)
+          const rawPCM = Buffer.from(rolling.sliceLast(CHUNK_MS));
+          const energy = getEnergy(rawPCM);
           adaptGain(energy);
           // Debug: energy log every 2 sec
           if ((now % 2000) < 200) inf('Energy=' + Math.round(energy) + ' gain=' + _gain.toFixed(1));
