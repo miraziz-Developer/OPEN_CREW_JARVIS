@@ -214,19 +214,29 @@ dashboard_healthy() {
   curl -sf --max-time 3 http://127.0.0.1:7890/api/status >/dev/null 2>&1
 }
 
-# ── Ovozli salom (bir marta/30 daqiqa limit) ──
+# ── Ovozli salom ──
+# Autostart rejimida bir login/boot sessiyasida faqat bir marta aytiladi.
+# Supervisor crash/restart yoki Fn+Shift resume bir boot ichida salomni qayta
+# takrorlamaydi. Qo'lda ishga tushirilganda esa eski 30 daqiqalik limit qoladi.
 greeting() {
-  local now_ts last_ts diff_min
+  local now_ts last_ts diff_min boot_id last_boot
   now_ts=$(date +%s)
 
-  # Restart/reboot bo'lganda har doim salom berish
   if [[ "${JARVIS_AUTOSTART:-0}" == "1" ]]; then
-    log "[GREETING] Autostart restart — timestamp tozalanyapti."
-    rm -f "${LAST_GREETING}"
+    boot_id=$(sysctl -n kern.boottime 2>/dev/null | sed -E 's/.*sec = ([0-9]+).*/\1/' || true)
+    [[ -z "${boot_id}" ]] && boot_id="login-$(id -u)"
+
+    if [[ -f "${LAST_GREETING}" ]]; then
+      read -r last_boot last_ts <"${LAST_GREETING}" || true
+      if [[ "${last_boot:-}" == "${boot_id}" ]]; then
+        log "[GREETING] Ushbu boot sessiyasida salom allaqachon aytilgan."
+        return
+      fi
+    fi
   fi
 
-  if [[ -f "${LAST_GREETING}" ]]; then
-    last_ts=$(cat "${LAST_GREETING}")
+  if [[ "${JARVIS_AUTOSTART:-0}" != "1" && -f "${LAST_GREETING}" ]]; then
+    last_ts=$(awk '{print $NF}' "${LAST_GREETING}" 2>/dev/null || echo 0)
     diff_min=$(((now_ts - last_ts) / 60))
     if [[ ${diff_min} -lt 30 ]]; then
       log "[GREETING] Cheklangan: oxirgi salomdan ${diff_min} daqiqa o'tgan."
@@ -246,7 +256,11 @@ greeting() {
       audio_file=$(grep -o '"audioFile":"[^"]*"' "${tmp_out}" | sed 's/.*:"\(.*\)".*/\1/' || true)
       if [[ -n "${audio_file}" && -f "${audio_file}" ]]; then
         afplay "${audio_file}" 2>/dev/null || true
-        echo "${now_ts}" >"${LAST_GREETING}"
+        if [[ "${JARVIS_AUTOSTART:-0}" == "1" ]]; then
+          echo "${boot_id} ${now_ts}" >"${LAST_GREETING}"
+        else
+          echo "manual ${now_ts}" >"${LAST_GREETING}"
+        fi
         log "[GREETING] ✅ Salom yuborildi."
       else
         warn "[GREETING] audioFile topilmadi."
