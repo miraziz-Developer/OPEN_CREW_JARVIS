@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS</title>
+<meta name="theme-color" content="#050b14">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#050b14; --panel:#081523cc; --line:#0e2c40;
+  --cyan:#00e5ff; --cyan-dim:#0a7f96; --teal:#19f0d8;
+  --amber:#ffb300; --red:#ff4d5e; --txt:#9fd8e8; --txt-dim:#4d7d92;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:radial-gradient(ellipse at 50% 38%, #0a1a2c 0%, var(--bg) 65%);
+  color:var(--txt); font-family:'Rajdhani',sans-serif; overflow:hidden;
+}
+body::after{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:9;
+  background:repeating-linear-gradient(0deg, transparent 0 2px, #00e5ff05 2px 4px);
+}
+#grid{display:grid; grid-template-columns:340px 1fr 340px; grid-template-rows:54px 1fr 26px; height:100vh; gap:8px; padding:8px}
+header{
+  grid-column:1/4; display:flex; align-items:center; justify-content:space-between;
+  border:1px solid var(--line); background:var(--panel); padding:0 18px;
+  clip-path:polygon(0 0,100% 0,100% 70%,calc(100% - 16px) 100%,16px 100%,0 70%);
+}
+header h1{font-family:'Orbitron'; font-size:19px; letter-spacing:8px; color:var(--cyan); text-shadow:0 0 12px #00e5ff88}
+header .sub{font-size:12px; letter-spacing:3px; color:var(--txt-dim)}
+#clock{font-family:'Orbitron'; font-size:15px; letter-spacing:2px; color:var(--teal)}
+.col{display:flex; flex-direction:column; gap:8px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--line) transparent}
+.panel{
+  border:1px solid var(--line); background:var(--panel); padding:10px 12px; position:relative;
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px));
+}
+.panel h2{
+  font-family:'Orbitron'; font-size:10px; letter-spacing:3px; color:var(--cyan);
+  border-bottom:1px solid var(--line); padding-bottom:5px; margin-bottom:7px;
+  display:flex; justify-content:space-between;
+}
+.panel h2 .num{color:var(--txt-dim)}
+.kv{display:flex; justify-content:space-between; font-size:13px; padding:1.5px 0}
+.kv b{color:var(--teal); font-weight:600; text-align:right; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.ok{color:var(--teal)} .warn{color:var(--amber)} .err{color:var(--red)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;background:var(--txt-dim)}
+.dot.on{background:var(--teal); box-shadow:0 0 6px var(--teal)}
+.dot.off{background:var(--red); box-shadow:0 0 6px var(--red)}
+#center{display:flex; flex-direction:column; align-items:center; justify-content:flex-start; position:relative; overflow:hidden}
+#reactorWrap{position:relative; width:min(40vh,380px); height:min(40vh,380px); flex-shrink:0; margin-top:6px}
+#reactor{width:100%; height:100%}
+#coreState{
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  pointer-events:none; font-family:'Orbitron';
+}
+#coreState .st{font-size:15px; letter-spacing:6px; color:var(--cyan); text-shadow:0 0 14px #00e5ffaa}
+#coreState .hint{font-size:9px; letter-spacing:2px; color:var(--txt-dim); margin-top:6px}
+#chatFeed{width:100%; max-width:720px; flex:1; overflow-y:auto; margin-top:6px; padding:0 10px;
+  display:flex; flex-direction:column; gap:8px; scrollbar-width:thin; min-height:80px}
+.bubble{font-size:14.5px; line-height:1.4; padding:8px 13px; border:1px solid var(--line); background:#08152399; max-width:86%}
+.bubble.you{align-self:flex-end; border-color:#205a6e; color:#cfeefb}
+.bubble.jarvis{align-self:flex-start; border-left:2px solid var(--cyan)}
+.bubble.pending{opacity:.6; font-style:italic}
+#chatRow{display:flex; gap:8px; width:100%; max-width:720px; padding:8px 10px 4px}
+#chatInput{flex:1; background:#06101c; border:1px solid var(--line); color:#cfeefb; padding:9px 12px;
+  font-family:'Rajdhani'; font-size:15px; outline:none}
+#chatInput:focus{border-color:var(--cyan-dim); box-shadow:0 0 8px #00e5ff33}
+button.btn{background:#0a2435; color:var(--cyan); border:1px solid var(--cyan-dim); padding:9px 16px;
+  font-family:'Orbitron'; font-size:11px; letter-spacing:2px; cursor:pointer}
+button.btn:hover{background:#0e3349; box-shadow:0 0 10px #00e5ff44}
+#activity{max-height:260px; overflow-y:auto; font-size:12.5px}
+#activity div{padding:2px 0; color:var(--txt-dim)}
+#activity div b{color:var(--amber)}
+#tasksList,#profileList{max-height:220px; overflow-y:auto; font-size:12.5px}
+#tasksList .task{padding:3px 0; display:flex; gap:6px; align-items:flex-start}
+#tasksList .task .box{flex-shrink:0; margin-top:2px}
+#profileList .pf{padding:5px 0; border-bottom:1px solid var(--line)}
+#profileList .pf .title{color:var(--amber); font-size:11px; letter-spacing:1px}
+#profileList .pf .body{white-space:pre-wrap; font-size:12px; margin-top:2px}
+footer{
+  grid-column:1/4; display:flex; align-items:center; justify-content:space-between;
+  font-size:11px; letter-spacing:2px; color:var(--txt-dim); padding:0 14px;
+}
+/* ---------------- boot sequence ---------------- */
+#boot{position:fixed; inset:0; z-index:100; background:#020509; display:flex;
+  flex-direction:column; align-items:center; justify-content:center; transition:opacity .7s}
+#boot.done{opacity:0; pointer-events:none}
+#boot::after{content:""; position:absolute; inset:0; pointer-events:none;
+  background:repeating-linear-gradient(0deg, transparent 0 3px, #00e5ff06 3px 6px)}
+#bootLogo{font-family:'Orbitron'; font-size:clamp(22px,5vw,38px); letter-spacing:14px;
+  color:var(--cyan); text-shadow:0 0 34px #00e5ff99; animation:bootPulse 1.4s ease-in-out infinite}
+#bootSub{font-size:11px; letter-spacing:6px; color:var(--txt-dim); margin-top:10px}
+#bootLines{margin-top:30px; font-size:13px; letter-spacing:2px; color:var(--txt-dim);
+  width:min(360px,80vw); min-height:140px; font-family:'Rajdhani'}
+#bootLines div{opacity:0; animation:lineIn .2s forwards; padding:2px 0}
+#bootLines div b{color:var(--teal); float:right}
+@keyframes lineIn{to{opacity:1}}
+@keyframes bootPulse{50%{opacity:.5}}
+body.booting .panel, body.booting header, body.booting footer, body.booting #reactorWrap{opacity:0}
+body.booted .panel{animation:panelIn .55s backwards}
+body.booted header{animation:panelIn .4s backwards}
+@keyframes panelIn{0%{opacity:0; transform:translateY(10px)}55%{opacity:.45}65%{opacity:.95}
+  75%{opacity:.35}85%{opacity:1}100%{opacity:1; transform:none}}
+@media (max-width:980px){
+  #grid{display:flex; flex-direction:column; height:auto; min-height:100dvh; gap:8px}
+  header{position:sticky; top:0; z-index:15; flex-shrink:0}
+  header h1{font-size:15px; letter-spacing:4px}
+  header .sub{display:none}
+  #reactorWrap{width:min(60vw,240px); height:min(60vw,240px)}
+  .col{order:2; overflow:visible; flex-shrink:0}
+}
+</style>
+</head>
+<body>
+<div id="boot">
+  <div id="bootLogo">J.A.R.V.I.S</div>
+  <div id="bootSub">OPEN CREW JARVIS — O'ZBEK TILIDAGI YORDAMCHI</div>
+  <div id="bootLines"></div>
+</div>
+<div id="grid">
+  <header>
+    <h1>J.A.R.V.I.S</h1>
+    <div class="sub">DASHBOARD &nbsp;//&nbsp; <span id="connState">ULANMOQDA</span></div>
+    <div id="clock">--:--:--</div>
+  </header>
+
+  <!-- LEFT -->
+  <div class="col">
+    <div class="panel"><h2><span>TIZIM HOLATI</span><span class="num">01</span></h2>
+      <div class="kv"><span><span class="dot" id="d-gateway"></span>Gateway</span><b id="s-gateway">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-bot"></span>Telegram Bot</span><b id="s-bot">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-daemon"></span>Ovozli Daemon</span><b id="s-daemon">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-monitor"></span>Ekran Kuzatuv</span><b id="s-monitor">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-sentinel"></span>Fn+Shift Sentinel</span><b id="s-sentinel">—</b></div>
+    </div>
+    <div class="panel"><h2><span>MODEL</span><span class="num">02</span></h2>
+      <div class="kv"><span>Asosiy</span><b id="m-primary">—</b></div>
+      <div class="kv"><span>Ekran ko'rish</span><b id="m-vision">—</b></div>
+      <div class="kv"><span>Zaxira</span><b id="m-fallback">—</b></div>
+    </div>
+    <div class="panel"><h2><span>FAOLIYAT (LOG)</span><span class="num">03</span></h2>
+      <div id="activity"><div>— yuklanmoqda —</div></div>
+    </div>
+    <div class="panel"><h2><span>JONLI VAZIFALAR</span><span class="num">04</span></h2>
+      <div id="rtTasksList" style="max-height:150px;overflow-y:auto;font-size:12.5px"><div>— hozircha yo'q —</div></div>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div id="center">
+    <div id="reactorWrap">
+      <canvas id="reactor"></canvas>
+      <div id="coreState"><div class="st" id="stateLabel">STANDBY</div><div class="hint" id="stateHint">TIZIM HOLATI KUZATILMOQDA</div></div>
+    </div>
+    <div id="chatFeed"></div>
+    <div id="chatRow">
+      <input id="chatInput" placeholder="Jarvisga yozing…" autocomplete="off">
+      <button class="btn" id="sendBtn">YUBOR</button>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="col">
+    <div class="panel"><h2><span>BUGUNGI VAZIFALAR</span><span class="num">05</span></h2>
+      <div id="tasksList"><div>— yuklanmoqda —</div></div>
+    </div>
+    <div class="panel"><h2><span>O'RGANILGAN NAQSHLAR</span><span class="num">06</span></h2>
+      <div id="profileList"><div>— yuklanmoqda —</div></div>
+    </div>
+  </div>
+
+  <div style="grid-column:1/4"></div>
+  <footer>
+    <span>OPEN_CREW_JARVIS</span>
+    <span id="footRefresh">—</span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+
+/* ============================== clock ============================== */
+setInterval(()=>{const d=new Date();$("clock").textContent=d.toTimeString().slice(0,8)},500);
+
+/* ============================== reactor ============================ */
+const cv=$("reactor"), ctx=cv.getContext("2d");
+function sizeCanvas(){const r=cv.parentElement.getBoundingClientRect();cv.width=r.width*devicePixelRatio;cv.height=r.height*devicePixelRatio}
+sizeCanvas(); addEventListener("resize",sizeCanvas);
+let rot=0, state="standby";
+const STATE_STYLE={
+  standby:{speed:.15,color:"#00e5ff",glow:18,pulse:0},
+  active:{speed:.5,color:"#19f0d8",glow:30,pulse:1},
+  paused:{speed:.05,color:"#ff4d5e",glow:22,pulse:0},
+  degraded:{speed:.3,color:"#ffb300",glow:26,pulse:.4},
+};
+function drawRing(cx,cy,r,w,color,alpha,dash,offset){
+  ctx.beginPath(); ctx.strokeStyle=color; ctx.globalAlpha=alpha; ctx.lineWidth=w;
+  if(dash)ctx.setLineDash(dash); else ctx.setLineDash([]);
+  ctx.lineDashOffset=offset||0;
+  ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; ctx.setLineDash([]);
+}
+function frame(t){
+  const s=STATE_STYLE[state]||STATE_STYLE.standby;
+  rot+=s.speed;
+  const W=cv.width,H=cv.height,cx=W/2,cy=H/2;
+  const base=Math.min(W,H)*0.40;
+  ctx.clearRect(0,0,W,H);
+  ctx.shadowColor=s.color; ctx.shadowBlur=s.glow*devicePixelRatio;
+  const pulse=1+Math.sin(t/300)*0.012*(1+s.pulse*3);
+  drawRing(cx,cy,base*pulse,2*devicePixelRatio,s.color,.9);
+  drawRing(cx,cy,base*.86,1.2*devicePixelRatio,s.color,.45,[40,18],rot*2);
+  drawRing(cx,cy,base*.72,5*devicePixelRatio,s.color,.25,[4,10],-rot*3);
+  drawRing(cx,cy,base*.58,1.5*devicePixelRatio,s.color,.6,[90,40],rot*1.2);
+  ctx.shadowBlur=0;
+  for(let i=0;i<60;i++){
+    const a=(i/60)*Math.PI*2+rot/180;
+    const r1=base*1.06,r2=base*(i%5===0?1.12:1.09);
+    ctx.beginPath(); ctx.strokeStyle=s.color; ctx.globalAlpha=i%5===0?.8:.3;
+    ctx.lineWidth=devicePixelRatio;
+    ctx.moveTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1);
+    ctx.lineTo(cx+Math.cos(a)*r2,cy+Math.sin(a)*r2); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+  ctx.shadowColor=s.color; ctx.shadowBlur=40*devicePixelRatio;
+  const g=ctx.createRadialGradient(cx,cy,0,cx,cy,base*.42);
+  g.addColorStop(0,s.color+"55"); g.addColorStop(1,"transparent");
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(cx,cy,base*.42,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+function setState(st,label,hint){
+  state=st; $("stateLabel").textContent=label;
+  if(hint!==undefined)$("stateHint").textContent=hint;
+}
+
+/* ============================== data polling ========================= */
+async function jget(p){const r=await fetch(p,{cache:"no-store"});if(!r.ok)throw new Error(r.status);return r.json()}
+
+function setDot(id, on){ $(id).className = "dot " + (on ? "on" : "off"); }
+
+async function refreshStatus(){
+  try{
+    const s = await jget("/api/status");
+    $("connState").textContent = "ULANGAN";
+    setDot("d-gateway", s.gateway); $("s-gateway").textContent = s.gateway ? "sog'lom" : "o'chirilgan";
+    setDot("d-bot", s.bot); $("s-bot").textContent = s.bot ? "faol" : "o'chirilgan";
+    setDot("d-daemon", s.daemon); $("s-daemon").textContent = s.daemon ? "faol" : "o'chirilgan";
+    setDot("d-monitor", s.monitor); $("s-monitor").textContent = s.monitor ? "faol" : "o'chirilgan";
+    setDot("d-sentinel", s.sentinel); $("s-sentinel").textContent = s.sentinel ? "tinglamoqda" : "yo'q";
+    $("m-primary").textContent = s.model.primary;
+    $("m-vision").textContent = s.model.vision;
+    $("m-fallback").textContent = s.model.fallback;
+
+    if (s.paused) setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
+    else if (s.gateway && s.bot && s.daemon) setState("active", "FAOL", "HAMMASI ISHLAMOQDA");
+    else setState("degraded", "QISMAN", "BA'ZI QISMLAR O'CHIRILGAN");
+  }catch(e){
+    $("connState").textContent = "UZILDI";
+    setState("degraded", "ULANMADI", "DASHBOARD SERVERGA ULANOLMADI");
+  }
+  $("footRefresh").textContent = "yangilandi: " + new Date().toTimeString().slice(0,8);
+}
+
+async function refreshActivity(){
+  try{
+    const items = await jget("/api/activity?limit=30");
+    const a = $("activity");
+    if(items.length){
+      a.innerHTML = items.map(it =>
+        `<div><b>${esc(it.time)}</b> ${esc(it.topic)}</div>`
+      ).join("");
+    } else {
+      a.innerHTML = "<div>— hali faoliyat yo'q —</div>";
+    }
+  }catch(e){}
+}
+
+/* ============================== chat ================================= */
+const CHAT_TOPICS = ["Ovozli buyruq","Telegram suhbat","Dashboard chat"];
+function addBubble(cls, text){
+  const feed = $("chatFeed");
+  const d = document.createElement("div");
+  d.className = "bubble " + cls;
+  d.textContent = text;
+  feed.appendChild(d);
+  feed.scrollTop = feed.scrollHeight;
+  return d;
+}
+let chatHistoryLoaded = false;
+async function loadChatHistory(){
+  if (chatHistoryLoaded) return;
+  chatHistoryLoaded = true;
+  try{
+    const items = await jget("/api/activity?limit=60");
+    const convo = items.filter(it => CHAT_TOPICS.includes(it.topic)).reverse();
+    for (const it of convo){
+      const m = it.content.match(/^Foydalanuvchi:\s*([\s\S]*?)\nJarvis:\s*([\s\S]*)$/);
+      if (m){
+        addBubble("you", m[1].trim());
+        addBubble("jarvis", m[2].trim());
+      }
+    }
+    if (!convo.length) addBubble("jarvis", "Salom! Sizga qanday yordam bera olaman?");
+  }catch(e){}
+}
+
+let chatBusy = false;
+async function sendChat(){
+  const input = $("chatInput");
+  const text = input.value.trim();
+  if (!text || chatBusy) return;
+  input.value = "";
+  addBubble("you", text);
+  const pending = addBubble("jarvis pending", "o'ylayapman…");
+  chatBusy = true; $("sendBtn").disabled = true;
+  try{
+    const r = await fetch("/api/chat", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ message: text })
+    });
+    const data = await r.json();
+    pending.textContent = data.reply || "Xatolik yuz berdi.";
+    pending.className = "bubble jarvis";
+  }catch(e){
+    pending.textContent = "Ulanishda xatolik.";
+    pending.className = "bubble jarvis";
+  }
+  chatBusy = false; $("sendBtn").disabled = false;
+}
+$("sendBtn").addEventListener("click", sendChat);
+$("chatInput").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
+
+function timeAgo(ts){
+  if(!ts) return "";
+  const s = Math.round((Date.now()-ts)/1000);
+  if(s<60) return s+"s";
+  return Math.round(s/60)+"m";
+}
+async function refreshRealtimeTasks(){
+  try{
+    const items = await jget("/api/realtime-tasks");
+    const el = $("rtTasksList");
+    if(!items.length){ el.innerHTML = "<div>— hozircha yo'q —</div>"; return; }
+    el.innerHTML = items.map(t => {
+      const icon = t.status === "in_progress" ? "⏳" : "✅";
+      const when = t.status === "in_progress" ? timeAgo(t.startedAt)+" davom etmoqda" : timeAgo(t.completedAt)+" oldin tugadi";
+      return `<div class="task"><span class="box">${icon}</span><span>${esc(t.description)}<br><span style="color:var(--txt-dim);font-size:11px">${when}</span></span></div>`;
+    }).join("");
+  }catch(e){}
+}
+
+async function refreshTasks(){
+  try{
+    const items = await jget("/api/tasks");
+    const el = $("tasksList");
+    if(!items.length){ el.innerHTML = "<div>— vazifalar ro'yxati bo'sh —</div>"; return; }
+    el.innerHTML = items.map(t =>
+      `<div class="task"><span class="box">${t.doneToday ? "✅" : "⬜"}</span><span>${esc(t.text)}</span></div>`
+    ).join("");
+  }catch(e){}
+}
+
+async function refreshProfile(){
+  try{
+    const items = await jget("/api/profile");
+    const el = $("profileList");
+    if(!items.length){ el.innerHTML = "<div>— hali naqsh o'rganilmagan —</div>"; return; }
+    el.innerHTML = items.map(p =>
+      `<div class="pf"><div class="title">${esc(p.title)}</div><div class="body">${esc(p.body)}</div></div>`
+    ).join("");
+  }catch(e){}
+}
+
+function esc(s){ return String(s||"").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])); }
+
+function refreshAll(){
+  refreshStatus();
+  refreshActivity();
+  refreshRealtimeTasks();
+  refreshTasks();
+  refreshProfile();
+  loadChatHistory();
+}
+refreshAll();
+setInterval(refreshAll, 5000);
+
+/* ============================== boot sequence ========================= */
+const BOOT_LINES=[
+  ["GATEWAY ALOQASI",120],["OVOZLI DAEMON",100],["EKRAN KUZATUV",100],
+  ["OBSIDIAN XOTIRA",90],["KUNLIK VAZIFALAR",90],["MODEL: GPT-5.4",110],
+];
+async function bootSequence(){
+  const boot=$("boot");
+  document.body.classList.add("booting");
+  const bl=$("bootLines"); bl.innerHTML="";
+  for(const [t,d] of BOOT_LINES){
+    const div=document.createElement("div"); div.innerHTML="▸ "+t+" <b>OK</b>";
+    bl.appendChild(div); await new Promise(r=>setTimeout(r,d*0.5));
+  }
+  await new Promise(r=>setTimeout(r,200));
+  document.querySelectorAll(".panel").forEach((p,i)=>p.style.animationDelay=(120+i*80)+"ms");
+  boot.classList.add("done");
+  document.body.classList.remove("booting"); document.body.classList.add("booted");
+  setTimeout(()=>{boot.style.display="none"},900);
+}
+bootSequence();
+</script>
+</body>
+</html>

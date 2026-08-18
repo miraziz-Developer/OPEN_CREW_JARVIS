@@ -6,11 +6,12 @@ Azure Speech REST API bilan ovozni matnga aylantiradi (Speech-to-Text). Qisqa nu
 
 ### `azure_stt_recognize`
 
-Ovozli audio faylni o'zbek tilida (uz-UZ) matnga aylantiradi.
+Ovozli audio faylni matnga aylantiradi. Aniqlikni oshirish uchun bir nechta tilni (masalan o'zbek + ingliz) parallel tekshiradi va eng mos natijani tanlaydi — foydalanuvchi ingliz so'z aralashtirib gapirsa ham tushunadi. Tillar orasidagi confidence solishtirib bo'lmagani uchun o'zbek tiliga ustunlik beriladi (ingliz faqat sezilarli aniqroq bo'lsa tanlanadi).
 
 **Kirish:**
 - `audioFile` (string, ixtiyoriy): WAV fayl yo'li (16000 Hz, 16-bit, mono)
 - `audioBase64` (string, ixtiyoriy): Base64 formatda kodlangan audio (wav)
+- `locales` (string[], ixtiyoriy): Tekshiriladigan tillar ro'yxati, masalan `["uz-UZ","en-US"]` (default: shu ikkalasi)
 
 `audioFile` yoki `audioBase64` maydonlaridan biri kerak.
 

@@ -34,6 +34,19 @@ const chatHistory = {};
 const MAX_HISTORY = 10;
 const CONTEXT_TTL_MS = 10 * 60 * 1000;
 
+// MUHIM: tarmoq vaqtincha uzilib qolsa (DNS/WiFi), node-telegram-bot-api'ning
+// ichki polling xatoligi ILGARI butun jarayonni yiqitib yuborardi (uncaught
+// promise rejection) — shu daqiqada kelgan har qanday buyruq (masalan
+// "davom et") "o'lik" jarayonga tushib, hech qachon javob bermas edi, va
+// jarayon qayta ishga tushganda oldingi suhbat konteksti butunlay yo'qolardi.
+// Global handler bilan bunday hodisalar endi jarayonni o'ldirmaydi.
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT (jarayon TIRIK qoladi):', err.message || err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION (jarayon TIRIK qoladi):', (err && err.message) || err);
+});
+
 console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
 console.log('Token:', TOKEN.substring(0, 10) + '...');
 const bot = new TelegramBot(TOKEN, { polling: true });
@@ -83,7 +96,7 @@ async function sttFromFile(wavPath) {
 async function askAgent(message) {
   return new Promise((resolve) => {
     const env = { ...process.env, AZURE_OPENAI_KEY, AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, AZURE_SPEECH_VOICE };
-    const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], {
+    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:telegram', '--message', message, '--agent', 'main'], {
       cwd: PROJECT_DIR, env, timeout: 120000
     });
     let out = '';
@@ -305,6 +318,11 @@ async function handleMessage(chatId, userText, isVoice) {
     return;
   }
 
+  // 3e. Har bir suhbatni xotiraga yozish — xatolardan o'rganish va
+  // kunlik sintez uchun xom material sifatida (faqat "eslab qol" emas,
+  // BARCHA suhbat).
+  try { writeMemory('Telegram suhbat', 'Foydalanuvchi: ' + userText + '\nJarvis: ' + reply.substring(0, 500), ['telegram', 'suhbat']); } catch (e) {}
+
   // 4. Agent javobidan fayl yo'llarini chiqarish
   const filePaths = extractFilePaths(reply);
   const hasPaths = filePaths.length > 0;
@@ -409,8 +427,33 @@ bot.on('message', async (msg) => {
   }
 });
 
+// Tarmoq uzilganda (DNS/WiFi) polling xatosi bir necha soniyada bir marta
+// takrorlanaveradi — avval har birini to'liq log qilib, faylni bir necha
+// ming qatorga to'ldirib yuborardi. Endi: qisqacha, kamdan-kam log qilinadi
+// va uzoq davom etsa (30s+, taxminan 15+ ketma-ket xato) polling'ni
+// o'zi qayta ishga tushiradi — ba'zan library o'zi "qotib qolib" tiklana
+// olmay qoladi, buni majburiy qayta ulash bilan tuzatamiz.
+let _pollErrCount = 0;
+let _pollErrFirstAt = 0;
+let _pollRecovering = false;
 bot.on('polling_error', (err) => {
-  console.error('Polling error:', err.message || err);
+  const now = Date.now();
+  if (!_pollErrFirstAt || now - _pollErrFirstAt > 60000) { _pollErrFirstAt = now; _pollErrCount = 0; }
+  _pollErrCount++;
+  if (_pollErrCount === 1 || _pollErrCount % 20 === 0) {
+    console.error('Polling error (' + _pollErrCount + '-marta): ' + (err.message || err));
+  }
+  if (_pollErrCount >= 15 && !_pollRecovering) {
+    _pollRecovering = true;
+    console.error('Polling 30s+ uzilib turibdi — majburiy qayta ulanmoqda...');
+    bot.stopPolling().then(() => bot.startPolling()).then(() => {
+      console.error('Polling qayta ulandi.');
+      _pollErrCount = 0; _pollRecovering = false;
+    }).catch((e) => {
+      console.error('Qayta ulanishda xatolik: ' + (e.message || e));
+      _pollRecovering = false;
+    });
+  }
 });
 
 console.log('Bot tayyor! v8 (Universal AI + Kontekst)');

@@ -51,9 +51,10 @@ if [[ ! -f "${DOTENV}" ]]; then
   exit 1
 fi
 
-# Kalitларнинг бўш эмаслигини текшириш
+# Kalitlarning bo'sh emasligini tekshirish. Telegram ixtiyoriy: noto'g'ri
+# token voice/dashboard'ni o'rnatishga to'sqinlik qilmasligi kerak.
 missing_env=()
-for key in AZURE_SPEECH_KEY AZURE_SPEECH_REGION AZURE_OPENAI_KEY AZURE_OPENAI_ENDPOINT TELEGRAM_BOT_TOKEN; do
+for key in AZURE_SPEECH_KEY AZURE_SPEECH_REGION AZURE_OPENAI_KEY AZURE_OPENAI_ENDPOINT; do
   val="$(grep "^${key}=" "${DOTENV}" 2>/dev/null | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
   if [[ -z "$val" || "$val" == "..." || "$val" == "YOUR_*" ]]; then
     missing_env+=("$key")
@@ -68,6 +69,16 @@ if [[ ${#missing_env[@]} -gt 0 ]]; then
 fi
 
 ok ".env to'liq va to'g'ri to'ldirilgan."
+
+telegram_token="$(grep '^TELEGRAM_BOT_TOKEN=' "${DOTENV}" 2>/dev/null | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+if [[ -n "${telegram_token}" ]]; then
+  telegram_check="$(curl -sS -m 10 "https://api.telegram.org/bot${telegram_token}/getMe" 2>/dev/null || true)"
+  if [[ "${telegram_check}" != *'"ok":true'* ]]; then
+    warn "TELEGRAM_BOT_TOKEN yaroqsiz/revoke qilingan. Bot o'chiriladi, qolgan Jarvis ishlaydi."
+  fi
+else
+  warn "TELEGRAM_BOT_TOKEN bo'sh. Telegram ixtiyoriy va hozir o'chirilgan."
+fi
 
 # ═════════════════════════════════════════════════════════════
 # QADAM 2 — openclaw config validate
@@ -86,6 +97,25 @@ if ! openclaw config validate >/dev/null 2>&1; then
 fi
 
 ok "OpenClaw konfiguratsiyasi to'g'ri."
+
+# Root package barcha runtime dependency'larni saqlaydi. Oldingi variantda
+# Azure dependency'lari faqat skill ichidagi package.json'da bo'lib,
+# yangi clone/setup'da TTS `Cannot find module axios` bilan qular edi.
+step "Runtime dependency va Fn-key helper"
+npm install --no-audit --no-fund
+node -e "require('axios'); require('microsoft-cognitiveservices-speech-sdk')"
+
+FNKEY_SOURCE="${PROJECT_DIR}/skills/fn-key/fnkey.swift"
+FNKEY_BINARY="${PROJECT_DIR}/skills/fn-key/fnkey"
+if [[ -f "${FNKEY_SOURCE}" ]] && command -v swiftc >/dev/null 2>&1; then
+  if [[ ! -x "${FNKEY_BINARY}" || "${FNKEY_SOURCE}" -nt "${FNKEY_BINARY}" ]]; then
+    swiftc "${FNKEY_SOURCE}" -o "${FNKEY_BINARY}"
+    chmod +x "${FNKEY_BINARY}"
+  fi
+  ok "Fn-key helper tayyor."
+else
+  warn "Fn-key helper build qilinmadi (swiftc yoki source yo'q). Hotword ishlaydi, Fn trigger ishlamaydi."
+fi
 
 # ═════════════════════════════════════════════════════════════
 # QADAM 3 — LaunchAgent o'rnatish va yuklash
@@ -158,8 +188,13 @@ echo "║  ✅ Avtostart:     Login bo'lganda avtomatik                ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 
-# TTS bilan ovozli tasdiq
-if source "${DOTENV}" 2>/dev/null && [[ -n "${AZURE_SPEECH_KEY:-}" ]]; then
+# TTS bilan ovozli tasdiq. .env oddiy shell fayli emas (masalan path ichida
+# bo'sh joy bo'lishi mumkin), shu sabab uni source qilmaymiz.
+AZURE_SPEECH_KEY="$(grep '^AZURE_SPEECH_KEY=' "${DOTENV}" | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+AZURE_SPEECH_REGION="$(grep '^AZURE_SPEECH_REGION=' "${DOTENV}" | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+AZURE_SPEECH_VOICE="$(grep '^AZURE_SPEECH_VOICE=' "${DOTENV}" | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+export AZURE_SPEECH_KEY AZURE_SPEECH_REGION AZURE_SPEECH_VOICE
+if [[ -n "${AZURE_SPEECH_KEY:-}" ]]; then
   tmp_json="/tmp/jarvis_setup_greet_$$.json"
   printf '{"text":"Jarvis tayyor."}\n' >"$tmp_json"
   if node "${PROJECT_DIR}/skills/azure-tts/index.js" <"$tmp_json" >"${tmp_json}.out" 2>/dev/null; then

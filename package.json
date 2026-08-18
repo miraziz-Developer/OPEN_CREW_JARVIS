@@ -1,6 +1,8 @@
 {
   "dependencies": {
     "@picovoice/porcupine-node": "^4.0.2",
+    "axios": "^1.7.9",
+    "microsoft-cognitiveservices-speech-sdk": "^1.43.0",
     "node-record-lpcm16": "^1.0.1",
     "node-telegram-bot-api": "^1.2.0"
   }

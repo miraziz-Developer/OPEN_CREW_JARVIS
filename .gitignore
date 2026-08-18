@@ -7,12 +7,17 @@
 secrets/
 
 # ─── Xotira va ma'lumotlar ───
-memory/
+# MUHIM: yo'lni "/" bilan boshlash kerak — aks holda "skills/memory/"
+# (haqiqiy kod, MEMORY_DIR emas) ham git'dan chetlab qolgan edi.
+/memory/
 logs/
 *.log
 
 # ─── Node / build ───
 node_modules/
+.venv-openwakeword/
+__pycache__/
+*.py[cod]
 dist/
 build/
 
@@ -27,3 +32,22 @@ Thumbs.db
 # ─── OpenClaw state backups ───
 *.backup
 *.last-good
+
+# ─── Runtime holat fayllari ───
+.jarvis-paused
+.jarvis-last-greeting
+.jarvis-onboarded
+.run/
+test_out.wav
+.daily-tasks-state.json
+.proactive-state.json
+.synthesis-state.json
+.screen-monitor-state
+.realtime-tasks-state.json
+.memory-embeddings.json
+.google-tokens.json
+.media-playing-state.json
+.daily-report-state.json
+.fast-actions-learned.json
+.fast-action-learn-state.json
+.urgent-check-state.json

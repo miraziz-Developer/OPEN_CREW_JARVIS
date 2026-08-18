@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-PROJECT_DIR="/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${PROJECT_DIR}/logs"
 DOTENV="${PROJECT_DIR}/.env"
 LAST_GREETING="${PROJECT_DIR}/.jarvis-last-greeting"
@@ -57,18 +57,75 @@ import_env() {
 
 import_env AZURE_SPEECH_KEY
 import_env AZURE_SPEECH_REGION
+import_env TELEGRAM_BOT_TOKEN
+import_env JARVIS_CHAT_ID
 
 log "ENV: AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-?}, KEY set=${AZURE_SPEECH_KEY:+yes}"
+
+# Telegram token noto'g'ri/revoke qilingan bo'lsa node-telegram-bot-api polling
+# cheksiz 401 loopga tushadi. Bunday jarayon foyda bermaydi va log/diskni
+# to'ldiradi. Startup'da bir marta tekshirib, token tuzatilguncha botni
+# o'chirilgan holatda qoldiramiz; voice/dashboard qolganicha ishlayveradi.
+TELEGRAM_ENABLED=1
+validate_telegram() {
+  local response
+  [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]] && return 1
+  response=$(curl -sS -m 10 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null || true)
+  [[ "${response}" == *'"ok":true'* ]]
+}
+
+if ! validate_telegram; then
+  TELEGRAM_ENABLED=0
+  warn "[BOT] Telegram token yaroqsiz yoki API mavjud emas — polling vaqtincha o'chirildi."
+fi
+
+# ── Foydalanuvchini xabardor qilish ──────────────────────────────────
+# Supervisor allaqachon qulagan komponentlarni o'zi qayta tiklardi, lekin
+# buni FAQAT logga yozardi — foydalanuvchi tizim qulab-tiklanayotganini
+# umuman bilmasdi. Endi jiddiy holatlar Telegram'ga ham yuboriladi.
+# Eslatma: bot jarayonining o'zi qulagan bo'lishi mumkin, shuning uchun
+# xabar bot orqali emas, to'g'ridan-to'g'ri Telegram API'ga yuboriladi.
+notify_owner() {
+  local text="$1"
+  [[ -z "${TELEGRAM_BOT_TOKEN}" || -z "${JARVIS_CHAT_ID}" ]] && return 0
+  curl -s -m 10 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${JARVIS_CHAT_ID}" \
+    --data-urlencode "text=${text}" >/dev/null 2>&1 || true
+}
+
+# Bir xil xabar bilan bosib ketmaslik uchun: har bir komponent haqida
+# ko'pi bilan NOTIFY_COOLDOWN sekundda bir marta xabar beriladi.
+# Eslatma: macOS'dagi /bin/bash — 3.2 versiyasi, unda assotsiativ massiv
+# (declare -A) YO'Q (sinab tasdiqlangan: "declare: -A: invalid option").
+# Shuning uchun fayldagi mavjud uslub qo'llaniladi — har bir komponent
+# uchun alohida o'zgaruvchi nomi yasab, printf -v orqali yoziladi
+# (restart_with_backoff ham aynan shunday ishlaydi).
+NOTIFY_COOLDOWN=1800
+notify_component() {
+  local name="$1" text="$2" now_ts last var
+  now_ts=$(date +%s)
+  # o'zgaruvchi nomiga yaramaydigan belgilarni almashtiramiz (masalan "-")
+  var="LAST_NOTIFY_$(echo "${name}" | tr -c 'a-zA-Z0-9' '_')"
+  eval "last=\${${var}:-0}"
+  if (( now_ts - last >= NOTIFY_COOLDOWN )); then
+    printf -v "${var}" '%s' "${now_ts}"
+    notify_owner "${text}"
+  fi
+}
 
 # ── Child PID'lar (faqat biz to'g'ridan-to'g'ri ishga tushirgan jarayonlar) ──
 BOT_PID=""
 DAEMON_PID=""
+MONITOR_PID=""
+DASHBOARD_PID=""
 
 # ── Cleanup: faqat o'zimiz ishga tushirgan jarayonlarni to'xtatish ──
 cleanup() {
   warn "Cleanup chaqirildi — child jarayonlar to'xtatilmoqda..."
   [[ -n "${BOT_PID}"    ]] && kill "${BOT_PID}"    2>/dev/null || true
   [[ -n "${DAEMON_PID}" ]] && kill "${DAEMON_PID}" 2>/dev/null || true
+  [[ -n "${MONITOR_PID}" ]] && kill "${MONITOR_PID}" 2>/dev/null || true
+  [[ -n "${DASHBOARD_PID}" ]] && kill "${DASHBOARD_PID}" 2>/dev/null || true
   log "Cleanup tugadi."
 }
 trap cleanup EXIT TERM INT
@@ -81,7 +138,10 @@ gateway_healthy() {
 # ── Gateway ishga tushirish (openclaw orqali, launchd managing) ──
 start_gateway() {
   log "[GATEWAY] Ishga tushirish..."
-  openclaw gateway start --port 18789 --bind loopback --auth token 2>&1 || true
+  # Port/bind/auth openclaw.json'da saqlanadi. OpenClaw 2026.7 dan boshlab
+  # `gateway start` bu flaglarni qabul qilmaydi; eski flaglar service'ni
+  # umuman start qilmasdan usage xatosi bilan chiqib ketardi.
+  openclaw gateway start 2>&1 || true
   log "[GATEWAY] So'rov yuborildi."
 }
 
@@ -115,6 +175,10 @@ wait_gateway() {
 
 # ── Telegram Bot ishga tushirish ──
 start_bot() {
+  if [[ "${TELEGRAM_ENABLED}" != "1" ]]; then
+    BOT_PID=""
+    return 0
+  fi
   log "[BOT] Telegram Bot ishga tushirilmoqda..."
   node "${PROJECT_DIR}/telegram-bot.js" >>"${LOG_DIR}/bot-$(date +%Y%m%d).log" 2>&1 &
   BOT_PID=$!
@@ -127,6 +191,27 @@ start_daemon() {
   node "${PROJECT_DIR}/jarvis_daemon.js" >>"${LOG_DIR}/daemon-$(date +%Y%m%d).log" 2>&1 &
   DAEMON_PID=$!
   log "[DAEMON] PID=${DAEMON_PID}"
+}
+
+# ── Ekran kuzatuvchi ishga tushirish (doimiy fon kuzatuvi) ──
+start_monitor() {
+  log "[MONITOR] Ekran kuzatuvchi ishga tushirilmoqda..."
+  echo '{"action":"start"}' | node "${PROJECT_DIR}/skills/screen-monitor/index.js" \
+    >>"${LOG_DIR}/screen-monitor-$(date +%Y%m%d).log" 2>&1 &
+  MONITOR_PID=$!
+  log "[MONITOR] PID=${MONITOR_PID}"
+}
+
+# ── Dashboard (localhost veb-HUD) ishga tushirish ──
+start_dashboard() {
+  log "[DASHBOARD] Ishga tushirilmoqda..."
+  node "${PROJECT_DIR}/dashboard/server.js" >>"${LOG_DIR}/dashboard-$(date +%Y%m%d).log" 2>&1 &
+  DASHBOARD_PID=$!
+  log "[DASHBOARD] PID=${DASHBOARD_PID} — http://localhost:7890"
+}
+
+dashboard_healthy() {
+  curl -sf --max-time 3 http://127.0.0.1:7890/api/status >/dev/null 2>&1
 }
 
 # ── Ovozli salom (bir marta/30 daqiqa limit) ──
@@ -194,7 +279,10 @@ fi
 if wait_gateway 60; then
   start_bot
   start_daemon
+  start_monitor
+  start_dashboard
   sleep 2
+  ( sleep 3; open "http://localhost:7890" 2>/dev/null || true ) &
   greeting
   log "═══════════════════════════════════════════════════════════"
   log "🤖 JARVIS BARCHA JARAYONLAR TAYYOR"
@@ -232,7 +320,7 @@ while true; do
   fi
 
   # ── Bot tekshirish ──
-  if ! check_child "${BOT_PID}"; then
+  if [[ "${TELEGRAM_ENABLED}" == "1" ]] && ! check_child "${BOT_PID}"; then
     warn "[BOT] To'xtagan — qayta ishga tushirish..."
     start_bot
   fi
@@ -241,6 +329,19 @@ while true; do
   if ! check_child "${DAEMON_PID}"; then
     warn "[DAEMON] To'xtagan — qayta ishga tushirish..."
     start_daemon
+  fi
+
+  # ── Monitor tekshirish ──
+  if ! check_child "${MONITOR_PID}"; then
+    warn "[MONITOR] To'xtagan — qayta ishga tushirish..."
+    start_monitor
+  fi
+
+  # ── Dashboard tekshirish ──
+  if ! check_child "${DASHBOARD_PID}" || ! dashboard_healthy; then
+    warn "[DASHBOARD] To'xtagan — qayta ishga tushirish..."
+    [[ -n "${DASHBOARD_PID}" ]] && kill "${DASHBOARD_PID}" 2>/dev/null || true
+    start_dashboard
   fi
 
   sleep "${CHECK_INTERVAL}"

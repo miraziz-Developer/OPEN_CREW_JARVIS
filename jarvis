@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+LABEL="com.jarvis.openclaw"
+DOMAIN="gui/$(id -u)"
+
+usage() {
+  echo "Usage: ./jarvis {install|start|stop|restart|status|open|logs}"
+}
+
+case "${1:-start}" in
+  install)
+    exec "$ROOT/setup.sh"
+    ;;
+  start)
+    if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      launchctl kickstart "$DOMAIN/$LABEL"
+    else
+      "$ROOT/scripts/enable-autostart.sh"
+    fi
+    echo "✅ Jarvis ishga tushdi"
+    ;;
+  stop)
+    launchctl kill TERM "$DOMAIN/$LABEL" 2>/dev/null || true
+    echo "⏹ Jarvis to'xtatildi"
+    ;;
+  restart)
+    exec "$ROOT/scripts/restart-daemon.sh"
+    ;;
+  status)
+    if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      echo "✅ Jarvis: running"
+    else
+      echo "❌ Jarvis: stopped"
+    fi
+    curl -fsS --max-time 2 http://127.0.0.1:7890/api/status >/dev/null 2>&1 \
+      && echo "✅ Dashboard: http://localhost:7890" \
+      || echo "❌ Dashboard: unavailable"
+    ;;
+  open)
+    open http://localhost:7890
+    ;;
+  logs)
+    mkdir -p "$ROOT/logs"
+    tail -f "$ROOT/logs/jarvis-$(date +%Y%m%d).log"
+    ;;
+  *) usage; exit 2 ;;
+esac
