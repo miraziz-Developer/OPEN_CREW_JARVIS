@@ -1,4 +1,9 @@
 {
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check jarvis_daemon.js && node --check skills/realtime-voice/index.js && node --check dashboard/server.js && node --check scripts/diagnose-voice.js && node --test tests/*.test.js",
+    "diagnose:voice": "node scripts/diagnose-voice.js"
+  },
   "dependencies": {
     "@picovoice/porcupine-node": "^4.0.2",
     "axios": "^1.7.9",

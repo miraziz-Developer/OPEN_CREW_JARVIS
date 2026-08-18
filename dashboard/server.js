@@ -49,6 +49,7 @@ function readJsonSafe(file, def) {
 // ── /api/status ──────────────────────────────────────────────────────────
 function getStatus() {
   const paused = fs.existsSync(path.join(PROJECT_DIR, '.jarvis-paused'));
+  const runtime = readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), null);
   return {
     paused,
     gateway: gatewayHealthy(),
@@ -56,6 +57,7 @@ function getStatus() {
     daemon: isAlive(PROJECT_DIR + '/jarvis_daemon.js'),
     monitor: isAlive('skills/screen-monitor/index.js'),
     sentinel: isAlive('pause-sentinel.js'),
+    runtime,
     model: { primary: 'gpt-5.4', vision: 'gpt-4.1', fallback: 'Kimi-K2.6' },
     now: new Date().toISOString()
   };
@@ -172,6 +174,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/activity') return json(res, getActivity(parseInt(url.searchParams.get('limit'), 10)));
     if (url.pathname === '/api/tasks') return json(res, getTasks());
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());
+    if (url.pathname === '/api/runtime') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}));
     if (url.pathname === '/api/profile') return json(res, getProfile());
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'application/json' });

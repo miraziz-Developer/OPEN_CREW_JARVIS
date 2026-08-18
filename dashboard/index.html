@@ -133,6 +133,10 @@ body.booted header{animation:panelIn .4s backwards}
       <div class="kv"><span><span class="dot" id="d-gateway"></span>Gateway</span><b id="s-gateway">—</b></div>
       <div class="kv"><span><span class="dot" id="d-bot"></span>Telegram Bot</span><b id="s-bot">—</b></div>
       <div class="kv"><span><span class="dot" id="d-daemon"></span>Ovozli Daemon</span><b id="s-daemon">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-mic"></span>Mikrofon Pipeline</span><b id="s-mic">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-realtime"></span>Realtime API</span><b id="s-realtime">—</b></div>
+      <div class="kv"><span>Suhbat holati</span><b id="s-conversation">—</b></div>
+      <div class="kv"><span>P95 kechikish</span><b id="s-latency">—</b></div>
       <div class="kv"><span><span class="dot" id="d-monitor"></span>Ekran Kuzatuv</span><b id="s-monitor">—</b></div>
       <div class="kv"><span><span class="dot" id="d-sentinel"></span>Fn+Shift Sentinel</span><b id="s-sentinel">—</b></div>
     </div>
@@ -246,10 +250,22 @@ function setDot(id, on){ $(id).className = "dot " + (on ? "on" : "off"); }
 async function refreshStatus(){
   try{
     const s = await jget("/api/status");
+    const rt = s.runtime || {};
+    const components = rt.components || {};
+    const mic = components.microphone || {};
+    const realtime = components["realtime-api"] || {};
+    const micHealthy = s.daemon && mic.status === "streaming" && Number(mic.ageMs) < 15000;
+    const realtimeHealthy = !realtime.status || ["ready","healthy"].includes(realtime.status);
+    const latencyEntries = Object.entries(rt.latency || {});
+    const worstP95 = latencyEntries.length ? latencyEntries.reduce((a,b)=>(Number(a[1].p95Ms||0)>Number(b[1].p95Ms||0)?a:b)) : null;
     $("connState").textContent = "ULANGAN";
     setDot("d-gateway", s.gateway); $("s-gateway").textContent = s.gateway ? "sog'lom" : "o'chirilgan";
     setDot("d-bot", s.bot); $("s-bot").textContent = s.bot ? "faol" : "o'chirilgan";
     setDot("d-daemon", s.daemon); $("s-daemon").textContent = s.daemon ? "faol" : "o'chirilgan";
+    setDot("d-mic", micHealthy); $("s-mic").textContent = micHealthy ? "tinglamoqda" : (mic.status || "signal yo'q");
+    setDot("d-realtime", realtimeHealthy); $("s-realtime").textContent = realtime.status || "kutilmoqda";
+    $("s-conversation").textContent = (rt.conversation && rt.conversation.mode) || "idle";
+    $("s-latency").textContent = worstP95 ? `${worstP95[0]} ${Math.round(worstP95[1].p95Ms)}ms` : "—";
     setDot("d-monitor", s.monitor); $("s-monitor").textContent = s.monitor ? "faol" : "o'chirilgan";
     setDot("d-sentinel", s.sentinel); $("s-sentinel").textContent = s.sentinel ? "tinglamoqda" : "yo'q";
     $("m-primary").textContent = s.model.primary;
@@ -257,7 +273,9 @@ async function refreshStatus(){
     $("m-fallback").textContent = s.model.fallback;
 
     if (s.paused) setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
-    else if (s.gateway && s.bot && s.daemon) setState("active", "FAOL", "HAMMASI ISHLAMOQDA");
+    else if (s.gateway && s.bot && s.daemon && micHealthy && realtimeHealthy) setState("active", "FAOL", "HAMMASI ISHLAMOQDA");
+    else if (s.daemon && !micHealthy) setState("degraded", "ESHITMAYAPTI", "MIKROFON PIPELINE'INI TEKSHIRING");
+    else if (s.daemon && !realtimeHealthy) setState("degraded", "FALLBACK", "REALTIME NOSOZ — BATCH STT FAOL");
     else setState("degraded", "QISMAN", "BA'ZI QISMLAR O'CHIRILGAN");
   }catch(e){
     $("connState").textContent = "UZILDI";

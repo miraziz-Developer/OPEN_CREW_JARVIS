@@ -366,6 +366,42 @@ fi
 CHECK_INTERVAL=15
 GATEWAY_FAIL_COUNT=0
 MAX_GW_FAIL=3
+RESTART_WINDOW=300
+RESTART_LIMIT=5
+RESTART_COOLDOWN=120
+
+# Child ketma-ket qulab qolsa har 15 soniyada cheksiz nusxa ochmaymiz.
+# Bash 3.2 bilan mos bo'lishi uchun har komponent holati oddiy dinamik
+# o'zgaruvchilarda saqlanadi (assotsiativ massiv ishlatilmaydi).
+restart_allowed() {
+  local name="$1" now_ts window_var count_var blocked_var window_start count blocked_until
+  now_ts=$(date +%s)
+  window_var="RESTART_WINDOW_$(echo "${name}" | tr -c 'a-zA-Z0-9' '_')"
+  count_var="RESTART_COUNT_$(echo "${name}" | tr -c 'a-zA-Z0-9' '_')"
+  blocked_var="RESTART_BLOCKED_$(echo "${name}" | tr -c 'a-zA-Z0-9' '_')"
+  eval "window_start=\${${window_var}:-0}"
+  eval "count=\${${count_var}:-0}"
+  eval "blocked_until=\${${blocked_var}:-0}"
+
+  if (( now_ts < blocked_until )); then return 1; fi
+  if (( now_ts - window_start > RESTART_WINDOW )); then
+    window_start=${now_ts}
+    count=0
+  fi
+  count=$((count + 1))
+  if (( count > RESTART_LIMIT )); then
+    blocked_until=$((now_ts + RESTART_COOLDOWN))
+    printf -v "${blocked_var}" '%s' "${blocked_until}"
+    printf -v "${window_var}" '%s' "${now_ts}"
+    printf -v "${count_var}" '%s' '0'
+    err "[${name}] Crash-loop to'xtatildi — ${RESTART_COOLDOWN}s cooldown."
+    notify_component "${name}-crash-loop" "⚠️ JARVIS ${name}: crash-loop sabab ${RESTART_COOLDOWN}s to'xtatildi."
+    return 1
+  fi
+  printf -v "${window_var}" '%s' "${window_start}"
+  printf -v "${count_var}" '%s' "${count}"
+  return 0
+}
 
 while true; do
   # ── Gateway tekshirish (curl health) ──
@@ -392,20 +428,26 @@ while true; do
 
   # ── Bot tekshirish ──
   if [[ "${TELEGRAM_ENABLED}" == "1" ]] && ! check_child "${BOT_PID}"; then
-    warn "[BOT] To'xtagan — qayta ishga tushirish..."
-    start_bot
+    if restart_allowed BOT; then
+      warn "[BOT] To'xtagan — qayta ishga tushirish..."
+      start_bot
+    fi
   fi
 
   # ── Daemon tekshirish ──
   if ! check_child "${DAEMON_PID}"; then
-    warn "[DAEMON] To'xtagan — qayta ishga tushirish..."
-    start_daemon
+    if restart_allowed DAEMON; then
+      warn "[DAEMON] To'xtagan — qayta ishga tushirish..."
+      start_daemon
+    fi
   fi
 
   # ── Monitor tekshirish ──
   if ! check_child "${MONITOR_PID}"; then
-    warn "[MONITOR] To'xtagan — qayta ishga tushirish..."
-    start_monitor
+    if restart_allowed MONITOR; then
+      warn "[MONITOR] To'xtagan — qayta ishga tushirish..."
+      start_monitor
+    fi
   fi
 
   # ── Dashboard tekshirish ──
@@ -418,9 +460,11 @@ while true; do
       log "[DASHBOARD] Sog'lom jarayon PID'i yangilandi: ${DASHBOARD_PID:-?}"
     fi
   else
-    warn "[DASHBOARD] To'xtagan — qayta ishga tushirish..."
-    stop_dashboard
-    start_dashboard
+    if restart_allowed DASHBOARD; then
+      warn "[DASHBOARD] To'xtagan — qayta ishga tushirish..."
+      stop_dashboard
+      start_dashboard
+    fi
   fi
 
   sleep "${CHECK_INTERVAL}"

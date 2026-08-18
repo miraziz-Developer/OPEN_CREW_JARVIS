@@ -26,6 +26,7 @@ process.chdir(PROJECT_DIR);
 
 const { writeMemory, searchMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
+const { JarvisRuntime } = require('./core/jarvis-runtime');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
@@ -71,8 +72,15 @@ const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shu
 // panelini ko'rsatadi. Daemon va dashboard alohida jarayon bo'lgani uchun
 // fayl orqali ulanadi (soddaroq, qo'shimcha IPC shart emas).
 const REALTIME_TASKS_STATE_FILE = path.join(PROJECT_DIR, '.realtime-tasks-state.json');
+const RUNTIME_STATE_FILE = path.join(PROJECT_DIR, '.jarvis-runtime.json');
 const REALTIME_TASKS_MAX = 15;
 let _realtimeTasks = [];
+const runtime = new JarvisRuntime({
+  statusFile: RUNTIME_STATE_FILE,
+  commandWindowMs: parseInt(env('COMMAND_DEDUP_MS'), 10) || 5000,
+  responseWindowMs: parseInt(env('RESPONSE_DEDUP_MS'), 10) || 15000
+});
+runtime.on('runtime.error', error => console.error('Jarvis runtime state xatoligi:', error.message));
 function saveRealtimeTasksState() {
   try { fs.writeFileSync(REALTIME_TASKS_STATE_FILE, JSON.stringify(_realtimeTasks.slice(-REALTIME_TASKS_MAX))); } catch (e) {}
 }
@@ -1044,6 +1052,10 @@ let _clap = null;
 let _sox = null;
 let _soxStream = null;
 let _activeRealtimeSession = null;
+let _realtimeFailureCount = 0;
+let _realtimeDisabledUntil = 0;
+const REALTIME_FAILURE_LIMIT = parseInt(env('REALTIME_FAILURE_LIMIT'), 10) || 3;
+const REALTIME_COOLDOWN_MS = parseInt(env('REALTIME_COOLDOWN_MS'), 10) || 120000;
 
 // ════════════════════════════════════════════
 // CONTINUOUS LISTENING ARCHITECTURE (ffmpeg → PCM)
@@ -1147,6 +1159,8 @@ async function mainLoop() {
     if (_activeRealtimeSession || state !== 'listening') return false;
 
     const session = new RealtimeSession();
+    runtime.beginConversation(reason.includes('Fn') ? 'push-to-talk' : 'wake-word');
+    const connectStartedAt = Date.now();
     _activeRealtimeSession = session;
     state = 'realtime';
     lastHotwordTime = Date.now();
@@ -1167,21 +1181,37 @@ async function mainLoop() {
       if (_activeRealtimeSession === session) _activeRealtimeSession = null;
       try { session.close(); } catch (e) {}
       state = 'listening';
+      runtime.endConversation(why);
+      runtime.heartbeat('voice-daemon', { state });
       nextStepTime = Date.now();
       inf('Realtime suhbat yakunlandi: ' + why);
     };
 
     session.on('ready', () => {
       sessionWasReady = true;
+      _realtimeFailureCount = 0;
+      _realtimeDisabledUntil = 0;
+      runtime.observeLatency('realtime-connect', Date.now() - connectStartedAt);
+      runtime.setConversationMode('listening');
+      runtime.heartbeat('realtime-api', { status: 'ready' });
       ok('Realtime ovoz sessiyasi ulandi');
       armIdleTimer();
     });
-    session.on('user_speaking', () => clearTimeout(idleTimer));
+    session.on('user_speaking', () => {
+      runtime.setConversationMode('user-speaking');
+      clearTimeout(idleTimer);
+    });
     session.on('user_speech_stopped', armIdleTimer);
     session.on('user_transcript', (text) => {
       const clean = String(text || '').trim();
       if (!clean) return;
+      const accepted = runtime.acceptCommand(clean, { source: 'realtime-transcript' });
+      if (!accepted.accepted) {
+        wrn('Takror realtime transkript tashlandi: ' + clean);
+        return;
+      }
       lastUserTranscript = clean;
+      runtime.setConversationMode('thinking');
       inf('🎙 Realtime: ' + clean);
       sendTelegram('🎙 ' + clean);
       armIdleTimer();
@@ -1189,6 +1219,12 @@ async function mainLoop() {
     session.on('assistant_transcript', (text) => {
       const clean = String(text || '').trim();
       if (!clean) return;
+      const accepted = runtime.acceptResponse(clean);
+      if (!accepted.accepted) {
+        wrn('Takror realtime javob log/xotiraga yozilmadi');
+        return;
+      }
+      runtime.setConversationMode('speaking');
       ok('🤖 Realtime: ' + clean.substring(0, 120));
       sendTelegram('🤖 ' + clean);
       try {
@@ -1199,16 +1235,24 @@ async function mainLoop() {
     });
     session.on('turn_done', armIdleTimer);
     session.on('tool_call', (description, callId) => {
+      runtime.requestTask(description, { id: callId, source: 'realtime' });
+      runtime.transitionTask(callId, 'running');
       rtTaskStarted(callId, description);
       inf('🛠 Jonli vazifa: ' + description);
       armIdleTimer();
     });
     session.on('tool_result', (result, callId) => {
+      try { runtime.completeTask(callId, result); } catch (e) { wrn('Task ledger: ' + e.message); }
       rtTaskCompleted(callId, result);
       if (!/^fast_action:/i.test(String((_realtimeTasks.find(t => t.callId === callId) || {}).description || ''))) playTaskDoneSound();
       armIdleTimer();
     });
     session.on('error', (err) => {
+      _realtimeFailureCount += 1;
+      if (_realtimeFailureCount >= REALTIME_FAILURE_LIMIT) {
+        _realtimeDisabledUntil = Date.now() + REALTIME_COOLDOWN_MS;
+      }
+      runtime.heartbeat('realtime-api', { status: 'error', error: String(err.message || err).slice(0, 300) });
       er('Realtime xatolik: ' + (err.message || err));
       const shouldFallback = !sessionWasReady;
       finishRealtimeSession('xatolik');
@@ -1247,7 +1291,15 @@ async function mainLoop() {
     wakeSpeechBuffers = [];
     wakeSpeechStartedAt = 0;
     wakeSpeechLastVoiceAt = 0;
-    if (REALTIME_ENABLED) return startRealtimeSession(reason);
+    if (REALTIME_ENABLED && Date.now() >= _realtimeDisabledUntil) return startRealtimeSession(reason);
+    if (REALTIME_ENABLED && _realtimeDisabledUntil > Date.now()) {
+      runtime.heartbeat('realtime-api', {
+        status: 'degraded',
+        fallback: 'batch-stt',
+        retryAt: _realtimeDisabledUntil
+      });
+      wrn('Realtime vaqtincha bloklangan — batch STT fallback ishlatiladi');
+    }
     const now = Date.now();
     lastHotwordTime = now;
     state = 'command_record';
@@ -1304,6 +1356,13 @@ async function mainLoop() {
   connectFnBroker();
 
   inf('Mic stream started — listening for "Jarvis"...');
+  runtime.heartbeat('microphone', { status: 'streaming' });
+  runtime.heartbeat('voice-daemon', { state: 'listening' });
+  const runtimeHeartbeat = setInterval(() => {
+    runtime.heartbeat('voice-daemon', { state, realtime: Boolean(_activeRealtimeSession) });
+    runtime.heartbeat('microphone', { status: _sox && !_sox.killed ? 'streaming' : 'stopped' });
+  }, 5000);
+  runtimeHeartbeat.unref();
   sendTelegram('🚀 Jarvis v5.0 BLAZING faol');
 
   return new Promise((resolve, reject) => {
@@ -1439,6 +1498,13 @@ async function mainLoop() {
 // PROCESS COMMAND
 // ════════════════════════════════════════════
 async function processCommand(command) {
+  const acceptedCommand = runtime.acceptCommand(command, { source: 'batch-stt' });
+  if (!acceptedCommand.accepted) {
+    wrn('Takror batch buyruq tashlandi: ' + command);
+    return;
+  }
+  runtime.setConversationMode('thinking');
+  const commandStartedAt = Date.now();
   inf('>>> ' + command); sendTelegram('🎙 ' + command);
   if (!fs.existsSync(path.join(PROJECT_DIR, '.jarvis-onboarded'))) {
     fs.writeFileSync(path.join(PROJECT_DIR, '.jarvis-onboarded'), 'true'); writeMemory('Onboard', 'start');
@@ -1470,7 +1536,14 @@ async function processCommand(command) {
     if (q.length > 2) { const f = searchMemory(q, 3); if (f && f.status === 'ok' && f.results.length) mem = '\n[Xotira]:\n' + f.results.map(r => r.matches.map(m => m.text).join(' | ')).join('\n') + '\n'; }
   } catch(e){}
   const reply = await askAgent(mem + command);
+  runtime.observeLatency('batch-agent', Date.now() - commandStartedAt);
   if (reply) {
+    const acceptedResponse = runtime.acceptResponse(reply);
+    if (!acceptedResponse.accepted) {
+      wrn('Takror agent javobi ovozga chiqarilmadi');
+      return;
+    }
+    runtime.setConversationMode('speaking');
     ok('<<< ' + reply.substring(0, 80)); sendTelegram('🤖 ' + reply);
     try { writeMemory('Ovozli buyruq', 'Foydalanuvchi: ' + command + '\nJarvis: ' + reply.substring(0, 500), ['voice', 'buyruq']); } catch (e) {}
     const audio = await ttsToFile(reply.substring(0, 400));
@@ -1501,6 +1574,7 @@ function cleanup() {
   if (_sox) { try { _sox.kill(); } catch(e){} }
   if (_detector) { try { _detector.release(); } catch(e){} }
   if (_sttPool) { _sttPool.killAll(); }
+  try { runtime.close(); } catch(e) {}
   process.exit(0);
 }
 process.on('SIGINT', cleanup);
