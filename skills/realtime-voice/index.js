@@ -79,6 +79,8 @@ const VOICE = env('AZURE_REALTIME_VOICE', 'alloy');
 // akustikasi/karnay ovozi pasayishi uchun) — real foydalanishda 500ms
 // yetarli emasligi aniqlandi (Jarvis o'z ovozini qayta eshitib qolgan).
 const MIC_MUTE_GRACE_MS = parseInt(env('MIC_MUTE_GRACE_MS'), 10) || 1500;
+const NORMAL_VAD_THRESHOLD = parseFloat(env('REALTIME_VAD_THRESHOLD')) || 0.55;
+const MEDIA_VAD_THRESHOLD = parseFloat(env('REALTIME_MEDIA_VAD_THRESHOLD')) || 0.72;
 
 const IN_RATE = 16000;   // jarvis_daemon.js mikrofon oqimi shu tezlikda
 const OUT_RATE = 24000;  // Realtime API kutgan/qaytaradigan tezlik
@@ -435,6 +437,27 @@ function runFullAgent(description, sessionKey, onProc) {
   });
 }
 
+// Faqat fikrlash/tahlil uchun kuchli agent. Kompyuterda amal bajarmaydi;
+// alohida session ishlatgani uchun jonli suhbat kontekstini ifloslantirmaydi.
+function askExpert(question, callId) {
+  return new Promise((resolve) => {
+    const prompt = "Quyidagi savolga o'zbek tilida, ovozda o'qishga qulay, aniq va lo'nda javob bering. " +
+      "Keraksiz kirish/xulosa va takrorlardan qoching. Savol:\n" + question;
+    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:jarvis-expert-' + callId,
+      '--message', prompt, '--agent', 'main'], {
+      cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: KEY }, timeout: 45000
+    });
+    let out = '';
+    proc.stdout.on('data', d => out += d);
+    proc.stderr.on('data', () => {});
+    proc.on('close', () => {
+      const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
+      resolve(clean || "Bu savolga hozir aniq javob tayyorlay olmadim.");
+    });
+    proc.on('error', () => resolve("Ekspert bilan bog'lanib bo'lmadi."));
+  });
+}
+
 class RealtimeSession extends EventEmitter {
   constructor() {
     super();
@@ -444,6 +467,8 @@ class RealtimeSession extends EventEmitter {
     this.playProc = null;
     this.assistantSpeaking = false;
     this._speakEndedAt = 0;
+    this._playbackUntil = 0;
+    this._lastAudioQueuedAt = 0;
     this.userTranscript = '';
     this.assistantTranscript = '';
     this._pendingFnArgs = {};
@@ -476,6 +501,11 @@ class RealtimeSession extends EventEmitter {
     // chegara bilan boshlanadi — pastki izohga qarang (MEDIA_STATE_FILE).
     const startMediaAware = isMediaRecentlyLikelyPlaying();
     if (startMediaAware) this._mediaModeActive = true;
+    // Fayl holati eskirishi yoki foydalanuvchi videoni o'zi ochishi mumkin.
+    // Tizim signalini parallel tekshiramiz; ulanishni kutdirib qo'ymaymiz.
+    checkSystemAudioPlaying().then(playing => {
+      if (playing === true && !this.closed) this._setMediaLikelyPlaying();
+    }).catch(() => {});
 
     this.ws.addEventListener('open', () => {
       this.ws.send(JSON.stringify({
@@ -491,8 +521,8 @@ class RealtimeSession extends EventEmitter {
           // ikkiga bo'linib, har biriga alohida javob berilishi natijada
           // "bir xil narsani bir necha marta aytish" holatiga sabab bo'lgan).
           turn_detection: startMediaAware
-            ? { type: 'server_vad', threshold: 0.92, silence_duration_ms: 1000, prefix_padding_ms: 300 }
-            : { type: 'server_vad', threshold: 0.6, silence_duration_ms: 900, prefix_padding_ms: 300 },
+            ? { type: 'server_vad', threshold: MEDIA_VAD_THRESHOLD, silence_duration_ms: 1100, prefix_padding_ms: 400 }
+            : { type: 'server_vad', threshold: NORMAL_VAD_THRESHOLD, silence_duration_ms: 900, prefix_padding_ms: 400 },
           // Eslatma: bu yerdagi transkript FAQAT lognoma/diagnostika va
           // ish-holatini kuzatish (idle-timer) uchun ishlatiladi — asosiy
           // ovozli javob gpt-realtime modelining o'zi TO'G'RIDAN-TO'G'RI
@@ -528,7 +558,12 @@ class RealtimeSession extends EventEmitter {
       const reason = ev?.error?.message || ev?.message || ev?.error?.code || ev?.type || 'noma\'lum (ws close race bo\'lishi mumkin)';
       this.emit('error', new Error('WebSocket xatolik: ' + reason));
     });
-    this.ws.addEventListener('close', () => { this.closed = true; this._stopPlayback(); this.emit('close'); });
+    this.ws.addEventListener('close', () => {
+      this.closed = true;
+      this.cancelRunningTasks();
+      this._stopPlayback();
+      this.emit('close');
+    });
   }
 
   _onMessage(ev) {
@@ -543,6 +578,9 @@ class RealtimeSession extends EventEmitter {
           this._flushPlayback();
         }
         this.emit('user_speaking');
+        break;
+      case 'input_audio_buffer.speech_stopped':
+        this.emit('user_speech_stopped');
         break;
       case 'conversation.item.input_audio_transcription.completed':
         this.userTranscript = msg.transcript || '';
@@ -559,11 +597,22 @@ class RealtimeSession extends EventEmitter {
         this._pendingFnArgs[msg.call_id] = (this._pendingFnArgs[msg.call_id] || '') + (msg.delta || '');
         break;
       case 'response.function_call_arguments.done':
+        // Ayrim Realtime versiyalarida `done` eventida to'liq arguments
+        // kelmaydi, faqat oldingi delta'lar keladi. Yig'ilgan nusxani
+        // fallback sifatida biriktirmasak tool bo'sh parametr bilan ishlaydi.
+        if (!msg.arguments && this._pendingFnArgs[msg.call_id]) {
+          msg.arguments = this._pendingFnArgs[msg.call_id];
+        }
+        delete this._pendingFnArgs[msg.call_id];
         this._handleFunctionCall(msg);
         break;
       case 'response.done':
         this.assistantSpeaking = false;
-        this._speakEndedAt = Date.now();
+        // response.done server yuborishni tugatganini anglatadi, karnay esa
+        // navbatdagi PCM'ni hali ijro etayotgan bo'lishi mumkin. feedAudio()
+        // _playbackUntil'ni ham tekshiradi; shu sabab Jarvis o'z ovozining
+        // qolgan qismini foydalanuvchi deb qayta eshitmaydi.
+        this._speakEndedAt = Math.max(Date.now(), this._playbackUntil);
         if (this.assistantTranscript.trim()) {
           this.emit('assistant_transcript', this.assistantTranscript.trim());
         }
@@ -594,6 +643,7 @@ class RealtimeSession extends EventEmitter {
     if (msg.name === 'see_screen') { this._handleSeeScreen(msg); return; }
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
+    if (msg.name === 'ask_expert') { this._handleAskExpert(msg); return; }
     if (msg.name !== 'run_task') return;
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -620,6 +670,24 @@ class RealtimeSession extends EventEmitter {
       this.ws.send(JSON.stringify({
         type: 'conversation.item.create',
         item: { type: 'function_call_output', call_id: msg.call_id, output: result.slice(0, 4000) }
+      }));
+      this.ws.send(JSON.stringify({ type: 'response.create' }));
+    } catch (e) {}
+  }
+
+  async _handleAskExpert(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    const question = String(args.question || '').trim();
+    this.emit('tool_call', 'ask_expert: ' + question.slice(0, 160), msg.call_id);
+    const output = question
+      ? await askExpert(question, msg.call_id)
+      : "Savol matni kelmadi.";
+    this.emit('tool_result', output.slice(0, 300), msg.call_id);
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: msg.call_id, output: output.slice(0, 5000) }
       }));
       this.ws.send(JSON.stringify({ type: 'response.create' }));
     } catch (e) {}
@@ -771,15 +839,12 @@ class RealtimeSession extends EventEmitter {
     if (this._mediaModeActive) return;
     this._mediaModeActive = true;
     try {
-      // 0.8 yetarli emasligi real holatlarda tasdiqlandi (YouTube video
-      // audiosi — musiqa, "obuna bo'ling" kabi urg'ular — hali ham
-      // "foydalanuvchi gapiryapti" deb qabul qilinardi). 0.92'ga
-      // oshirildi — foydalanuvchining yaqin, aniq ovozi baribir
-      // ushlanadi, video/fon tovushi esa deyarli hech qachon o'zi
-      // shuncha balandlikda bo'lmaydi.
+      // 0.92 real mikrofon darajasida foydalanuvchini ham deyarli kar qilib
+      // qo'ydi. Media paytida uzunroq tasdiq oynasi va echo-mute bilan birga
+      // o'rtacha threshold ishlatiladi; qiymat .env orqali sozlanadi.
       this.ws.send(JSON.stringify({
         type: 'session.update',
-        session: { turn_detection: { type: 'server_vad', threshold: 0.92, silence_duration_ms: 1000, prefix_padding_ms: 300 } }
+        session: { turn_detection: { type: 'server_vad', threshold: MEDIA_VAD_THRESHOLD, silence_duration_ms: 1100, prefix_padding_ms: 400 } }
       }));
     } catch (e) {}
   }
@@ -805,7 +870,9 @@ class RealtimeSession extends EventEmitter {
   // mumkin. Shuning uchun grace vaqti ancha oshirildi.
   feedAudio(pcm16_16k) {
     if (!this.ready || this.closed) return;
-    if (this.assistantSpeaking || (Date.now() - this._speakEndedAt) < MIC_MUTE_GRACE_MS) return;
+    const now = Date.now();
+    const muteUntil = Math.max(this._playbackUntil, this._speakEndedAt) + MIC_MUTE_GRACE_MS;
+    if (this.assistantSpeaking || now < muteUntil) return;
     const resampled = resample16to24(pcm16_16k);
     try {
       this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: resampled.toString('base64') }));
@@ -813,6 +880,7 @@ class RealtimeSession extends EventEmitter {
   }
 
   _startPlayback() {
+    this._playbackUntil = Date.now();
     this.playProc = spawn('sox', ['-t', 'raw', '-r', String(OUT_RATE), '-e', 'signed', '-b', '16', '-c', '1', '-', '-d'], {
       stdio: ['pipe', 'ignore', 'ignore']
     });
@@ -824,6 +892,13 @@ class RealtimeSession extends EventEmitter {
 
   _playChunk(buf) {
     if (this.playProc && this.playProc.stdin.writable) {
+      // PCM16 mono: bytes / (sampleRate * 2) = audio davomiyligi. Chunks
+      // tezroq kelishi mumkin, shuning uchun haqiqiy playback deadline
+      // ketma-ket yig'iladi, response.done vaqtiga bog'lanmaydi.
+      const now = Date.now();
+      const durationMs = Math.ceil((buf.length / (OUT_RATE * 2)) * 1000);
+      this._playbackUntil = Math.max(now, this._playbackUntil) + durationMs;
+      this._lastAudioQueuedAt = now;
       try { this.playProc.stdin.write(buf); } catch (e) {}
     }
   }
@@ -831,15 +906,18 @@ class RealtimeSession extends EventEmitter {
   _flushPlayback() {
     this._stopPlayback();
     this._startPlayback();
+    this._speakEndedAt = Date.now();
   }
 
   _stopPlayback() {
     if (this.playProc) { try { this.playProc.kill('SIGKILL'); } catch (e) {} this.playProc = null; }
+    this._playbackUntil = Date.now();
   }
 
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.cancelRunningTasks();
     this._stopPlayback();
     try { this.ws && this.ws.close(); } catch (e) {}
   }

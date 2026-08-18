@@ -16,8 +16,35 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${PROJECT_DIR}/logs"
 DOTENV="${PROJECT_DIR}/.env"
 LAST_GREETING="${PROJECT_DIR}/.jarvis-last-greeting"
+SUPERVISOR_LOCK="${PROJECT_DIR}/.jarvis-supervisor.lock"
 
 mkdir -p "${LOG_DIR}"
+
+# launchd nusxasi ishlayotgan paytda skriptni qo'lda yana ishga tushirish
+# ikkinchi bot/daemon/dashboard yaratardi. macOS'ning standart bash'ida
+# `flock` yo'q, shu sabab atomik mkdir bilan singleton lock ishlatiladi.
+acquire_supervisor_lock() {
+  local owner=""
+  if mkdir "${SUPERVISOR_LOCK}" 2>/dev/null; then
+    echo "$$" >"${SUPERVISOR_LOCK}/pid"
+    return 0
+  fi
+
+  [[ -f "${SUPERVISOR_LOCK}/pid" ]] && owner=$(cat "${SUPERVISOR_LOCK}/pid" 2>/dev/null || true)
+  if [[ -n "${owner}" ]] && kill -0 "${owner}" 2>/dev/null; then
+    echo "JARVIS supervisor allaqachon ishlayapti (PID=${owner})." >&2
+    exit 0
+  fi
+
+  rm -rf "${SUPERVISOR_LOCK}" 2>/dev/null || true
+  if ! mkdir "${SUPERVISOR_LOCK}" 2>/dev/null; then
+    echo "JARVIS supervisor lock yaratilmadi: ${SUPERVISOR_LOCK}" >&2
+    exit 1
+  fi
+  echo "$$" >"${SUPERVISOR_LOCK}/pid"
+}
+
+acquire_supervisor_lock
 
 # ── Timestamp funktsiyasi ──
 now() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -126,6 +153,9 @@ cleanup() {
   [[ -n "${DAEMON_PID}" ]] && kill "${DAEMON_PID}" 2>/dev/null || true
   [[ -n "${MONITOR_PID}" ]] && kill "${MONITOR_PID}" 2>/dev/null || true
   [[ -n "${DASHBOARD_PID}" ]] && kill "${DASHBOARD_PID}" 2>/dev/null || true
+  if [[ -f "${SUPERVISOR_LOCK}/pid" ]] && [[ "$(cat "${SUPERVISOR_LOCK}/pid" 2>/dev/null || true)" == "$$" ]]; then
+    rm -rf "${SUPERVISOR_LOCK}" 2>/dev/null || true
+  fi
   log "Cleanup tugadi."
 }
 trap cleanup EXIT TERM INT
@@ -204,6 +234,14 @@ start_monitor() {
 
 # ── Dashboard (localhost veb-HUD) ishga tushirish ──
 start_dashboard() {
+  local existing_pid=""
+  if dashboard_healthy; then
+    existing_pid=$(dashboard_pid_from_port)
+    DASHBOARD_PID="${existing_pid}"
+    log "[DASHBOARD] Mavjud sog'lom jarayon qabul qilindi — PID=${DASHBOARD_PID:-?}"
+    return 0
+  fi
+
   log "[DASHBOARD] Ishga tushirilmoqda..."
   node "${PROJECT_DIR}/dashboard/server.js" >>"${LOG_DIR}/dashboard-$(date +%Y%m%d).log" 2>&1 &
   DASHBOARD_PID=$!
@@ -212,6 +250,25 @@ start_dashboard() {
 
 dashboard_healthy() {
   curl -sf --max-time 3 http://127.0.0.1:7890/api/status >/dev/null 2>&1
+}
+
+dashboard_pid_from_port() {
+  /usr/sbin/lsof -nP -tiTCP:7890 -sTCP:LISTEN 2>/dev/null | head -n 1
+}
+
+stop_dashboard() {
+  local pid="${DASHBOARD_PID:-}"
+  [[ -z "${pid}" ]] && pid=$(dashboard_pid_from_port)
+  [[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null || true
+
+  # SIGTERM asinxron: eski Node portni qo'yib ulgurmasdan yangi nusxa ochilsa
+  # EADDRINUSE bo'ladi. Port ko'pi bilan 5 soniya bo'shashishini kutamiz.
+  local waited=0
+  while [[ -n "$(dashboard_pid_from_port)" ]] && [[ ${waited} -lt 50 ]]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  DASHBOARD_PID=""
 }
 
 # ── Ovozli salom ──
@@ -352,9 +409,17 @@ while true; do
   fi
 
   # ── Dashboard tekshirish ──
-  if ! check_child "${DASHBOARD_PID}" || ! dashboard_healthy; then
+  if dashboard_healthy; then
+    # Supervisor restartidan qolgan, ammo sog'lom dashboard bo'lsa uning
+    # haqiqiy PID'ini qabul qilamiz; PID stale bo'lgani uchun sog'lom servisni
+    # cheksiz restart qilish kerak emas.
+    if ! check_child "${DASHBOARD_PID}"; then
+      DASHBOARD_PID=$(dashboard_pid_from_port)
+      log "[DASHBOARD] Sog'lom jarayon PID'i yangilandi: ${DASHBOARD_PID:-?}"
+    fi
+  else
     warn "[DASHBOARD] To'xtagan — qayta ishga tushirish..."
-    [[ -n "${DASHBOARD_PID}" ]] && kill "${DASHBOARD_PID}" 2>/dev/null || true
+    stop_dashboard
     start_dashboard
   fi
 

@@ -436,19 +436,21 @@ bot.on('message', async (msg) => {
 let _pollErrCount = 0;
 let _pollErrFirstAt = 0;
 let _pollRecovering = false;
+let _pollLastLogAt = 0;
 bot.on('polling_error', (err) => {
   const now = Date.now();
-  if (!_pollErrFirstAt || now - _pollErrFirstAt > 60000) { _pollErrFirstAt = now; _pollErrCount = 0; }
+  if (!_pollErrFirstAt) _pollErrFirstAt = now;
   _pollErrCount++;
-  if (_pollErrCount === 1 || _pollErrCount % 20 === 0) {
-    console.error('Polling error (' + _pollErrCount + '-marta): ' + (err.message || err));
+  if (!_pollLastLogAt || now - _pollLastLogAt >= 60000) {
+    _pollLastLogAt = now;
+    console.error('Telegram polling vaqtincha uzildi (' + _pollErrCount + ' urinish): ' + (err.message || err));
   }
-  if (_pollErrCount >= 15 && !_pollRecovering) {
+  if (now - _pollErrFirstAt >= 30000 && !_pollRecovering) {
     _pollRecovering = true;
-    console.error('Polling 30s+ uzilib turibdi — majburiy qayta ulanmoqda...');
+    console.error('Telegram polling 30s+ uzildi — qayta ulanmoqda...');
     bot.stopPolling().then(() => bot.startPolling()).then(() => {
-      console.error('Polling qayta ulandi.');
-      _pollErrCount = 0; _pollRecovering = false;
+      console.log('Telegram polling qayta ulanish so\'rovi yuborildi.');
+      _pollErrCount = 0; _pollErrFirstAt = 0; _pollLastLogAt = 0; _pollRecovering = false;
     }).catch((e) => {
       console.error('Qayta ulanishda xatolik: ' + (e.message || e));
       _pollRecovering = false;

@@ -8,6 +8,11 @@ import Cocoa
 var fnPressed = false
 var shiftPressed = false
 var comboFired = false
+// Oddiy Fn DOWN yuborilgan bo'lsa, fizik Fn qo'yib yuborilganda Shift holatidan
+// qat'i nazar mos UP ham yuborilishi shart. Aks holda daemon pttActive=true
+// holatida osilib qoladi.
+var plainFnDownSent = false
+var pendingFnToken = 0
 
 let eventMask = (1 << CGEventType.flagsChanged.rawValue)
 
@@ -22,22 +27,44 @@ guard let eventTap = CGEvent.tapCreate(
             let isFn = flags.contains(.maskSecondaryFn)
             let isShift = flags.contains(.maskShift)
 
-            // Fn+Shift birga bosilgan payt — bitta marta "COMBO" chiqaradi
+            // Fn+Shift birga bosilgan payt — bitta fizik kombinatsiyada faqat
+            // bir marta COMBO chiqaradi. Tugmalardan ikkalasi ham qo'yilmaguncha
+            // qayta qurollanmaydi.
             if isFn && isShift && !comboFired {
                 comboFired = true
+                pendingFnToken += 1 // kutayotgan oddiy Fn DOWN'ni bekor qiladi
                 print("COMBO")
                 fflush(stdout)
             }
-            if !(isFn && isShift) {
+            if !isFn && !isShift {
                 comboFired = false
             }
 
-            // Oddiy Fn push-to-talk — faqat Shift bosilmagan bo'lsa
+            // Oddiy Fn push-to-talk. Agar avval DOWN yuborilganidan keyin Shift
+            // bosilsa ham, Fn release paytida UP yo'qolib ketmasligi kerak.
             if isFn != fnPressed {
                 fnPressed = isFn
-                if !isShift {
-                    print(isFn ? "DOWN" : "UP")
+                if isFn && !isShift {
+                    // Fn+Shift odatda bir vaqtda emas, bir necha ms farq bilan
+                    // bosiladi. 140ms kutish oddiy Fn'ni sezilarli sekinlatmaydi,
+                    // lekin combo paytida tasodifiy voice sessiya ochilishini
+                    // oldini oladi.
+                    pendingFnToken += 1
+                    let token = pendingFnToken
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                        if token == pendingFnToken && fnPressed && !shiftPressed && !comboFired {
+                            plainFnDownSent = true
+                            print("DOWN")
+                            fflush(stdout)
+                        }
+                    }
+                } else if !isFn && plainFnDownSent {
+                    pendingFnToken += 1
+                    plainFnDownSent = false
+                    print("UP")
                     fflush(stdout)
+                } else if !isFn {
+                    pendingFnToken += 1
                 }
             }
             shiftPressed = isShift

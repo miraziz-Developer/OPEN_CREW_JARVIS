@@ -31,13 +31,36 @@ let ENV = '';
 try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (e) {}
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
 
-function log(m) { console.log('[' + new Date().toISOString() + '] ' + m); }
+// launchd stdout faylga yo'naltirilganda console.log ba'zan kech flush bo'ladi.
+// Diagnostika real vaqtda ko'rinishi uchun muhim logni faylga ham sinxron yozamiz.
+const LOG_FILE = path.join(PROJECT_DIR, 'logs', 'pause-sentinel.log');
+function log(m) {
+  const line = '[' + new Date().toISOString() + '] ' + m + '\n';
+  try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, line); } catch (e) {}
+}
 
 function isRunning() {
   try {
     execSync('pgrep -f "node ' + PROJECT_DIR + '/jarvis_daemon.js"', { stdio: 'ignore' });
     return true;
   } catch (e) { return false; }
+}
+
+function waitUntilReady(timeoutMs) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      if (isRunning()) {
+        try {
+          const body = execSync('curl -sf --max-time 2 http://127.0.0.1:7890/api/status', { encoding: 'utf8' });
+          if (body) return resolve(true);
+        } catch (e) {}
+      }
+      if (Date.now() - started >= timeoutMs) return resolve(false);
+      setTimeout(check, 1000);
+    };
+    check();
+  });
 }
 
 function speak(text) {
@@ -67,18 +90,24 @@ const UID = typeof process.getuid === 'function' ? process.getuid() : 501;
 const PLIST_LABEL = 'com.jarvis.openclaw';
 const PLIST_PATH = path.join(require('os').homedir(), 'Library', 'LaunchAgents', PLIST_LABEL + '.plist');
 
-function pause() {
+let toggleBusy = false;
+let lastComboAt = 0;
+
+async function pause() {
   log('Pauza qilinmoqda...');
   speak('Jarvis to\'xtadi');
   try { execSync('launchctl bootout gui/' + UID + '/' + PLIST_LABEL, { timeout: 15000 }); } catch (e) { log('bootout (davom etamiz): ' + e.message); }
-  // Ehtiyot uchun — bootout yetarli bo'lmasa ham hammasi to'xtaganini kafolatlash
-  try { execSync(JARVIS_SH + ' stop', { cwd: PROJECT_DIR, timeout: 15000 }); } catch (e) {}
+  // Ehtiyot uchun: supervisor skriptga "stop" berilmaydi — u argumentni
+  // tushunmaydi va aksincha daemonni qayta yoqishi mumkin. Jarayonlar to'g'ridan
+  // to'g'ri to'xtatiladi; pause marker supervisor qayta startini bloklaydi.
+  try { execSync('pkill -f "node ' + PROJECT_DIR + '/jarvis_daemon.js" || true', { timeout: 5000 }); } catch (e) {}
+  try { execSync('pkill -f "node ' + PROJECT_DIR + '/telegram-bot.js" || true', { timeout: 5000 }); } catch (e) {}
   try { execSync('openclaw gateway stop', { timeout: 15000 }); } catch (e) {}
   fs.writeFileSync(PAUSE_MARKER, String(Date.now()));
   log('Pauzada. RAM bo\'shatildi.');
 }
 
-function resume() {
+async function resume() {
   log('Uyg\'otilmoqda...');
   try { fs.unlinkSync(PAUSE_MARKER); } catch (e) {}
   try {
@@ -87,13 +116,23 @@ function resume() {
   } catch (e) {
     log('bootstrap xatolik: ' + e.message);
   }
-  setTimeout(() => speak('Jarvis uyg\'ondi'), 8000);
-  log('Uyg\'onish so\'rovi yuborildi.');
+  log('Uyg\'onish so\'rovi yuborildi; servislar tayyorligi kutilmoqda.');
+  const ready = await waitUntilReady(45000);
+  speak(ready ? 'Jarvis yoqildi' : 'Jarvis yoqilmoqda, tayyor bo\'lishi biroz cho\'zildi');
+  log(ready ? 'Jarvis servislar tayyor.' : 'Jarvis readiness timeout.');
 }
 
-function toggle() {
-  if (isRunning()) pause();
-  else resume();
+async function toggle() {
+  const now = Date.now();
+  if (toggleBusy || now - lastComboAt < 1500) return;
+  lastComboAt = now;
+  toggleBusy = true;
+  try {
+    if (isRunning()) await pause();
+    else await resume();
+  } finally {
+    toggleBusy = false;
+  }
 }
 
 // ── Fn-key broker: DOWN/UP hodisalarini jarvis_daemon.js'ga (push-to-talk
@@ -107,6 +146,8 @@ function startBroker() {
   try { fs.unlinkSync(FNKEY_SOCK); } catch (e) {}
   const server = net.createServer((conn) => {
     _brokerClients.push(conn);
+    // Daemon eski Fn DOWN holatida qolgan bo'lsa, har reconnectda tozalanadi.
+    try { conn.write('RESET\n'); } catch (e) {}
     conn.on('close', () => { _brokerClients = _brokerClients.filter(c => c !== conn); });
     conn.on('error', () => {});
   });
@@ -114,7 +155,21 @@ function startBroker() {
   server.listen(FNKEY_SOCK, () => log('Fn-key broker tayyor: ' + FNKEY_SOCK));
 }
 
+let fnProc = null;
+let fnRestartTimer = null;
+let fnLastEventAt = 0;
+
+function scheduleListenerRestart(delayMs, reason) {
+  if (fnRestartTimer) return;
+  log('fnkey qayta ishga tushiriladi (' + reason + ', ' + delayMs + 'ms)');
+  fnRestartTimer = setTimeout(() => {
+    fnRestartTimer = null;
+    startListener();
+  }, delayMs);
+}
+
 function startListener() {
+  if (fnProc && fnProc.exitCode === null && !fnProc.killed) return;
   if (!fs.existsSync(FNKEY_BIN)) {
     const source = path.join(PROJECT_DIR, 'skills', 'fn-key', 'fnkey.swift');
     try {
@@ -125,11 +180,13 @@ function startListener() {
       log('fnkey binary build qilindi.');
     } catch (e) {
       log('fnkey build xatolik — 60s dan keyin qayta uriniladi: ' + e.message);
-      setTimeout(startListener, 60000);
+      scheduleListenerRestart(60000, 'build xatolik');
       return;
     }
   }
   const proc = spawn(FNKEY_BIN, [], { stdio: ['ignore', 'pipe', 'pipe'] });
+  fnProc = proc;
+  fnLastEventAt = Date.now();
   let buf = '';
   proc.stdout.on('data', (d) => {
     buf += d;
@@ -137,16 +194,25 @@ function startListener() {
     buf = lines.pop();
     for (const line of lines) {
       const t = line.trim();
-      if (t === 'READY') log('Fn+Shift pauza tinglovchisi tayyor');
-      else if (t === 'COMBO') toggle();
+      if (!t) continue;
+      fnLastEventAt = Date.now();
+      if (t === 'READY') log('Fn/Fn+Shift tinglovchisi tayyor (pid=' + proc.pid + ')');
+      else if (t === 'COMBO') { log('Fn+Shift COMBO qabul qilindi'); toggle(); }
       else if (t.startsWith('ERROR')) log('fnkey xatolik: ' + t);
-      if (t === 'DOWN' || t === 'UP') broadcastToBroker(t);
+      if (t === 'DOWN' || t === 'UP') { log('Fn event: ' + t); broadcastToBroker(t); }
     }
   });
-  proc.stderr.on('data', () => {});
+  proc.stderr.on('data', (d) => log('fnkey stderr: ' + String(d).trim()));
+  proc.on('error', (e) => {
+    if (fnProc === proc) fnProc = null;
+    log('fnkey spawn xatolik: ' + e.message);
+    scheduleListenerRestart(3000, 'spawn xatolik');
+  });
   proc.on('exit', (code) => {
+    if (fnProc === proc) fnProc = null;
+    broadcastToBroker('RESET');
     log('fnkey jarayoni tugadi (code=' + code + ') — 3s dan keyin qayta ishga tushirish');
-    setTimeout(startListener, 3000);
+    scheduleListenerRestart(3000, 'exit code=' + code);
   });
 }
 
@@ -154,5 +220,17 @@ log('Pauza sentinel ishga tushdi (Fn+Shift = to\'xtat/uyg\'ot)');
 startBroker();
 startListener();
 
-process.on('SIGINT', () => process.exit(0));
-process.on('SIGTERM', () => process.exit(0));
+// Sentinelning o'zi tirik, child esa jim o'lib qolgan holatni tiklaydi.
+setInterval(() => {
+  if (!fnProc || fnProc.exitCode !== null || fnProc.killed) {
+    broadcastToBroker('RESET');
+    scheduleListenerRestart(0, 'watchdog child yo\'q');
+  }
+}, 5000).unref();
+
+function shutdown() {
+  try { if (fnProc) fnProc.kill('SIGTERM'); } catch (e) {}
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

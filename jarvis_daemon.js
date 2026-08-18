@@ -25,6 +25,7 @@ const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 process.chdir(PROJECT_DIR);
 
 const { writeMemory, searchMemory } = require('./skills/memory');
+const { RealtimeSession } = require('./skills/realtime-voice');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
@@ -49,13 +50,18 @@ const OPENWAKEWORD_PYTHON = path.join(PROJECT_DIR, '.venv-openwakeword', 'bin', 
 const SAMPLE_RATE = 16000;
 const CHUNK_MS = 1200;             // overlap window (ms) — "Jarvis" to'liq sig'ish uchun
 const STEP_MS = 200;               // new chunk every (ms)
-const ENERGY_MIN_STT = 400;        // STT gate threshold — gapda yaxshi catch qiladi
+const ENERGY_MIN_STT = parseFloat(env('ENERGY_MIN_STT')) || 120; // past mikrofonlarda ham backup ishlasin
 const ENERGY_TARGET = 1500;        // adaptive gain target — low, no clip
 const SILENCE_MS = 500;            // silence = command end
 const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 150; // buyruq yozib olishda "gapiryapti" chegarasi
 const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
-const HOTWORD_COOLDOWN_MS = 1500;  // debounce after trigger
+const HOTWORD_COOLDOWN_MS = parseInt(env('HOTWORD_COOLDOWN_MS'), 10) || 3000;
+const REALTIME_INPUT_GAIN = Math.max(1, Math.min(8, parseFloat(env('REALTIME_INPUT_GAIN')) || 3));
+const OPENWAKEWORD_INPUT_GAIN = Math.max(1, Math.min(4, parseFloat(env('OPENWAKEWORD_INPUT_GAIN')) || 2));
+const WAKE_STT_SILENCE_MS = 450;
+const WAKE_STT_MAX_MS = 2800;
+const WAKE_STT_PREROLL_MS = 350;
 
 const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
@@ -81,7 +87,9 @@ function rtTaskCompleted(callId, result) {
   saveRealtimeTasksState();
 }
 
-const CLAP_TRIGGER_ENABLED = (env('CLAP_TRIGGER_ENABLED') || 'true') !== 'false';
+// Qarsak klaviatura/stol zarbalarida ko'p false-trigger bergani uchun opt-in.
+// Asosiy ishonchli triggerlar: Hey Jarvis va Fn push-to-talk.
+const CLAP_TRIGGER_ENABLED = (env('CLAP_TRIGGER_ENABLED') || 'false') === 'true';
 const CLAP_SPIKE_RATIO = parseFloat(env('CLAP_SPIKE_RATIO')) || 4;     // spike, tinch fondan necha barobar baland
 const CLAP_ABS_FLOOR = parseFloat(env('CLAP_ABS_FLOOR')) || 250;       // mutlaq minimal spike (juda tinch xonada ham)
 const CLAP_QUIET_RATIO = 0.4;      // spike'dan oldingi step shundan past bo'lishi kerak
@@ -174,15 +182,27 @@ function sendTelegramVoice(oggPath) {
 }
 
 async function ttsToFile(text) {
+  const cleanText = String(text || '').trim();
+  // Agent ba'zan bo'sh JSON konteyner qaytaradi. Azure bunday matn uchun
+  // yaroqsiz/juda kichik MP3 berishi mumkin va afplay "AudioFileOpen failed"
+  // deb stderr'ni to'ldiradi.
+  if (!cleanText || /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(cleanText)) return null;
   return new Promise((resolve) => {
     const tmpIn = '/tmp/tts_' + Date.now() + '.json';
-    fs.writeFileSync(tmpIn, JSON.stringify({ text }), 'utf8');
+    fs.writeFileSync(tmpIn, JSON.stringify({ text: cleanText }), 'utf8');
     const proc = spawn('node', ['skills/azure-tts/index.js'], {
       cwd: PROJECT_DIR, env: { ...process.env, AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'), AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'uz-UZ-SardorNeural' }
     });
     let out = '';
     proc.stdout.on('data', d => out += d); proc.stderr.on('data', () => {});
-    proc.on('close', () => { try { fs.unlinkSync(tmpIn); } catch(e){} try { resolve(JSON.parse(out.trim()).audioFile || null); } catch(e){ resolve(null); } });
+    proc.on('close', (code) => {
+      try { fs.unlinkSync(tmpIn); } catch(e){}
+      try {
+        const audioFile = JSON.parse(out.trim()).audioFile;
+        if (code === 0 && audioFile && fs.statSync(audioFile).size > 512) resolve(audioFile);
+        else resolve(null);
+      } catch(e) { resolve(null); }
+    });
     fs.createReadStream(tmpIn).pipe(proc.stdin);
   });
 }
@@ -192,9 +212,10 @@ async function askAgent(message) {
     const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY }, timeout: 15000 });
     let out = '';
     proc.stdout.on('data', d => out += d); proc.stderr.on('data', () => {});
-    proc.on('close', () => {
+    proc.on('close', (code) => {
       const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
-      resolve((!clean || clean.includes("couldn't generate") || clean.includes('tool policy removed')) ? null : clean);
+      const emptyPayload = /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(clean);
+      resolve((code !== 0 || !clean || emptyPayload || clean.includes("couldn't generate") || clean.includes('tool policy removed')) ? null : clean);
     });
   });
 }
@@ -903,7 +924,11 @@ class OpenWakeWordDetector {
     this.lineBuffer = '';
     this.worker = spawn(OPENWAKEWORD_PYTHON, ['-u', path.join(PROJECT_DIR, 'scripts', 'openwakeword-worker.py')], {
       cwd: PROJECT_DIR,
-      env: { ...process.env, OPENWAKEWORD_THRESHOLD: env('OPENWAKEWORD_THRESHOLD') || '0.55' },
+      env: {
+        ...process.env,
+        OPENWAKEWORD_THRESHOLD: env('OPENWAKEWORD_THRESHOLD') || '0.38',
+        OPENWAKEWORD_STRONG_THRESHOLD: env('OPENWAKEWORD_STRONG_THRESHOLD') || '0.55'
+      },
       stdio: ['pipe', 'pipe', 'pipe']
     });
     this.worker.stdout.on('data', data => this._handleOutput(data.toString()));
@@ -933,6 +958,8 @@ class OpenWakeWordDetector {
       } else if (line.startsWith('DETECT ')) {
         this.detected = true;
         inf('openWakeWord score=' + line.slice(7));
+      } else if (line.startsWith('SCORE ')) {
+        inf('openWakeWord candidate score=' + line.slice(6));
       } else if (line.startsWith('ERROR ')) {
         wrn('openWakeWord: ' + line.slice(6));
       }
@@ -1064,11 +1091,149 @@ async function mainLoop() {
   let nextStepTime = 0;
   let lastHotwordTime = 0;
   let lastSttCheck = 0;
-  let state = 'listening'; // 'listening' | 'command_record' | 'processing'
+  let sttBackupInFlight = false;
+  let lastSttBackupNotice = 0;
+  let wakeSpeechBuffers = [];
+  let wakeSpeechStartedAt = 0;
+  let wakeSpeechLastVoiceAt = 0;
+  let state = 'listening'; // 'listening' | 'realtime' | 'command_record' | 'processing'
   let cmdBuffers = [];
   let lastVoiceTime = 0;
   let cmdStartTime = 0;
   let pttActive = false; // Fn tugmasi bosib turilganda true — avto-sukunat kesish o'chadi
+  let lastFnDownAt = 0;
+  // Mac mikrofonining real tinch RMS'i sinovda 100–200 oralig'ida chiqdi.
+  // 40 dan boshlash shovqinni nutq deb olib, uzluksiz STT segment yuborardi.
+  let ambientEnergy = ENERGY_MIN_STT;
+
+  function isWakePhrase(text) {
+    const normalized = String(text || '').toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const compact = normalized.replace(/\s+/g, '');
+    return ['jarvis', 'jarviz', 'jervis', 'djervis', 'yarvis', 'jorvis', 'djarvis', 'charvis', 'jarv'].some(word =>
+      normalized.includes(word) || compact.includes(word)
+    );
+  }
+
+  function submitWakeStt(pcm, measuredEnergy) {
+    if (!pcm.length || sttBackupInFlight || Date.now() - lastSttCheck < 900) return;
+    lastSttCheck = Date.now();
+    sttBackupInFlight = true;
+    const gain = Math.max(1, Math.min(5, ENERGY_TARGET / Math.max(measuredEnergy, 1)));
+    const wavBuf = pcmToWavBuffer(applyGain(Buffer.from(pcm), gain));
+    inf('STT wake segment (' + Math.round(pcm.length / (SAMPLE_RATE * 2) * 1000) + 'ms, energy=' + Math.round(measuredEnergy) + ')...');
+    _sttPool.recognize(wavBuf, 'en-US').then(r => {
+      if (r && r.status === 'ok' && r.text) {
+        inf('STT wake heard: "' + r.text + '"');
+        if (isWakePhrase(r.text) && state === 'listening' && Date.now() - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
+          triggerVoice('🔥 HOTWORD (STT backup): "' + r.text + '"');
+        }
+      } else if (r && r.reason && !['NoMatch', 'nomatch', 'unknown'].includes(r.reason) && Date.now() - lastSttBackupNotice > 60000) {
+        lastSttBackupNotice = Date.now();
+        wrn('STT backup vaqtincha javob bermadi: ' + r.reason);
+      }
+    }).catch(e => {
+      if (Date.now() - lastSttBackupNotice > 60000) {
+        lastSttBackupNotice = Date.now();
+        wrn('STT backup vaqtincha ishlamadi: ' + (e.message || e));
+      }
+    }).finally(() => { sttBackupInFlight = false; });
+  }
+
+  // Wake-word'dan keyin eski batch STT → agent → TTS yo'li emas, mavjud
+  // gpt-realtime sessiyasi ishga tushadi. Realtime modul audio streaming,
+  // barge-in va run_task/fast_action vositalarini o'zi boshqaradi; daemon esa
+  // mikrofon oqimi, idle timeout va dashboard task holatini ulaydi.
+  function startRealtimeSession(reason) {
+    if (_activeRealtimeSession || state !== 'listening') return false;
+
+    const session = new RealtimeSession();
+    _activeRealtimeSession = session;
+    state = 'realtime';
+    lastHotwordTime = Date.now();
+    const wakeMuteUntil = Date.now() + WAKE_SOUND_MS;
+    let idleTimer = null;
+    let finished = false;
+    let sessionWasReady = false;
+    let lastUserTranscript = '';
+
+    const armIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => finishRealtimeSession('jimlik timeout'), REALTIME_IDLE_MS);
+    };
+    const finishRealtimeSession = (why) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(idleTimer);
+      if (_activeRealtimeSession === session) _activeRealtimeSession = null;
+      try { session.close(); } catch (e) {}
+      state = 'listening';
+      nextStepTime = Date.now();
+      inf('Realtime suhbat yakunlandi: ' + why);
+    };
+
+    session.on('ready', () => {
+      sessionWasReady = true;
+      ok('Realtime ovoz sessiyasi ulandi');
+      armIdleTimer();
+    });
+    session.on('user_speaking', () => clearTimeout(idleTimer));
+    session.on('user_speech_stopped', armIdleTimer);
+    session.on('user_transcript', (text) => {
+      const clean = String(text || '').trim();
+      if (!clean) return;
+      lastUserTranscript = clean;
+      inf('🎙 Realtime: ' + clean);
+      sendTelegram('🎙 ' + clean);
+      armIdleTimer();
+    });
+    session.on('assistant_transcript', (text) => {
+      const clean = String(text || '').trim();
+      if (!clean) return;
+      ok('🤖 Realtime: ' + clean.substring(0, 120));
+      sendTelegram('🤖 ' + clean);
+      try {
+        writeMemory('Ovozli suhbat', 'Foydalanuvchi: ' + (lastUserTranscript || '(transkript yo\'q)') + '\nJarvis: ' + clean.substring(0, 700), ['voice', 'realtime']);
+      } catch (e) {}
+      lastUserTranscript = '';
+      armIdleTimer();
+    });
+    session.on('turn_done', armIdleTimer);
+    session.on('tool_call', (description, callId) => {
+      rtTaskStarted(callId, description);
+      inf('🛠 Jonli vazifa: ' + description);
+      armIdleTimer();
+    });
+    session.on('tool_result', (result, callId) => {
+      rtTaskCompleted(callId, result);
+      if (!/^fast_action:/i.test(String((_realtimeTasks.find(t => t.callId === callId) || {}).description || ''))) playTaskDoneSound();
+      armIdleTimer();
+    });
+    session.on('error', (err) => {
+      er('Realtime xatolik: ' + (err.message || err));
+      const shouldFallback = !sessionWasReady;
+      finishRealtimeSession('xatolik');
+      if (shouldFallback && state === 'listening') {
+        // Ulanishning o'zi ishlamasa foydalanuvchini tashlab qo'ymaymiz:
+        // wake sound'dan keyingi audioni batch STT orqali yozib olamiz.
+        state = 'command_record';
+        cmdBuffers = [];
+        cmdStartTime = Date.now();
+        lastVoiceTime = cmdStartTime;
+        wrn('Realtime ulanmagan — batch STT fallback tinglayapti');
+      }
+    });
+    session.on('close', () => finishRealtimeSession('ulanish yopildi'));
+
+    playWakeSound();
+    inf(reason + ' — realtime suhbat ulanmoqda');
+    session.connect();
+    armIdleTimer();
+
+    // Mikrofon loop'i wake sound tugamaguncha audio yubormasligi uchun
+    // sessiyaga lokal vaqt belgisi biriktiriladi.
+    session._jarvisWakeMuteUntil = wakeMuteUntil;
+    return true;
+  }
 
   // Barcha triggerlar bitta state transition'dan o'tadi. Rekonstruksiya
   // qilingan snapshotda triggerVoice chaqiriqlari qolib, funksiyaning o'zi
@@ -1076,6 +1241,13 @@ async function mainLoop() {
   // qular edi. Fn DOWN/UP ham pause-sentinel brokeridan shu yerga keladi.
   function triggerVoice(reason) {
     if (state !== 'listening') return false;
+    // Lokal model va STT fallback parallel tinglaydi. Ulardan biri trigger
+    // qilishi bilan ikkinchisining yarim yig'ilgan segmentini tashlaymiz;
+    // aks holda realtime tugagach eski “Hey Jarvis” keyingi nutqqa qo'shiladi.
+    wakeSpeechBuffers = [];
+    wakeSpeechStartedAt = 0;
+    wakeSpeechLastVoiceAt = 0;
+    if (REALTIME_ENABLED) return startRealtimeSession(reason);
     const now = Date.now();
     lastHotwordTime = now;
     state = 'command_record';
@@ -1094,7 +1266,10 @@ async function mainLoop() {
     if (fnClient && !fnClient.destroyed) return;
     fnClient = net.createConnection(fnSocketPath);
     let fnBuf = '';
-    fnClient.on('connect', () => inf('Fn-key broker ulandi'));
+    fnClient.on('connect', () => {
+      pttActive = false;
+      inf('Fn-key broker ulandi');
+    });
     fnClient.on('data', (data) => {
       fnBuf += data.toString();
       const lines = fnBuf.split('\n');
@@ -1102,17 +1277,24 @@ async function mainLoop() {
       for (const raw of lines) {
         const event = raw.trim();
         if (event === 'DOWN') {
+          // flagsChanged dublikat hodisasi ikkinchi realtime sessiya ochmasin.
+          if (pttActive || Date.now() - lastFnDownAt < 250) continue;
           pttActive = true;
+          lastFnDownAt = Date.now();
           triggerVoice('⌨️ Fn push-to-talk');
         } else if (event === 'UP') {
           pttActive = false;
           // Tugma qo'yib yuborilganda yozuv tabiiy silence chegarasidan tez
           // yakunlansin; data loop STT'ni xavfsiz ravishda boshlaydi.
           lastVoiceTime = Date.now() - SILENCE_MS - 1;
+        } else if (event === 'RESET') {
+          pttActive = false;
+          lastFnDownAt = 0;
         }
       }
     });
     const reconnect = () => {
+      pttActive = false;
       if (fnRetry) return;
       fnRetry = setTimeout(() => { fnRetry = null; connectFnBroker(); }, 3000);
     };
@@ -1135,7 +1317,10 @@ async function mainLoop() {
         stepData = stepBuffer.slice(0, STEP_BYTES);
         stepBuffer = stepBuffer.slice(STEP_BYTES);
         rolling.push(stepData);
-        if (state !== 'listening') cmdBuffers.push(stepData);
+        if (state === 'command_record') cmdBuffers.push(stepData);
+        if (state === 'realtime' && _activeRealtimeSession && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
+          _activeRealtimeSession.feedAudio(applyGain(Buffer.from(stepData), REALTIME_INPUT_GAIN));
+        }
       }
 
       // ── STATE: LISTENING ──
@@ -1163,9 +1348,8 @@ async function mainLoop() {
           // Lokal detektorga faqat yangi PCM step yuboriladi; rolling overlap
           // yuborilsa bir audio qayta-qayta inference qilinardi.
           let detected = false;
-          const chunkPCM = Buffer.from(rolling.sliceLast(CHUNK_MS));
           if (_detector) {
-            detected = _detector.processChunk(stepData);
+            detected = _detector.processChunk(applyGain(Buffer.from(stepData), OPENWAKEWORD_INPUT_GAIN));
           }
 
           if (detected && (now - lastHotwordTime > HOTWORD_COOLDOWN_MS)) {
@@ -1173,29 +1357,33 @@ async function mainLoop() {
             return;
           }
 
-          // STT backup hotword every step
-          // Energy adapt on NON-amplified audio (real mic level)
-          const rawPCM = Buffer.from(rolling.sliceLast(CHUNK_MS));
-          const energy = getEnergy(rawPCM);
+          // STT backup: har rolling oynani qayta-qayta yubormaymiz. Nutqning
+          // boshlanishi va jimlik bilan tugashini topib, aynan bitta segmentni
+          // tanitamiz — “Hey Jarvis” sukunat ichida yo'qolib ketmaydi.
+          const energy = getEnergy(stepData);
+          if (!wakeSpeechStartedAt && energy < ambientEnergy * 2.2) ambientEnergy = ambientEnergy * 0.97 + energy * 0.03;
+          const adaptiveSttGate = Math.max(ENERGY_MIN_STT, ambientEnergy * 2.5);
           adaptGain(energy);
           // Debug: energy log every 2 sec
           if ((now % 2000) < 200) inf('Energy=' + Math.round(energy) + ' gain=' + _gain.toFixed(1));
-          if (energy >= ENERGY_MIN_STT && (now - lastSttCheck > 600)) {
-            lastSttCheck = now;
-            const wavBuf = pcmToWavBuffer(Buffer.from(chunkPCM));
-            inf('STT backup hotword check (energy=' + Math.round(energy) + ')...');
-            _sttPool.recognize(wavBuf, 'en-US').then(r => {
-              if (r && r.status === 'ok' && r.text) {
-                const t = r.text.toLowerCase();
-                if (['jarvis','jar vis','jarviz','cervis','jervis','djervis','yarvis','jorvis','djarvis','jarv'].some(w => t.includes(w))) {
-                  if ((Date.now() - lastHotwordTime) > HOTWORD_COOLDOWN_MS) {
-                    triggerVoice('🔥 HOTWORD (STT backup): "' + r.text + '"');
-                  }
-                }
-              } else {
-                wrn('STT backup: javob yo\'q yoki xatolik');
-              }
-            }).catch(e => er('STT backup xatolik: ' + (e.message || e)));
+          if (!wakeSpeechStartedAt && energy >= adaptiveSttGate) {
+            wakeSpeechStartedAt = now;
+            wakeSpeechLastVoiceAt = now;
+            wakeSpeechBuffers = [Buffer.from(rolling.sliceLast(WAKE_STT_PREROLL_MS))];
+          } else if (wakeSpeechStartedAt) {
+            wakeSpeechBuffers.push(Buffer.from(stepData));
+            if (energy >= Math.max(ENERGY_MIN_STT * 0.8, ambientEnergy * 1.7)) wakeSpeechLastVoiceAt = now;
+
+            const speechAge = now - wakeSpeechStartedAt;
+            const silenceAge = now - wakeSpeechLastVoiceAt;
+            if ((silenceAge >= WAKE_STT_SILENCE_MS && speechAge >= 400) || speechAge >= WAKE_STT_MAX_MS) {
+              const speechPcm = Buffer.concat(wakeSpeechBuffers);
+              const speechEnergy = getEnergy(speechPcm);
+              wakeSpeechBuffers = [];
+              wakeSpeechStartedAt = 0;
+              wakeSpeechLastVoiceAt = 0;
+              submitWakeStt(speechPcm, speechEnergy);
+            }
           }
         }
       }
@@ -1208,7 +1396,7 @@ async function mainLoop() {
         if (elapsed % 120 < 30 && cmdBuffers.length > 2) {
           const totalPCM = Buffer.concat(cmdBuffers);
           const energy = getEnergy(totalPCM);
-          if (energy > 300) lastVoiceTime = now;
+          if (energy > VOICE_ACTIVITY_THRESHOLD) lastVoiceTime = now;
         }
 
         const silence = now - lastVoiceTime;
@@ -1292,7 +1480,16 @@ async function processCommand(command) {
       try { execSync('ffmpeg -y -i "' + audio + '" -c:a libopus "' + ogg + '" 2>/dev/null'); sendTelegramVoice(ogg); } catch(e){}
       [ogg, audio].forEach(p => { try { fs.unlinkSync(p); } catch(e){} });
     }
-  } else { er('Xatolik'); sendTelegram('❌ Xatolik'); }
+  } else {
+    const fallback = 'Hozir javobni tayyorlay olmadim. Iltimos, yana bir marta ayting.';
+    wrn('Agent bo\'sh javob qaytardi');
+    sendTelegram('⚠️ ' + fallback);
+    const audio = await ttsToFile(fallback);
+    if (audio) {
+      try { execSync('afplay "' + audio + '"', { stdio: 'ignore' }); } catch(e) {}
+      try { fs.unlinkSync(audio); } catch(e) {}
+    }
+  }
 }
 
 // ════════════════════════════════════════════

@@ -26,7 +26,12 @@ case "${1:-start}" in
     echo "⏹ Jarvis to'xtatildi"
     ;;
   restart)
-    exec "$ROOT/scripts/restart-daemon.sh"
+    if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      launchctl kickstart -k "$DOMAIN/$LABEL"
+    else
+      "$ROOT/scripts/enable-autostart.sh"
+    fi
+    echo "🔄 Jarvis to'liq qayta ishga tushirildi"
     ;;
   status)
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
