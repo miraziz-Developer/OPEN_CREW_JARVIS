@@ -6,7 +6,7 @@
  * Foydalanuvchini bezovta qilmaydi (faqat log/memory)
  */
 
-const { spawn, execSync } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -26,12 +26,15 @@ function getEnv(key, def) {
 const INTERVAL_MS = parseInt(getEnv('SCREEN_MONITOR_INTERVAL', '90000'), 10); // 90s default
 const DIFF_THRESHOLD = parseFloat(getEnv('SCREEN_MONITOR_THRESHOLD', '15'));   // 15% default
 const ENABLED = getEnv('SCREEN_MONITOR_ENABLED', 'true') === 'true';
-const AZURE_OPENAI_KEY = getEnv('AZURE_OPENAI_KEY');
 
 // ── State ─────────────────────────────────────────────────────────────
 let isRunning = false;
 let lastLLMCall = 0;
-let llmCooldownMs = 300000; // 5 daqiqa cooldown (LLM chaqirish orasida)
+// Oxirgi old oynani process xotirasida saqlaymiz. Rekonstruksiya qilingan
+// versiyada ishlatilishi qolib, deklaratsiyasi yo'qolgan edi; birinchi diff
+// paytida ReferenceError berib monitorni foydasiz error-loopga tushirardi.
+let lastFrontWindow = null;
+let llmCooldownMs = parseInt(getEnv('SCREEN_MONITOR_VISION_COOLDOWN', '120000'), 10); // vision chaqiruvlar orasidagi minimal oraliq
 
 function loadState() {
   try {
@@ -80,33 +83,60 @@ function pixelDiff(prevPath, currPath) {
   } catch (e) { return 100; }
 }
 
-// ── LLM tahlil (odda, faqat muhim hodisalar uchun) ────────────────────
-async function analyzeScreen(imagePath) {
-  // Hozircha oddiy: desktop control orqali o'tkazamiz
-  // Lekin desktop control screenshot + analysis
-  // Soddalashtirish: faqat logga yozamiz, ovoz chiqarmaymiz
+// ── Vision tahlil (haqiqiy skrinshotni gpt-4.1'ga yuboradi) ───────────
+const { describeImage } = require('./../screen-vision/index.js');
 
+async function analyzeScreen(imagePath) {
   const now = Date.now();
   if (now - lastLLMCall < llmCooldownMs) {
     return { status: 'cooldown', message: 'LLM cooldown faol' };
   }
 
-  // Desktop control orqali so'rash
-  return new Promise((resolve) => {
-    const prompt = '[SYSTEM: Ekran skrinshotini ko\'rib, nima o\'zgarishini qisqa (3-5 gap) yoz. Faqat muhim narsalarni ayt. Agar faqat vaqt/soat o\'zgargan bo\'lsa "hech narsa" deb javob ber.]';
-    const env = { ...process.env, AZURE_OPENAI_KEY };
-    const proc = spawn('openclaw', ['agent', '--message', prompt, '--agent', 'main'], {
-      cwd: PROJECT_DIR, env, timeout: 30000
-    });
-    let out = '';
-    proc.stdout.on('data', d => (out += d.toString()));
-    proc.stderr.on('data', d => {});
-    proc.on('close', () => {
-      const clean = out.split('\n').filter(l => l.trim() && !l.includes('Waiting') && !l.includes('◒')).join('\n').trim();
-      lastLLMCall = Date.now();
-      resolve({ status: 'ok', summary: clean });
-    });
-  });
+  const prompt = 'Ekran skrinshotini batafsil tahlil qil — foydalanuvchi hozir aniq nima ish qilyapti? ' +
+    'Agar bir nechta oyna/ilova ko\'rinsa, HAR BIRINI alohida yoz: qaysi ilova, unda aniq nima ' +
+    '(fayl/loyiha nomi, qaysi kod/matn qismi, kim bilan qanday mavzuda gaplashilyapti, qaysi sayt/video va h.k.). ' +
+    'Taxmin qilma, faqat aniq ko\'rinib turgan narsani yoz. Konkret va batafsil bo\'lsin, sayoz umumlashtirma. ' +
+    'Agar faqat vaqt/soat o\'zgargan bo\'lsa yoki haqiqatan hech qanday mazmunli faoliyat yo\'q bo\'lsa — "hech narsa" deb javob ber.\n\n' +
+    'MUHIM: agar ekranda foydalanuvchi DARHOL bilishi kerak bo\'lgan, chindan SHOSHILINCH narsa ko\'rinsa (masalan: ' +
+    'xato/crash dialogi, xavfsizlik ogohlantirishi, "usage limit"/kvota tugagani, muhim muddat/deadline yaqinlashgani, ' +
+    'to\'lov/hisob bilan bog\'liq ogohlantirish) — javobingizni ANIQ "SHOSHILINCH: " so\'zi bilan boshlang (masalan ' +
+    '"SHOSHILINCH: Xcode build xato bilan to\'xtadi"). Oddiy, kutilgan ish jarayoni (kod yozish, brauzerda kezish, ' +
+    'suhbat) uchun bu prefiksni HECH QACHON ishlatmang — faqat chindan g\'ayrioddiy, e\'tiborsiz qoldirilsa zarar ' +
+    'keltirishi mumkin bo\'lgan holatlarda.';
+
+  try {
+    const summary = await describeImage(imagePath, prompt);
+    lastLLMCall = Date.now();
+    return { status: 'ok', summary };
+  } catch (e) {
+    lastLLMCall = Date.now();
+    return { status: 'error', message: e.message || String(e) };
+  }
+}
+
+// ── ARZON SIGNAL: old oyna (ilova + sarlavha) ────────────────────────
+// Rasm ham, LLM ham kerak emas — ~0.5 soniya, narxi nol. Piksel farqi
+// juda dag'al o'lchov: sahifani aylantirish, video ijrosi, matn yozish
+// — hammasi katta farq beradi, holbuki foydalanuvchi AYNAN O'SHA ishni
+// qilyapti. Shu sabab bugun 52 ta deyarli bir xil vision chaqiruvi
+// (har biri pullik) va 52 ta takroriy xotira yozuvi hosil bo'lgan.
+// Endi qimmat tahlil faqat KONTEKST chindan almashganda chaqiriladi.
+const FRONT_WINDOW_SCRIPT = 'tell application "System Events"\n' +
+  '  set frontApp to name of first application process whose frontmost is true\n' +
+  '  set winName to ""\n' +
+  '  try\n' +
+  '    tell process frontApp to set winName to name of front window\n' +
+  '  end try\n' +
+  'end tell\n' +
+  'return frontApp & " | " & winName';
+
+function getFrontWindow() {
+  try {
+    // timeout: System Events ba'zan javob bermay qolishi mumkin — butun
+    // kuzatuv halqasi shu sabab osilib qolmasin.
+    return execSync('osascript -e ' + JSON.stringify(FRONT_WINDOW_SCRIPT) + ' 2>/dev/null',
+      { encoding: 'utf8', timeout: 5000 }).trim();
+  } catch (e) { return null; }
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────
@@ -132,10 +162,17 @@ async function runLoop() {
       // 2. Diff (birinchisi o'tkazib yuboriladi)
       if (fs.existsSync(LAST_SCREENSHOT)) {
         const diff = pixelDiff(LAST_SCREENSHOT, CUR_SCREENSHOT);
-        console.log('Diff: ' + diff.toFixed(2) + '% (threshold: ' + DIFF_THRESHOLD + '%)');
+        const frontWindow = getFrontWindow();
+        const contextChanged = frontWindow !== null && frontWindow !== lastFrontWindow;
+        if (frontWindow !== null) lastFrontWindow = frontWindow;
+        console.log('Diff: ' + diff.toFixed(2) + '% (threshold: ' + DIFF_THRESHOLD + '%)' +
+          ' | oyna: ' + (frontWindow || '?') + (contextChanged ? ' [ALMASHDI]' : ''));
 
-        if (diff > DIFF_THRESHOLD) {
-          console.log('  ⚠️ TRIGGER: Ekran o\'zgarishi aniqlandi (' + diff.toFixed(1) + '%)');
+        // Qimmat vision tahlili faqat KONTEKST almashganda. Piksel farqi
+        // katta bo'lsa-yu, foydalanuvchi o'sha ilova/oynada qolgan bo'lsa —
+        // bu yangi ma'lumot emas (aylantirish, video, yozish), o'tkazamiz.
+        if (diff > DIFF_THRESHOLD && contextChanged) {
+          console.log('  ⚠️ TRIGGER: kontekst almashdi (' + diff.toFixed(1) + '%)');
 
           // 3. Tahlil (faqat katta o'zgarishda)
           const analysis = await analyzeScreen(CUR_SCREENSHOT);
@@ -143,18 +180,26 @@ async function runLoop() {
             const timestamp = new Date().toISOString();
             const logEntry = timestamp + ' | DIFF=' + diff.toFixed(1) + '% | ' + analysis.summary + '\n';
 
+            // "SHOSHILINCH:" prefiksi bo'lsa, alohida #urgent teg bilan
+            // belgilanadi — jarvis_daemon.js buni tez-tez (30 daqiqalik
+            // umumiy proaktiv tsikldan farqli, bir necha daqiqada) tekshirib,
+            // DARHOL ovozli xabar berish uchun ishlatadi.
+            const urgentMatch = analysis.summary.match(/^SHOSHILINCH:\s*/i);
+            const cleanSummary = urgentMatch ? analysis.summary.slice(urgentMatch[0].length).trim() : analysis.summary;
+            const tags = urgentMatch ? ['screen', 'trigger', 'auto', 'urgent'] : ['screen', 'trigger', 'auto'];
+
             // Memory'ga yozish
             try {
               const memPath = path.join(PROJECT_DIR, 'skills', 'memory', 'index.js');
               if (fs.existsSync(memPath)) {
                 const mem = require(memPath);
-                mem.writeMemory('Ekran o\'zgarishi', analysis.summary, ['screen', 'trigger', 'auto']);
+                mem.writeMemory('Ekran o\'zgarishi', cleanSummary, tags);
               }
             } catch (e) {}
 
             // State yangilash
             state.lastTrigger = Date.now();
-            state.lastSummary = analysis.summary;
+            state.lastSummary = cleanSummary;
             saveState(state);
 
             // Telegram'ga YUBORMAYMIZ (foydalanuvchini bezovta qilmaydi)
