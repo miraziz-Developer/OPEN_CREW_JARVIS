@@ -46,6 +46,7 @@ test_out.wav
 .screen-monitor-state
 .realtime-tasks-state.json
 .jarvis-runtime.json
+reports/
 .memory-embeddings.json
 .google-tokens.json
 .media-playing-state.json

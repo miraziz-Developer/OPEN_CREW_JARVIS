@@ -1,8 +1,11 @@
 {
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check jarvis_daemon.js && node --check skills/realtime-voice/index.js && node --check dashboard/server.js && node --check scripts/diagnose-voice.js && node --test tests/*.test.js",
-    "diagnose:voice": "node scripts/diagnose-voice.js"
+    "check": "node --check jarvis_daemon.js && node --check skills/realtime-voice/index.js && node --check dashboard/server.js && node --check scripts/diagnose-voice.js && node --check scripts/check-config.js && node --check scripts/benchmark.js && node --test tests/*.test.js",
+    "config:check": "node scripts/check-config.js",
+    "diagnose:voice": "node scripts/diagnose-voice.js",
+    "benchmark": "node scripts/benchmark.js",
+    "verify": "npm run check && npm run config:check && npm run diagnose:voice && npm run benchmark"
   },
   "dependencies": {
     "@picovoice/porcupine-node": "^4.0.2",

@@ -1,0 +1,14 @@
+{
+  "voice": {
+    "truePositives": 0,
+    "falseNegatives": 0,
+    "falseWakes": 0,
+    "hours": 0,
+    "correctWords": 0,
+    "referenceWords": 0
+  },
+  "missions": {
+    "duplicateActions": 0,
+    "falseCompletionClaims": 0
+  }
+}
