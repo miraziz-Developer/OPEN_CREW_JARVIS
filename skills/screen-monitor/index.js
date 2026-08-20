@@ -10,11 +10,15 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { collectMacOSContext } = require('../../core/macos-context');
+const { WorldModel } = require('../../core/world-model');
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 const STATE_FILE = path.join(PROJECT_DIR, '.screen-monitor-state');
 const LAST_SCREENSHOT = '/tmp/jarvis_prev_screen.png';
 const CUR_SCREENSHOT = '/tmp/jarvis_curr_screen.png';
+const WORLD_MODEL_FILE = path.join(PROJECT_DIR, '.jarvis-world-model.json');
+const worldModel = new WorldModel({ file: WORLD_MODEL_FILE });
 
 // ── Config (.env dan) ─────────────────────────────────────────────────
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
@@ -84,9 +88,9 @@ function pixelDiff(prevPath, currPath) {
 }
 
 // ── Vision tahlil (haqiqiy skrinshotni gpt-4.1'ga yuboradi) ───────────
-const { describeImage } = require('./../screen-vision/index.js');
+const { describeImage, buildGroundedPrompt } = require('./../screen-vision/index.js');
 
-async function analyzeScreen(imagePath) {
+async function analyzeScreen(imagePath, context) {
   const now = Date.now();
   if (now - lastLLMCall < llmCooldownMs) {
     return { status: 'cooldown', message: 'LLM cooldown faol' };
@@ -105,7 +109,7 @@ async function analyzeScreen(imagePath) {
     'keltirishi mumkin bo\'lgan holatlarda.';
 
   try {
-    const summary = await describeImage(imagePath, prompt);
+    const summary = await describeImage(imagePath, buildGroundedPrompt(prompt, context));
     lastLLMCall = Date.now();
     return { status: 'ok', summary };
   } catch (e) {
@@ -139,6 +143,12 @@ function getFrontWindow() {
   } catch (e) { return null; }
 }
 
+function observeWorld(screen) {
+  const context = collectMacOSContext();
+  if (screen) context.screen = screen;
+  return worldModel.observe(context, { type: screen ? 'screen.analyzed' : 'context.observed' });
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────
 async function runLoop() {
   const state = loadState();
@@ -162,8 +172,12 @@ async function runLoop() {
       // 2. Diff (birinchisi o'tkazib yuboriladi)
       if (fs.existsSync(LAST_SCREENSHOT)) {
         const diff = pixelDiff(LAST_SCREENSHOT, CUR_SCREENSHOT);
-        const frontWindow = getFrontWindow();
-        const contextChanged = frontWindow !== null && frontWindow !== lastFrontWindow;
+        let observation = null;
+        try { observation = observeWorld(); } catch (e) { console.warn('World model:', e.message); }
+        const frontWindow = observation
+          ? [observation.snapshot.app, observation.snapshot.window?.title || observation.snapshot.browser?.title].filter(Boolean).join(' | ')
+          : getFrontWindow();
+        const contextChanged = observation ? observation.diff.contextChanged : frontWindow !== null && frontWindow !== lastFrontWindow;
         if (frontWindow !== null) lastFrontWindow = frontWindow;
         console.log('Diff: ' + diff.toFixed(2) + '% (threshold: ' + DIFF_THRESHOLD + '%)' +
           ' | oyna: ' + (frontWindow || '?') + (contextChanged ? ' [ALMASHDI]' : ''));
@@ -175,8 +189,9 @@ async function runLoop() {
           console.log('  ⚠️ TRIGGER: kontekst almashdi (' + diff.toFixed(1) + '%)');
 
           // 3. Tahlil (faqat katta o'zgarishda)
-          const analysis = await analyzeScreen(CUR_SCREENSHOT);
+          const analysis = await analyzeScreen(CUR_SCREENSHOT, observation?.snapshot);
           if (analysis.status === 'ok' && analysis.summary && analysis.summary.length > 5) {
+            try { observeWorld({ summary: analysis.summary, imagePath: CUR_SCREENSHOT }); } catch (e) {}
             const timestamp = new Date().toISOString();
             const logEntry = timestamp + ' | DIFF=' + diff.toFixed(1) + '% | ' + analysis.summary + '\n';
 
@@ -265,4 +280,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { runLoop, setEnabled, pixelDiff, loadState };
+module.exports = { runLoop, setEnabled, pixelDiff, loadState, observeWorld };

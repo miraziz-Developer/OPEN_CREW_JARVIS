@@ -9,12 +9,15 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { collectMacOSContext } = require('../../core/macos-context');
+const { WorldModel, verifyExpectation } = require('../../core/world-model');
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
 
 const ENABLED = (env('DESKTOP_CONTROL_ENABLED', 'true') || 'true') !== 'false';
+const worldModel = new WorldModel({ file: path.join(PROJECT_DIR, '.jarvis-world-model.json') });
 
 function ensureEnabled() {
   if (!ENABLED) throw new Error('DESKTOP_CONTROL_ENABLED=false — kompyuter boshqaruvi o\'chirilgan');
@@ -132,7 +135,47 @@ function frontmostApp() {
   return { status: 'ok', app: name };
 }
 
-function main() {
+function observeContext() {
+  return worldModel.observe(collectMacOSContext()).snapshot;
+}
+
+async function waitForExpectation(before, expected, timeoutMs = 4000, intervalMs = 200) {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  let after = null;
+  let verification = null;
+  do {
+    try {
+      after = observeContext();
+      verification = verifyExpectation(before, after, expected);
+      if (verification.ok) {
+        worldModel.verify(before, after, expected);
+        return { status: 'ok', verification, context: after };
+      }
+    } catch (e) {
+      verification = { ok: false, error: e.message };
+    }
+    if (Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, intervalMs));
+  } while (Date.now() < deadline);
+  if (after) worldModel.verify(before, after, expected);
+  return { status: 'error', message: 'Amal natijasi ekranda tasdiqlanmadi', verification, context: after };
+}
+
+async function executeVerified(input) {
+  const before = observeContext();
+  let action;
+  switch (input.action) {
+    case 'open_app': action = openApp(input.name); break;
+    case 'open_url': action = openUrl(input.url); break;
+    case 'click_at': action = clickAt(input.x, input.y, input.double); break;
+    case 'type_text': action = typeText(input.text); break;
+    case 'key_press': action = keyPress(input.key); break;
+    default: return { status: 'error', message: 'Verification qo‘llamaydigan action: ' + input.action };
+  }
+  const verified = await waitForExpectation(before, input.expect || { changed: true }, input.timeoutMs);
+  return { ...verified, action };
+}
+
+async function main() {
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8').trim() || '{}'); } catch (e) {}
 
@@ -145,6 +188,8 @@ function main() {
       case 'type_text': result = typeText(input.text); break;
       case 'key_press': result = keyPress(input.key); break;
       case 'frontmost_app': result = frontmostApp(); break;
+      case 'observe_context': result = { status: 'ok', context: observeContext() }; break;
+      case 'verified_action': result = await executeVerified(input.command || {}); break;
       default: result = { status: 'error', message: 'Noma\'lum action: ' + input.action };
     }
     console.log(JSON.stringify(result));
@@ -153,6 +198,6 @@ function main() {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) main().catch(e => console.log(JSON.stringify({ status: 'error', message: e.message || String(e) })));
 
-module.exports = { openApp, openUrl, clickAt, typeText, keyPress, frontmostApp };
+module.exports = { openApp, openUrl, clickAt, typeText, keyPress, frontmostApp, observeContext, waitForExpectation, executeVerified };

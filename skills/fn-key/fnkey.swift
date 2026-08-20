@@ -64,7 +64,18 @@ guard let eventTap = CGEvent.tapCreate(
                     print("UP")
                     fflush(stdout)
                 } else if !isFn {
+                    // Fn 140ms dan tez qo'yib yuborilsa async DOWN hali
+                    // chiqmagan bo'ladi. Avval bu qisqa tap butunlay yo'qolar,
+                    // macOS esa Emoji panelini ochib yuborar edi. Combo bo'lmagan
+                    // tez tapni release paytida to'liq DOWN/UP juftligi sifatida
+                    // uzatamiz — daemon har qanday tabiiy Fn bosishni oladi.
+                    let wasPlainTap = !shiftPressed && !comboFired
                     pendingFnToken += 1
+                    if wasPlainTap {
+                        print("DOWN")
+                        print("UP")
+                        fflush(stdout)
+                    }
                 }
             }
             shiftPressed = isShift

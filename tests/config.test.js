@@ -21,7 +21,11 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.ok, true);
   assert.equal(result.values.REALTIME_IDLE_MS, 25000);
   assert.equal(result.values.REALTIME_ENABLED, false);
+  assert.equal(result.values.REALTIME_MAX_RESPONSE_TOKENS, 512);
+  assert.equal(result.values.REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS, 256);
   assert.equal(result.values.DASHBOARD_PORT, 7890);
+  assert.equal(result.values.JARVIS_VOICE_STYLE, 'cinematic-uzbek');
+  assert.equal(result.values.UZBEK_SPEECH_NORMALIZATION, true);
   assert.equal(result.values.AZURE_SPEECH_KEY, 'speech-secret-value');
 });
 

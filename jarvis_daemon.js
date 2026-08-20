@@ -27,9 +27,17 @@ process.chdir(PROJECT_DIR);
 const { writeMemory, searchMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
 const { JarvisRuntime } = require('./core/jarvis-runtime');
+const { VoiceFlightRecorder } = require('./core/voice-flight-recorder');
+const { MissionControl, stableId } = require('./core/mission-control');
+const { ProactivePolicy } = require('./core/proactive-policy');
+const { ProviderPool } = require('./core/skill-platform');
+const { createSkillPlatform } = require('./skills/platform');
+const { loadCalibration, resolveCalibratedNumber } = require('./core/audio-calibration');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
+const ENV_VALUES = Object.fromEntries(ENV.split(/\r?\n/).map(line => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(match => [match[1], match[2].trim()]));
+const AUDIO_CALIBRATION = loadCalibration(path.join(PROJECT_DIR, '.run', 'audio-calibration.json'));
 
 // Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
 // uchun UTC+8'da mahalliy soat 08:00gacha Obsidian yozuvlari "kechagi kun"
@@ -58,7 +66,7 @@ const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 
 const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
 const HOTWORD_COOLDOWN_MS = parseInt(env('HOTWORD_COOLDOWN_MS'), 10) || 3000;
-const REALTIME_INPUT_GAIN = Math.max(1, Math.min(8, parseFloat(env('REALTIME_INPUT_GAIN')) || 3));
+const REALTIME_INPUT_GAIN = Math.max(1, Math.min(8, resolveCalibratedNumber('REALTIME_INPUT_GAIN', ENV_VALUES, AUDIO_CALIBRATION, 3)));
 const OPENWAKEWORD_INPUT_GAIN = Math.max(1, Math.min(4, parseFloat(env('OPENWAKEWORD_INPUT_GAIN')) || 2));
 const WAKE_STT_SILENCE_MS = 450;
 const WAKE_STT_MAX_MS = 2800;
@@ -66,6 +74,7 @@ const WAKE_STT_PREROLL_MS = 350;
 
 const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
+const REALTIME_WAKE_PREROLL_MS = parseInt(env('REALTIME_WAKE_PREROLL_MS'), 10) || 1800;
 
 // Parallel bajarilayotgan jonli vazifalar (run_task) holati — dashboard
 // buni /api/realtime-tasks orqali o'qib, "hozir nima ustida ishlayapti"
@@ -73,6 +82,8 @@ const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shu
 // fayl orqali ulanadi (soddaroq, qo'shimcha IPC shart emas).
 const REALTIME_TASKS_STATE_FILE = path.join(PROJECT_DIR, '.realtime-tasks-state.json');
 const RUNTIME_STATE_FILE = path.join(PROJECT_DIR, '.jarvis-runtime.json');
+const VOICE_FLIGHT_RECORDER_FILE = path.join(PROJECT_DIR, '.run', 'voice-flight-recorder.jsonl');
+const MISSION_CONTROL_FILE = path.join(PROJECT_DIR, '.mission-control.json');
 const REALTIME_TASKS_MAX = 15;
 let _realtimeTasks = [];
 const runtime = new JarvisRuntime({
@@ -80,7 +91,35 @@ const runtime = new JarvisRuntime({
   commandWindowMs: parseInt(env('COMMAND_DEDUP_MS'), 10) || 5000,
   responseWindowMs: parseInt(env('RESPONSE_DEDUP_MS'), 10) || 15000
 });
+const DAEMON_STARTED_AT = Date.now();
+const runtimeIdentity = () => ({ pid: process.pid, startedAt: DAEMON_STARTED_AT });
+const missions = new MissionControl({ file: MISSION_CONTROL_FILE, defaultMaxAttempts: 3 });
+const skillPlatform = createSkillPlatform();
+const recoveredMissions = missions.recoverStale();
+if (recoveredMissions) console.log('Mission Control: ' + recoveredMissions + ' ta stale worker tiklandi');
 runtime.on('runtime.error', error => console.error('Jarvis runtime state xatoligi:', error.message));
+
+function resultLooksSuccessful(result) {
+  if (result === null || result === undefined || result === false) return false;
+  const text = String(result || '').trim();
+  return text.length > 0 && !/^(?:null|undefined|false|\[\s*\]|\{\s*\})$/i.test(text) &&
+    !/\b(xato|error|failed|bajarilmadi|uddalay olmadim|muvaffaqiyatsiz|permission denied|ruxsat yo.q|timeout)\b/i.test(text);
+}
+
+function beginSingleStepMission(goal, options = {}) {
+  const mission = missions.createMission(goal, options);
+  const current = missions.getMission(mission.id);
+  let step = current.steps.find(item => item.status === 'running');
+  if (!step) step = missions.claimNext(mission.id, options.worker || 'jarvis-daemon');
+  return { mission: missions.getMission(mission.id), step };
+}
+
+function recordMissionResult(missionId, stepId, result, evidence = {}) {
+  if (!stepId) return null;
+  if (!resultLooksSuccessful(result)) return missions.failStep(missionId, stepId, result || 'Bo‘sh natija');
+  missions.submitResult(missionId, stepId, result, evidence);
+  return missions.verifyStep(missionId, stepId, { ok: true, method: evidence.type || 'agent-result' });
+}
 function saveRealtimeTasksState() {
   try { fs.writeFileSync(REALTIME_TASKS_STATE_FILE, JSON.stringify(_realtimeTasks.slice(-REALTIME_TASKS_MAX))); } catch (e) {}
 }
@@ -91,7 +130,7 @@ function rtTaskStarted(callId, description) {
 }
 function rtTaskCompleted(callId, result) {
   const t = _realtimeTasks.find(x => x.callId === callId && x.status === 'in_progress');
-  if (t) { t.status = 'completed'; t.result = String(result).slice(0, 500); t.completedAt = Date.now(); }
+  if (t) { t.status = resultLooksSuccessful(result) ? 'completed' : 'failed'; t.result = String(result || '').slice(0, 500); t.completedAt = Date.now(); }
   saveRealtimeTasksState();
 }
 
@@ -215,17 +254,45 @@ async function ttsToFile(text) {
   });
 }
 
-async function askAgent(message) {
-  return new Promise((resolve) => {
+function askOpenClaw(message, sessionKey) {
+  return new Promise((resolve, reject) => {
     const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY }, timeout: 15000 });
     let out = '';
-    proc.stdout.on('data', d => out += d); proc.stderr.on('data', () => {});
+    let err = '';
+    proc.stdout.on('data', d => out += d); proc.stderr.on('data', d => err += d);
+    proc.on('error', reject);
     proc.on('close', (code) => {
       const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
       const emptyPayload = /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(clean);
-      resolve((code !== 0 || !clean || emptyPayload || clean.includes("couldn't generate") || clean.includes('tool policy removed')) ? null : clean);
+      if (code !== 0 || !clean || emptyPayload || clean.includes("couldn't generate") || clean.includes('tool policy removed')) {
+        reject(new Error((err || clean || `openclaw exit ${code}`).slice(0, 300)));
+        return;
+      }
+      resolve(clean);
     });
   });
+}
+
+const agentProviders = new ProviderPool([
+  { id: 'openclaw', priority: 0, timeoutMs: 18000, invoke: (message, context) => askOpenClaw(message, context.sessionKey) },
+  {
+    id: 'azure-deep-think', priority: 1, timeoutMs: 45000,
+    invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
+      question: message,
+      context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined
+    })
+  }
+], { failureThreshold: 2, cooldownMs: 120000 });
+
+async function askAgent(message, sessionKey) {
+  try {
+    const response = await agentProviders.invoke(message, { sessionKey });
+    return response.value;
+  } catch (error) {
+    runtime.recordError?.('agent.providers', error);
+    er('Barcha agent providerlari ishlamadi: ' + error.message);
+    return null;
+  }
 }
 
 // ════════════════════════════════════════════
@@ -237,6 +304,11 @@ async function askAgent(message) {
 const PROACTIVE_ENABLED_RT = (env('PROACTIVE_ENABLED') || 'false') === 'true';
 const PROACTIVE_INTERVAL_MIN_RT = parseInt(env('PROACTIVE_INTERVAL_MIN'), 10) || 30;
 const PROACTIVE_STATE_FILE = path.join(PROJECT_DIR, '.proactive-state.json');
+const proactivePolicy = new ProactivePolicy({
+  file: path.join(PROJECT_DIR, '.proactive-policy.json'),
+  cooldownMs: (parseInt(env('PROACTIVE_COOLDOWN_MIN'), 10) || 30) * 60e3,
+  dailySuggestionBudget: parseInt(env('PROACTIVE_DAILY_BUDGET'), 10) || 8
+});
 
 function loadProactiveState() {
   try { return JSON.parse(fs.readFileSync(PROACTIVE_STATE_FILE, 'utf8')); } catch (e) { return { lastCheck: Date.now() }; }
@@ -293,7 +365,11 @@ async function checkProactive() {
     'qiling, nega bu taklifni berayotganingizni ham qisqa izohlang (masalan "odatda shu vaqt atrofida..."). Aks holda ' +
     'faqat "HECH_NARSA" deb javob bering, boshqa hech narsa yozmang.';
   const reply = await askAgent(prompt, 'agent:main:jarvis-proactive');
-  if (reply && !reply.includes('HECH_NARSA') && reply.trim().length > 5) {
+  const decision = proactivePolicy.evaluate({
+    source: 'screen-proactive', summary: reply, confidence: 0.72,
+    urgency: 0.35, benefit: 0.65, reversibility: 1, risk: 0.15, disruption: 0.35
+  });
+  if (reply && !reply.includes('HECH_NARSA') && reply.trim().length > 5 && decision.mode === 'suggest') {
     ok('💡 Proaktiv taklif: ' + reply.substring(0, 80));
     sendTelegram('💡 ' + reply);
     const audio = await ttsToFile(reply.substring(0, 300));
@@ -348,6 +424,11 @@ async function checkUrgentScreen() {
 
   for (const { block } of urgentBlocks) {
     const summary = block.replace(/^## .+$/m, '').replace(/\*\*Teglar:\*\*.*$/m, '').trim();
+    const decision = proactivePolicy.evaluate({
+      source: 'screen-urgent', summary, confidence: 0.82, urgency: 0.95,
+      benefit: 0.9, reversibility: 1, risk: 0.25, disruption: 0.25
+    });
+    if (decision.mode === 'observe') continue;
     ok('🚨 Shoshilinch: ' + summary.substring(0, 80));
     playUrgentSound();
     sendTelegram('🚨 ' + summary);
@@ -447,8 +528,18 @@ async function checkDailyTasks() {
   });
   if (!next) return;
 
+  const execution = beginSingleStepMission(next, {
+    id: stableId('daily', todayStr() + ':' + next), source: 'daily-task',
+    idempotencyKey: 'daily:' + todayStr() + ':' + next, maxAttempts: 3
+  });
+  if (!execution.step) return;
   const prompt = 'Kunlik vazifalar ro\'yxatidagi vazifa: "' + next + '". Buni bajaring va natijani qisqa ayting.';
   const reply = await askAgent(prompt, 'agent:main:jarvis-daily-tasks-' + Date.now());
+  const verified = recordMissionResult(execution.mission.id, execution.step.id, reply, { type: 'agent-result', value: reply });
+  if (!verified || verified.status !== 'verified') {
+    wrn('📋 Vazifa tasdiqlanmadi, completed qilinmadi: ' + next);
+    return;
+  }
   state.completed.push(next);
   saveDailyTasksState(state);
   if (reply) {
@@ -532,31 +623,7 @@ if (DAILY_REPORT_ENABLED) {
 // ════════════════════════════════════════════
 const PROJECTS_ENABLED = (env('PROJECTS_ENABLED') || 'true') !== 'false';
 
-// Bosqich urinishlari hisobi — daemon qayta ishga tushsa ham saqlanib
-// qolishi uchun faylda (xotirada saqlansa, tez-tez restart bo'lganda
-// hisob nolga qaytib, cheksiz urinish xavfi qaytadi).
 const PROJECT_STEP_MAX_ATTEMPTS = parseInt(env('PROJECT_STEP_MAX_ATTEMPTS'), 10) || 2;
-const PROJECT_ATTEMPTS_FILE = path.join(PROJECT_DIR, '.project-step-attempts.json');
-
-function loadProjectAttempts() {
-  try { return JSON.parse(fs.readFileSync(PROJECT_ATTEMPTS_FILE, 'utf8')); } catch (e) { return {}; }
-}
-function saveProjectAttempts(a) {
-  try { fs.writeFileSync(PROJECT_ATTEMPTS_FILE, JSON.stringify(a)); } catch (e) {}
-}
-function projectStepKey(slug, step) { return slug + '|' + String(step).slice(0, 120); }
-function bumpProjectStepAttempt(slug, step) {
-  const a = loadProjectAttempts();
-  const k = projectStepKey(slug, step);
-  a[k] = (a[k] || 0) + 1;
-  saveProjectAttempts(a);
-  return a[k];
-}
-function clearProjectStepAttempts(slug, step) {
-  const a = loadProjectAttempts();
-  delete a[projectStepKey(slug, step)];
-  saveProjectAttempts(a);
-}
 
 async function checkProjects() {
   let projMod;
@@ -564,32 +631,43 @@ async function checkProjects() {
   const active = projMod.activeStep();
   if (!active) return;
 
+  const missionId = stableId('project-step', active.slug + ':' + active.step);
+  const execution = beginSingleStepMission(active.step, {
+    id: missionId, source: 'project', idempotencyKey: 'project:' + active.slug + ':' + active.step,
+    maxAttempts: PROJECT_STEP_MAX_ATTEMPTS, metadata: { project: active.project, slug: active.slug }
+  });
+  if (!execution.step) return;
   const sessionKey = 'agent:main:jarvis-project-' + active.slug;
   const prompt = 'Loyiha "' + active.project + '" ning navbatdagi bosqichi (' + (active.doneSteps + 1) + '/' + active.totalSteps + '): "' +
     active.step + '". Buni bajaring va natijani qisqa ayting. (Oldingi bosqichlar shu sessiyada allaqachon bajarilgan — ' +
     'ularning kontekstidan foydalaning.)';
   const reply = await askAgent(prompt, sessionKey);
-  if (!reply) return; // muvaffaqiyatsiz — bosqichni "bajarilgan" deb belgilamaymiz, keyingi tekshiruvda qayta uriniladi
+  if (!reply) {
+    missions.failStep(missionId, execution.step.id, 'Agent bo‘sh natija qaytardi');
+    return;
+  }
 
   // Agent xato/cheklov sabab vazifani bajarmaganini aniq aytsa, uni
   // muvaffaqiyatli bosqich sifatida yopib yubormaymiz. Cheksiz loopga
   // tushmaslik uchun urinishlar persistent hisoblanadi.
   const stepIncomplete = /\b(xato|bajarilmadi|uddalay olmadim|muvaffaqiyatsiz|permission denied|ruxsat yo.q)\b/i.test(reply);
   if (stepIncomplete) {
-    const attempts = bumpProjectStepAttempt(active.slug, active.step);
+    const failed = missions.failStep(missionId, execution.step.id, reply);
+    const attempts = failed.attempts;
     wrn('Loyiha bosqichi bajarilmadi (' + attempts + '/' + PROJECT_STEP_MAX_ATTEMPTS + '): ' + active.step);
-    if (attempts < PROJECT_STEP_MAX_ATTEMPTS) return;
+    return; // Hech qachon chala bosqichni completeStep() orqali keyingisiga o'tkazmaymiz.
   } else {
-    clearProjectStepAttempts(active.slug, active.step);
+    const verified = recordMissionResult(missionId, execution.step.id, reply, { type: 'agent-result', value: reply });
+    if (!verified || verified.status !== 'verified') return;
   }
 
   const result = projMod.completeStep(active.slug, active.step);
   if (result.status !== 'ok') return;
 
-  ok('📁 Loyiha bosqichi ' + (stepIncomplete ? 'chala yopildi' : 'bajarildi') + ': ' + active.project + ' (' + (active.doneSteps + 1) + '/' + active.totalSteps + ')');
+  ok('📁 Loyiha bosqichi bajarildi: ' + active.project + ' (' + (active.doneSteps + 1) + '/' + active.totalSteps + ')');
   try {
     writeMemory('Loyiha bosqichi: ' + active.project, 'Bosqich: ' + active.step + '\nNatija: ' + reply.substring(0, 500),
-      stepIncomplete ? ['project', 'autonomous', 'incomplete'] : ['project', 'autonomous']);
+      ['project', 'autonomous', 'verified']);
   } catch (e) {}
 
   if (result.complete) {
@@ -934,6 +1012,7 @@ class OpenWakeWordDetector {
       cwd: PROJECT_DIR,
       env: {
         ...process.env,
+        JARVIS_OWNER_PID: String(process.pid),
         OPENWAKEWORD_THRESHOLD: env('OPENWAKEWORD_THRESHOLD') || '0.38',
         OPENWAKEWORD_STRONG_THRESHOLD: env('OPENWAKEWORD_STRONG_THRESHOLD') || '0.55'
       },
@@ -1158,31 +1237,61 @@ async function mainLoop() {
   function startRealtimeSession(reason) {
     if (_activeRealtimeSession || state !== 'listening') return false;
 
-    const session = new RealtimeSession();
+    const session = new RealtimeSession({
+      transcribeUzbek: async (pcm16) => {
+        if (!pcm16?.length || !_sttPool) return { text: '', confidence: 0 };
+        const result = await _sttPool.recognize(pcmToWavBuffer(pcm16), 'uz-UZ');
+        if (!result || result.status !== 'ok') return { text: '', confidence: 0 };
+        return { text: result.text || '', confidence: result.confidence || 0 };
+      }
+    });
+    const flightRecorder = new VoiceFlightRecorder({ file: VOICE_FLIGHT_RECORDER_FILE });
+    flightRecorder.beginSession({ trigger: reason, mode: reason.includes('Fn') ? 'push-to-talk' : 'wake-word' });
     runtime.beginConversation(reason.includes('Fn') ? 'push-to-talk' : 'wake-word');
     const connectStartedAt = Date.now();
     _activeRealtimeSession = session;
     state = 'realtime';
     lastHotwordTime = Date.now();
-    const wakeMuteUntil = Date.now() + WAKE_SOUND_MS;
+    // Hotword ham, Fn ham foydalanuvchiga darhol bir xil qisqa ovozli tasdiq
+    // beradi: assets/wake-sound.mp3 ("Labbay, boss").
+    // Ack davomida mikrofon oqimini tashlaymiz: aks holda karnaydagi "Labbay,
+    // boss" preroll'ga kirib, server uni foydalanuvchi nutqi deb qabul qiladi.
+    // Ack tugagach, ulanish hali tayyor bo'lmasa haqiqiy buyruq bounded
+    // preroll'ga yig'iladi va ready bo'lgan zahoti yuboriladi.
+    const wakeMuteUntil = Date.now() + WAKE_SOUND_MS + 80;
+    playWakeSound();
     let idleTimer = null;
     let finished = false;
     let sessionWasReady = false;
     let lastUserTranscript = '';
+    let activeToolCount = 0;
+    let wakeAudioPending = true;
+    const wakePreroll = [];
+    let wakePrerollBytes = 0;
+    let speechStoppedAt = 0;
+    let transcriptAcceptedAt = 0;
+    let firstAudioObserved = false;
+    const maxWakePrerollBytes = Math.ceil(SAMPLE_RATE * 2 * REALTIME_WAKE_PREROLL_MS / 1000);
 
     const armIdleTimer = () => {
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => finishRealtimeSession('jimlik timeout'), REALTIME_IDLE_MS);
+      idleTimer = setTimeout(() => {
+        // Sessiyani yopish running run_task jarayonlarini cancel qiladi.
+        // Natija kelguncha timeout'ni uzaytirib turamiz.
+        if (activeToolCount > 0) return armIdleTimer();
+        finishRealtimeSession('jimlik timeout');
+      }, REALTIME_IDLE_MS);
     };
     const finishRealtimeSession = (why) => {
       if (finished) return;
       finished = true;
+      flightRecorder.endSession(why);
       clearTimeout(idleTimer);
       if (_activeRealtimeSession === session) _activeRealtimeSession = null;
       try { session.close(); } catch (e) {}
       state = 'listening';
       runtime.endConversation(why);
-      runtime.heartbeat('voice-daemon', { state });
+      runtime.heartbeat('voice-daemon', { state, ...runtimeIdentity() });
       nextStepTime = Date.now();
       inf('Realtime suhbat yakunlandi: ' + why);
     };
@@ -1195,13 +1304,34 @@ async function mainLoop() {
       runtime.setConversationMode('listening');
       runtime.heartbeat('realtime-api', { status: 'ready' });
       ok('Realtime ovoz sessiyasi ulandi');
+      // Wake chime/handshake vaqtida aytilgan "Hey Jarvis, ..." buyrug'ini
+      // yo'qotmasdan sessiya tayyor bo'lgach uzatamiz.
+      if (wakePreroll.length) {
+        for (const chunk of wakePreroll) session.feedAudio(chunk);
+        wakePreroll.length = 0;
+        wakePrerollBytes = 0;
+      }
+      wakeAudioPending = false;
       armIdleTimer();
     });
+    session.on('audio_activity', armIdleTimer);
     session.on('user_speaking', () => {
+      flightRecorder.beginTurn({ source: 'realtime', trigger: reason });
       runtime.setConversationMode('user-speaking');
       clearTimeout(idleTimer);
     });
-    session.on('user_speech_stopped', armIdleTimer);
+    session.on('user_speech_stopped', () => {
+      speechStoppedAt = Date.now();
+      transcriptAcceptedAt = 0;
+      firstAudioObserved = false;
+      armIdleTimer();
+    });
+    session.on('turn_suppressed', (reason, text) => {
+      flightRecorder.textEvent('turn.suppressed', text, { reason });
+      inf('🔇 Realtime turn bloklandi (' + reason + '): ' + String(text || '').slice(0, 100));
+      runtime.setConversationMode('listening');
+      armIdleTimer();
+    });
     session.on('user_transcript', (text) => {
       const clean = String(text || '').trim();
       if (!clean) return;
@@ -1211,6 +1341,9 @@ async function mainLoop() {
         return;
       }
       lastUserTranscript = clean;
+      transcriptAcceptedAt = Date.now();
+      if (speechStoppedAt) runtime.observeLatency('speech-to-transcript', transcriptAcceptedAt - speechStoppedAt);
+      flightRecorder.textEvent('command.accepted', clean, { source: 'realtime-transcript' });
       runtime.setConversationMode('thinking');
       inf('🎙 Realtime: ' + clean);
       sendTelegram('🎙 ' + clean);
@@ -1225,6 +1358,7 @@ async function mainLoop() {
         return;
       }
       runtime.setConversationMode('speaking');
+      flightRecorder.textEvent('assistant.transcript', clean);
       ok('🤖 Realtime: ' + clean.substring(0, 120));
       sendTelegram('🤖 ' + clean);
       try {
@@ -1233,21 +1367,47 @@ async function mainLoop() {
       lastUserTranscript = '';
       armIdleTimer();
     });
-    session.on('turn_done', armIdleTimer);
+    session.on('turn_done', () => {
+      flightRecorder.event('turn.completed');
+      armIdleTimer();
+    });
+    session.on('telemetry', (type, data) => {
+      flightRecorder.event(type, data);
+      if (type !== 'assistant.audio.first' || firstAudioObserved) return;
+      firstAudioObserved = true;
+      const now = Date.now();
+      if (transcriptAcceptedAt) runtime.observeLatency('transcript-to-first-audio', now - transcriptAcceptedAt);
+      if (speechStoppedAt) runtime.observeLatency('first-audio', now - speechStoppedAt);
+    });
     session.on('tool_call', (description, callId) => {
+      activeToolCount += 1;
+      flightRecorder.event('tool.started', { description, callId });
       runtime.requestTask(description, { id: callId, source: 'realtime' });
       runtime.transitionTask(callId, 'running');
+      beginSingleStepMission(description, {
+        id: stableId('realtime', callId), source: 'realtime', idempotencyKey: 'realtime:' + callId
+      });
       rtTaskStarted(callId, description);
       inf('🛠 Jonli vazifa: ' + description);
       armIdleTimer();
     });
     session.on('tool_result', (result, callId) => {
+      activeToolCount = Math.max(0, activeToolCount - 1);
+      flightRecorder.event('tool.completed', { result, callId });
       try { runtime.completeTask(callId, result); } catch (e) { wrn('Task ledger: ' + e.message); }
+      try {
+        const missionId = stableId('realtime', callId);
+        const mission = missions.getMission(missionId);
+        const step = mission?.steps.find(item => item.status === 'running' || item.status === 'awaiting_verification');
+        if (step) recordMissionResult(missionId, step.id, result, { type: 'tool-result', value: result });
+      } catch (e) { wrn('Mission Control: ' + e.message); }
       rtTaskCompleted(callId, result);
-      if (!/^fast_action:/i.test(String((_realtimeTasks.find(t => t.callId === callId) || {}).description || ''))) playTaskDoneSound();
+      const finishedTask = _realtimeTasks.find(t => t.callId === callId);
+      if (finishedTask?.status === 'completed' && !/^fast_action:/i.test(String(finishedTask.description || ''))) playTaskDoneSound();
       armIdleTimer();
     });
     session.on('error', (err) => {
+      flightRecorder.event('turn.failed', { error: String(err.message || err) });
       _realtimeFailureCount += 1;
       if (_realtimeFailureCount >= REALTIME_FAILURE_LIMIT) {
         _realtimeDisabledUntil = Date.now() + REALTIME_COOLDOWN_MS;
@@ -1268,14 +1428,25 @@ async function mainLoop() {
     });
     session.on('close', () => finishRealtimeSession('ulanish yopildi'));
 
-    playWakeSound();
     inf(reason + ' — realtime suhbat ulanmoqda');
     session.connect();
     armIdleTimer();
 
-    // Mikrofon loop'i wake sound tugamaguncha audio yubormasligi uchun
-    // sessiyaga lokal vaqt belgisi biriktiriladi.
+    // Marker saqlanadi, lekin shu oraliqdagi audio endi tashlanmaydi — bounded
+    // preroll'ga yig'iladi va ready eventida ketma-ket yuboriladi.
     session._jarvisWakeMuteUntil = wakeMuteUntil;
+    session._jarvisQueueWakeAudio = (chunk) => {
+      if (!wakeAudioPending || !chunk?.length) return false;
+      // `true` qaytarish daemon'ga bu chunk bilan boshqa ish qilmaslikni
+      // bildiradi. Ack tugamaguncha chunk ataylab saqlanmaydi.
+      if (Date.now() < wakeMuteUntil) return true;
+      wakePreroll.push(Buffer.from(chunk));
+      wakePrerollBytes += chunk.length;
+      while (wakePrerollBytes > maxWakePrerollBytes && wakePreroll.length > 1) {
+        wakePrerollBytes -= wakePreroll.shift().length;
+      }
+      return true;
+    };
     return true;
   }
 
@@ -1357,9 +1528,9 @@ async function mainLoop() {
 
   inf('Mic stream started — listening for "Jarvis"...');
   runtime.heartbeat('microphone', { status: 'streaming' });
-  runtime.heartbeat('voice-daemon', { state: 'listening' });
+  runtime.heartbeat('voice-daemon', { state: 'listening', ...runtimeIdentity() });
   const runtimeHeartbeat = setInterval(() => {
-    runtime.heartbeat('voice-daemon', { state, realtime: Boolean(_activeRealtimeSession) });
+    runtime.heartbeat('voice-daemon', { state, realtime: Boolean(_activeRealtimeSession), ...runtimeIdentity() });
     runtime.heartbeat('microphone', { status: _sox && !_sox.killed ? 'streaming' : 'stopped' });
   }, 5000);
   runtimeHeartbeat.unref();
@@ -1377,8 +1548,13 @@ async function mainLoop() {
         stepBuffer = stepBuffer.slice(STEP_BYTES);
         rolling.push(stepData);
         if (state === 'command_record') cmdBuffers.push(stepData);
-        if (state === 'realtime' && _activeRealtimeSession && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
-          _activeRealtimeSession.feedAudio(applyGain(Buffer.from(stepData), REALTIME_INPUT_GAIN));
+        if (state === 'realtime' && _activeRealtimeSession) {
+          const realtimeChunk = applyGain(Buffer.from(stepData), REALTIME_INPUT_GAIN);
+          const queued = typeof _activeRealtimeSession._jarvisQueueWakeAudio === 'function'
+            && _activeRealtimeSession._jarvisQueueWakeAudio(realtimeChunk);
+          if (!queued && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
+            _activeRealtimeSession.feedAudio(realtimeChunk);
+          }
         }
       }
 

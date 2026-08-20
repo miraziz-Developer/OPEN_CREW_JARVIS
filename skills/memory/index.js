@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
+const { MemoryOS, redactSensitive } = require('../../core/memory-os');
 
 const VAULT = process.env.OBSIDIAN_VAULT
   || (require('os').homedir() + '/Documents/Obsidian Vault');
@@ -21,6 +22,8 @@ const PRONUNCIATION_MAX = 100;
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 const EMBED_INDEX_FILE = path.join(PROJECT_DIR, '.memory-embeddings.json');
+const MEMORY_OS_FILE = process.env.JARVIS_MEMORY_OS_FILE || path.join(PROJECT_DIR, '.jarvis-memory-os.json');
+const memoryOS = new MemoryOS({ file: MEMORY_OS_FILE });
 const EMBED_DEPLOYMENT = 'text-embedding-3-small';
 let _azureEnv = null;
 function azureEnv(k, def) {
@@ -45,8 +48,27 @@ function localDateStr(d) {
 }
 
 // ── 1. Xotira yozish ─────────────────────────────────────────────────
-function writeMemory(topic, content, tags = []) {
+function inferLayer(topic, tags = []) {
+  const haystack = `${topic} ${tags.join(' ')}`.toLocaleLowerCase();
+  if (/profile|preference|foydalanuvchi|odat/.test(haystack)) return 'user_profile';
+  if (/procedure|workflow|fast-action|qanday bajar/.test(haystack)) return 'procedural';
+  if (/fact|knowledge|xulosa|naqsh/.test(haystack)) return 'semantic';
+  if (/session|context|working|joriy/.test(haystack)) return 'working';
+  return 'episodic';
+}
+
+function rememberStructured(input) {
+  return memoryOS.remember(input);
+}
+
+function retrieveStructured(query, options = {}) {
+  return memoryOS.retrieve(query, options);
+}
+
+function writeMemory(topic, content, tags = [], options = {}) {
   ensureDirs();
+  const safeTopic = redactSensitive(topic).text;
+  const safeContent = redactSensitive(content).text;
   const date = localDateStr();
   const time = new Date().toTimeString().slice(0, 5);
   const filePath = path.join(MEMORY_DIR, date + '.md');
@@ -54,8 +76,8 @@ function writeMemory(topic, content, tags = []) {
   const tagLine = tags.length ? '\n**Teglar:** ' + tags.map(t => `#${t}`).join(' ') + '\n' : '';
   const block = `
 ---
-## ${time} — ${topic}
-${content}
+## ${time} — ${safeTopic}
+${safeContent}
 ${tagLine}
 `;
 
@@ -64,17 +86,24 @@ ${tagLine}
   else existing = `# ${date} — Jarvis Xotirasi\n\nBog'liq: [[User]] · [[DailyTasks]]\n\n`;
 
   fs.writeFileSync(filePath, existing + block, 'utf8');
-  return { status: 'ok', file: filePath };
+  let structured = null;
+  try {
+    structured = rememberStructured({
+      layer: options.layer || inferLayer(safeTopic, tags), title: safeTopic, content: safeContent,
+      tags, source: options.source || 'legacy-writeMemory', confidence: options.confidence ?? 0.7,
+      privacy: options.privacy, ttlMs: options.ttlMs, fact: options.fact, entities: options.entities
+    });
+  } catch (_) {}
+  return { status: 'ok', file: filePath, memoryId: structured?.record?.id || null };
 }
 
 // ── 2. Xotira qidirish (grep) ────────────────────────────────────────
 function searchMemory(query, limit = 5) {
   ensureDirs();
-  if (!fs.existsSync(MEMORY_DIR)) return { status: 'empty', results: [] };
 
   // Birinchi to'g'ri matn qidiruvi
   const results = [];
-  const files = fs.readdirSync(MEMORY_DIR)
+  const files = (fs.existsSync(MEMORY_DIR) ? fs.readdirSync(MEMORY_DIR) : [])
     .filter(f => f.endsWith('.md'))
     .sort().reverse();
 
@@ -113,7 +142,11 @@ function searchMemory(query, limit = 5) {
     }
   }
 
-  return { status: 'ok', query, results };
+  const structured = retrieveStructured(query, { limit }).map(record => ({
+    id: record.id, layer: record.layer, title: record.title, content: record.content,
+    confidence: record.confidence, score: record.score, source: record.source
+  }));
+  return { status: 'ok', query, results, structured };
 }
 
 // ── 2b. Semantik (ma'no bo'yicha) qidiruv — RAG ─────────────────────────
@@ -267,6 +300,13 @@ function updateProfile(section, value, source = 'user') {
   }
 
   fs.writeFileSync(PROFILE_FILE, content, 'utf8');
+  try {
+    rememberStructured({
+      layer: 'user_profile', title: section, content: value, source,
+      confidence: source === 'user' ? 0.95 : 0.7,
+      fact: { subject: 'user', predicate: section, object: value }
+    });
+  } catch (_) {}
   return { status: 'ok' };
 }
 
@@ -331,12 +371,29 @@ async function main() {
       console.log(JSON.stringify(ssr));
       return;
     }
+    case 'remember': {
+      try { console.log(JSON.stringify(rememberStructured(payload))); }
+      catch (error) { console.log(JSON.stringify({ status: 'error', message: error.message })); }
+      return;
+    }
+    case 'retrieve':
+      console.log(JSON.stringify({ status: 'ok', results: retrieveStructured(payload.query || '', { limit: payload.limit || 5, layers: payload.layers }) }));
+      return;
+    case 'purge_expired':
+      console.log(JSON.stringify(memoryOS.purgeExpired()));
+      return;
+    case 'migrate_legacy':
+      console.log(JSON.stringify(memoryOS.migrateLegacy({ memoryDir: MEMORY_DIR, profileFile: PROFILE_FILE })));
+      return;
+    case 'snapshot':
+      console.log(JSON.stringify({ status: 'ok', memory: memoryOS.snapshot() }));
+      return;
     case 'write':
       if (!payload.topic || !payload.content) {
         console.log(JSON.stringify({ status: 'error', message: 'topic va content kerak' }));
         return;
       }
-      const wr = writeMemory(payload.topic, payload.content, payload.tags || []);
+      const wr = writeMemory(payload.topic, payload.content, payload.tags || [], payload.options || {});
       console.log(JSON.stringify(wr));
       break;
 
@@ -376,8 +433,9 @@ if (require.main === module) main();
 
 module.exports = {
   writeMemory, searchMemory, semanticSearch, updateEmbedIndex,
+  rememberStructured, retrieveStructured, memoryOS,
   readSessionContext, writeSessionContext, appendSessionContext,
   readProfile, updateProfile,
   addPronunciationNote, getPronunciationNotes,
-  MEMORY_DIR, PROFILE_FILE, CONTEXT_FILE, PRONUNCIATION_FILE
+  MEMORY_DIR, PROFILE_FILE, CONTEXT_FILE, PRONUNCIATION_FILE, MEMORY_OS_FILE
 };

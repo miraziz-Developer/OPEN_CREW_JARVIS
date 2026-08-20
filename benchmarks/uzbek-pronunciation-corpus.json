@@ -1,0 +1,12 @@
+[
+  { "id": "phonemes", "text": "Qo‘qonda g‘olib bo‘lgan Xurshid hali xabar bermadi." },
+  { "id": "time", "text": "Uchrashuv 09:05 da boshlanadi." },
+  { "id": "date", "text": "Hisobot 21.08.2026 kuni tayyor bo‘ladi." },
+  { "id": "number", "text": "Loyihada 125000 ta yozuv bor." },
+  { "id": "decimal-percent", "text": "Aniqlik 97,5% ga yetdi." },
+  { "id": "currency", "text": "Xizmat narxi 150 USD." },
+  { "id": "abbreviations", "text": "API JSON va HTTPS orqali ishlaydi." },
+  { "id": "url", "text": "Qo‘llanma https://jarvis.ai/docs sahifasida." },
+  { "id": "mixed", "text": "CPU 42% ishlayapti, Wi-Fi barqaror." },
+  { "id": "cinematic", "text": "Tizim tayyor, barcha modullar barqaror ishlayapti." }
+]

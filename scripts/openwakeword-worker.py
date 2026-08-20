@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """stdin PCM16/16kHz -> stdout READY or DETECT score."""
 import os
+import signal
 import sys
+import threading
+import time
 import types
 
 # Verifier training dependencies are not needed for inference.
@@ -19,8 +22,28 @@ FRAME_BYTES = 1280 * 2
 THRESHOLD = float(os.environ.get("OPENWAKEWORD_THRESHOLD", "0.38"))
 STRONG_THRESHOLD = float(os.environ.get("OPENWAKEWORD_STRONG_THRESHOLD", "0.55"))
 DIAGNOSTIC_FLOOR = float(os.environ.get("OPENWAKEWORD_DIAGNOSTIC_FLOOR", "0.08"))
+OWNER_PID = int(os.environ.get("JARVIS_OWNER_PID", "0") or "0")
+
+def owner_is_alive():
+    if OWNER_PID <= 1:
+        return True
+    try:
+        os.kill(OWNER_PID, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+def watch_owner():
+    """Parent daemon yo'qolsa, stdin ochiq qolgan taqdirda ham worker chiqadi."""
+    while True:
+        time.sleep(1.0)
+        if not owner_is_alive() or os.getppid() == 1:
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
 
 def main():
+    if OWNER_PID > 1:
+        threading.Thread(target=watch_owner, name="jarvis-owner-watchdog", daemon=True).start()
     model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
     print("READY", flush=True)
     pending = bytearray()

@@ -11,6 +11,8 @@ const path = require('path');
 const os = require('os');
 const https = require('https');
 const { execSync } = require('child_process');
+const { collectMacOSContext } = require('../../core/macos-context');
+const { WorldModel } = require('../../core/world-model');
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
@@ -20,6 +22,17 @@ const KEY = env('AZURE_OPENAI_KEY');
 const ENDPOINT = (env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '');
 const VISION_DEPLOYMENT = env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1');
 const DEFAULT_PROMPT = "Bu ekran skrinshotini batafsil tahlil qil. O'zbek tilida javob ber. Agar bir nechta oyna/ilova ko'rinib tursa, HAR BIRINI alohida tasvirlab ber: qaysi ilova/sayt, unda aniq nima ko'rinyapti (fayl nomi, loyiha, mavzu, kim bilan gaplashilyapti, qanday kod/matn yozilyapti va h.k.). Taxmin qilma, faqat aniq ko'rinib turgan narsalarni yoz. Umumiy/sayoz ta'rif emas, konkret detallar bilan yoz.";
+const worldModel = new WorldModel({ file: path.join(PROJECT_DIR, '.jarvis-world-model.json') });
+
+function buildGroundedPrompt(prompt, context) {
+  const grounded = context ? {
+    app: context.app, bundleId: context.bundleId,
+    windowTitle: context.window?.title || '', windowBounds: context.window?.bounds || null,
+    browser: context.browser || null, focusedElement: context.focus || null
+  } : null;
+  return (prompt || DEFAULT_PROMPT) + '\n\nMACOS SEMANTIK KONTEKSTI (ground truth metadata; rasm bilan zid bo‘lsa zidlikni ayt):\n' +
+    JSON.stringify(grounded) + '\nKo‘rinmaydigan element yoki koordinatani o‘ylab topma. Koordinata so‘ralsa screenshot piksel koordinatasida qaytar.';
+}
 
 function takeScreenshot() {
   const p = path.join(os.tmpdir(), 'jarvis_vision_' + Date.now() + '.png');
@@ -75,11 +88,17 @@ async function main() {
   let imagePath = input.imagePath;
   let ownScreenshot = false;
   try {
+    let context = null;
+    try { context = collectMacOSContext(); } catch (e) {}
     if (!imagePath) { imagePath = takeScreenshot(); ownScreenshot = true; }
     else if (!fs.existsSync(imagePath)) throw new Error('Fayl topilmadi: ' + imagePath);
 
-    const description = await describeImage(imagePath, input.prompt);
-    console.log(JSON.stringify({ status: 'ok', description, imagePath }));
+    const description = await describeImage(imagePath, buildGroundedPrompt(input.prompt, context));
+    if (context) {
+      context.screen = { summary: description, imagePath: ownScreenshot ? '' : imagePath };
+      worldModel.observe(context, { type: 'screen.analyzed', forceEvent: true });
+    }
+    console.log(JSON.stringify({ status: 'ok', description, imagePath, context }));
   } catch (e) {
     console.log(JSON.stringify({ status: 'error', message: e.message || String(e) }));
   } finally {
@@ -89,4 +108,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { describeImage, takeScreenshot };
+module.exports = { describeImage, takeScreenshot, buildGroundedPrompt };

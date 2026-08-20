@@ -105,6 +105,31 @@ JARVIS_CHAT_ID=...         # Sizning Telegram chat ID
 2. **Ovozli:** "Jarvis, skrinshot ol" deb ayting
 3. **Proactive:** 30 daqiqa kuting — avtomatik xabar keladi
 
+### Shaxsiy audio kalibratsiya va real benchmark
+
+```bash
+npm run voice:calibrate
+```
+
+Kalibratsiya xona jimligi, tabiiy nutq va qisqa karnay probe'i orqali gain,
+noise gate, barge-in hamda echo lag qiymatlarini o‘lchaydi. Xom audio
+saqlanmaydi yoki bulutga yuborilmaydi; faqat raqamli profil
+`.run/audio-calibration.json` ichida `0600` ruxsat bilan qoladi. So‘ng daemonni
+restart qiling. `.env` ichidagi explicit qiymatlar profil ustidan ustun turadi.
+
+Foydalanuvchi tekshirgan real natijalarni raw audio saqlamasdan private
+benchmark corpusga qo‘shish:
+
+```bash
+npm run voice:sample -- --stt --expected="Chrome ni och" --recognized="Chrome och"
+npm run voice:sample -- --wake --expected=true --detected=true --hours=1
+npm run benchmark
+```
+
+Corpus `benchmarks/private/voice-corpus.json`da saqlanadi, Git’dan chiqarilgan
+va `0600`. U WER/STT accuracy, wake recall va false-wake/day gate’larini real
+namunalar bilan hisoblaydi.
+
 ---
 
 ## ⚠️ Eslatmalar

@@ -4,8 +4,15 @@
 const { spawnSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { loadCalibration } = require('../core/audio-calibration');
+const { inspectRuntimeOwner, inspectVoiceOwnership } = require('../core/runtime-health');
 
 const ROOT = path.resolve(__dirname, '..');
+const calibrationFile = path.join(ROOT, '.run', 'audio-calibration.json');
+const calibration = loadCalibration(calibrationFile);
+console.log(calibration
+  ? `✅ Audio calibration: ${calibration.createdAt} | noise=${calibration.measurements?.noiseRmsP95} speech=${calibration.measurements?.speechRmsP50} echo=${calibration.measurements?.echoLagMs ?? 'n/a'}ms`
+  : '⚠️ Audio calibration yo‘q — `npm run voice:calibrate` tavsiya qilinadi');
 const checks = [];
 const add = (name, ok, detail, level = ok ? 'ok' : 'error') => checks.push({ name, ok, detail, level });
 
@@ -19,6 +26,26 @@ function envFile() {
 
 function processAlive(pattern) {
   try { return Boolean(execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).trim()); } catch (_) { return false; }
+}
+
+function matchingPids(pattern) {
+  try {
+    return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number);
+  } catch (_) { return []; }
+}
+
+function parentPid(pid) {
+  try { return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).trim()); }
+  catch (_) { return 0; }
+}
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (_) { return false; }
+}
+
+function commandForPid(pid) {
+  try { return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim(); }
+  catch (_) { return ''; }
 }
 
 function checkBinary(name) {
@@ -37,13 +64,20 @@ function checkMic() {
     r.status === 0 ? `${size} byte audio olindi` : (r.stderr || r.error?.message || 'capture xato').trim().slice(-300));
 }
 
-function checkRuntime() {
+function loadRuntime() {
   let runtime;
   try { runtime = JSON.parse(fs.readFileSync(path.join(ROOT, '.jarvis-runtime.json'), 'utf8')); }
-  catch (_) { add('runtime:state', false, '.jarvis-runtime.json yo‘q yoki buzilgan', 'warn'); return; }
+  catch (_) { add('runtime:state', false, '.jarvis-runtime.json yo‘q yoki buzilgan', 'warn'); return null; }
+  return runtime;
+}
+
+function checkRuntime(runtime, owner) {
+  if (!runtime) return;
   const daemon = runtime.components?.['voice-daemon'];
   const mic = runtime.components?.microphone;
-  add('runtime:daemon-heartbeat', Number(daemon?.ageMs) < 15000, daemon ? `${daemon.state || daemon.status || 'unknown'}, age=${daemon.ageMs}ms` : 'heartbeat yo‘q');
+  add('runtime:daemon-heartbeat', owner.heartbeatFresh, daemon ? `${daemon.state || daemon.status || 'unknown'}, age=${daemon.ageMs}ms` : 'heartbeat yo‘q');
+  add('runtime:owner', owner.healthy,
+    owner.pid ? `pid=${owner.pid}, alive=${owner.pidAlive}, command=${owner.commandMatches ? 'voice-daemon' : 'mismatch'}, heartbeat-owner=${owner.heartbeatOwnsSnapshot}` : 'snapshot PID yo‘q');
   add('runtime:microphone-heartbeat', mic?.status === 'streaming' && Number(mic?.ageMs) < 15000,
     mic ? `${mic.status}, age=${mic.ageMs ?? '?'}ms` : 'heartbeat yo‘q');
   const rt = runtime.components?.['realtime-api'];
@@ -57,8 +91,15 @@ function main() {
   add('config:azure-openai', Boolean(env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY), 'realtime/agent key ' + (env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY ? 'mavjud' : 'yetishmaydi'));
   add('process:voice-daemon', processAlive('jarvis_daemon.js'), processAlive('jarvis_daemon.js') ? 'ishlayapti' : 'ishlamayapti', 'warn');
   add('process:pause-sentinel', processAlive('pause-sentinel.js'), processAlive('pause-sentinel.js') ? 'ishlayapti' : 'ishlamayapti', 'warn');
+  const runtime = loadRuntime();
+  const runtimeOwner = inspectRuntimeOwner(runtime, { pidAlive, commandForPid });
+  const daemonPids = matchingPids('jarvis_daemon\\.js').filter(pid => /(?:^|[\/\s])jarvis_daemon\.js(?:\s|$)/.test(commandForPid(pid)));
+  const wakePids = matchingPids('[o]penwakeword-worker\\.py');
+  const ownership = inspectVoiceOwnership({ daemonPids, wakePids, parentPid, runtimeOwner });
+  add('process:single-voice-owner', ownership.healthy,
+    `daemon=${ownership.daemonPids.length}, wake-worker=${ownership.wakePids.length}, orphan=${ownership.orphanWakePids.length}${ownership.orphanWakePids.length ? ` (pid ${ownership.orphanWakePids.join(',')})` : ''}`);
   checkMic();
-  checkRuntime();
+  checkRuntime(runtime, runtimeOwner);
 
   for (const c of checks) {
     const icon = c.ok ? '✅' : c.level === 'warn' ? '⚠️ ' : '❌';

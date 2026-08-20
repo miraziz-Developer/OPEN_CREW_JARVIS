@@ -1,10 +1,14 @@
 {
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check jarvis_daemon.js && node --check skills/realtime-voice/index.js && node --check dashboard/server.js && node --check scripts/diagnose-voice.js && node --check scripts/check-config.js && node --check scripts/benchmark.js && node --test tests/*.test.js",
+    "check": "node --check core/audio-calibration.js && node --check core/voice-benchmark-corpus.js && node --check core/uzbek-speech-normalizer.js && node --check scripts/calibrate-audio.js && node --check scripts/voice-benchmark.js && node --check jarvis_daemon.js && node --check core/jarvis-runtime.js && node --check core/runtime-health.js && node --check core/quality-gates.js && node --check core/duplex-voice-engine.js && node --check core/voice-turn-policy.js && node --check core/transcript-corrector.js && node --check core/mission-control.js && node --check core/world-model.js && node --check core/macos-context.js && node --check core/memory-os.js && node --check core/proactive-policy.js && node --check core/skill-platform.js && node --check skills/platform.js && node --check skills/realtime-voice/index.js && node --check skills/screen-monitor/index.js && node --check skills/screen-vision/index.js && node --check skills/desktop-control/index.js && node --check skills/memory/index.js && node --check dashboard/server.js && node --check scripts/diagnose-voice.js && node --check scripts/check-config.js && node --check scripts/benchmark.js && node --test tests/*.test.js",
     "config:check": "node scripts/check-config.js",
     "diagnose:voice": "node scripts/diagnose-voice.js",
     "benchmark": "node scripts/benchmark.js",
+    "voice:report": "node scripts/voice-report.js",
+    "voice:calibrate": "bash scripts/calibrate-live.sh",
+    "voice:sample": "node scripts/voice-benchmark.js",
+    "voice:uzbek-preview": "node scripts/preview-uzbek-speech.js",
     "verify": "npm run check && npm run config:check && npm run diagnose:voice && npm run benchmark"
   },
   "dependencies": {

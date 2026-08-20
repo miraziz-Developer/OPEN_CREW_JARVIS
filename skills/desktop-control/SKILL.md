@@ -20,6 +20,11 @@ echo '{"action":"open_app","name":"Safari"}' | node skills/desktop-control/index
 - `type_text` — `{ text: "..." }` — joriy fokusdagi maydonga yozadi
 - `key_press` — `{ key: "return" | "cmd+c" | "cmd+shift+4" | ... }` — tugma/kombinatsiya bosadi
 - `frontmost_app` — hozir oldingi planda turgan ilova nomini qaytaradi
+- `observe_context` — oldingi ilova, haqiqiy focused oyna, bounds, browser URL/title va Accessibility fokus elementini world modelga yozib qaytaradi
+- `verified_action` — amalni bajarib, keyingi semantik holatni kutadi va observable dalil bilan tasdiqlaydi:
+  `{ "action":"verified_action", "command": { "action":"open_url", "url":"https://github.com", "expect": { "app":"Chrome", "url":"github.com" }, "timeoutMs":5000 } }`
+
+`expect` maydonlari: `app`, `windowTitle`, `url`, `focusRole`, `focusValue`, `changed`. Kamida bitta konkret expectation berish afzal. `verified_action` muvaffaqiyatni command exit-code bilan emas, amaldan **oldingi va keyingi world-state** farqi bilan isbotlaydi.
 
 **Chiqish:** `{ "status": "ok", ... }` yoki `{ "status": "error", "message": "..." }`
 
@@ -29,7 +34,7 @@ echo '{"action":"open_app","name":"Safari"}' | node skills/desktop-control/index
 
 1. `screen-vision`ni chaqiring, `prompt` orqali aniq so'rang: *"X elementi qayerda? Markazining piksel koordinatasini {\"x\":...,\"y\":...} formatida qaytar."*
 2. Qaytgan **xom piksel qiymatlarini** to'g'ridan-to'g'ri `click_at`ga bering — masshtab (Retina 2x va h.k.) `desktop-control` ichida avtomatik hisobga olinadi, o'zingiz bo'lish/ko'paytirish shart emas.
-3. Bosgandan keyin **yana bir marta `screen-vision` bilan tekshiring** — to'g'ri joyga tegdimi (masalan kerakli element tanlandimi/fokusda) — keyingi qadamga faqat shundan keyin o'ting. Hech qachon ko'rmasdan yoki tekshirmasdan bosmang/"bajardim" demang.
+3. Bosish/ochildirish/yozishni imkon qadar `verified_action` orqali bajaring. Accessibility yoki URL/title bilan tekshirib bo'lmaydigan vizual natijada **yana bir marta `screen-vision` bilan tekshiring** — keyingi qadamga faqat shundan keyin o'ting. Hech qachon ko'rmasdan yoki tekshirmasdan bosmang/"bajardim" demang.
 4. **Noto'g'ri joyga tekkan bo'lsa — avtomatik qayta urining.** Vision-koordinata ba'zan bir necha piksel adashishi mumkin, bu normal. Muvaffaqiyatsizlikni ko'rsangiz: agar noto'g'ri maydonga matn ketgan bo'lsa avval uni tozalang (Cmd+A, Delete), so'ng yangi skrinshotdan koordinatani QAYTA hisoblab (avvalgi qiymatni takrorlamang — bir oz to'g'rilab), qayta bosing va qayta tekshiring. Buni **ketma-ket 3 martagacha** avtomatik qiling — foydalanuvchidan so'ramasdan. Faqat 3 urinishdan keyin ham ishlamasa — nima muvaffaqiyatsiz bo'lganini aniq tushuntirib, foydalanuvchidan yordam so'rang.
 
 ## Setup

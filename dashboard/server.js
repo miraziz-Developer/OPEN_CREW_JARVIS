@@ -20,6 +20,7 @@ function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm'));
 
 const mem = require(path.join(PROJECT_DIR, 'skills', 'memory'));
 const tasks = require(path.join(PROJECT_DIR, 'skills', 'tasks'));
+const { loadVoiceTelemetry } = require(path.join(PROJECT_DIR, 'core', 'voice-telemetry'));
 
 // Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
 // uchun UTC+8'da mahalliy soat 08:00gacha dashboard "kechagi kun" faylini
@@ -102,6 +103,10 @@ function getRealtimeTasks() {
   return Array.isArray(s) ? s.slice().reverse() : [];
 }
 
+function getVoiceTelemetry() {
+  return loadVoiceTelemetry(path.join(PROJECT_DIR, '.run', 'voice-flight-recorder.jsonl'), { maxLines: 3000 });
+}
+
 // ── /api/profile — so'nggi o'rganilgan naqshlar ────────────────────────────
 function getProfile() {
   const pr = mem.readProfile();
@@ -175,6 +180,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/tasks') return json(res, getTasks());
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());
     if (url.pathname === '/api/runtime') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}));
+    if (url.pathname === '/api/voice-telemetry') return json(res, getVoiceTelemetry());
     if (url.pathname === '/api/profile') return json(res, getProfile());
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
