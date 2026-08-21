@@ -59,7 +59,12 @@ function getStatus() {
     monitor: isAlive('skills/screen-monitor/index.js'),
     sentinel: isAlive('pause-sentinel.js'),
     runtime,
-    model: { primary: 'gpt-5.4', vision: 'gpt-4.1', fallback: 'Kimi-K2.6' },
+    model: {
+      primary: env('AZURE_OPENAI_DEPLOYMENT', 'Kimi-K2.6'),
+      realtime: env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1'),
+      vision: env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1'),
+      expert: env('DEEP_THINK_MODEL', 'gpt-5.4')
+    },
     now: new Date().toISOString()
   };
 }

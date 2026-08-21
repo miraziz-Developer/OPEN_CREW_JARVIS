@@ -142,8 +142,9 @@ body.booted header{animation:panelIn .4s backwards}
     </div>
     <div class="panel"><h2><span>MODEL</span><span class="num">02</span></h2>
       <div class="kv"><span>Asosiy</span><b id="m-primary">—</b></div>
+      <div class="kv"><span>Ovozli (Realtime)</span><b id="m-realtime">—</b></div>
       <div class="kv"><span>Ekran ko'rish</span><b id="m-vision">—</b></div>
-      <div class="kv"><span>Zaxira</span><b id="m-fallback">—</b></div>
+      <div class="kv"><span>Expert (deep-think)</span><b id="m-fallback">—</b></div>
     </div>
     <div class="panel"><h2><span>FAOLIYAT (LOG)</span><span class="num">03</span></h2>
       <div id="activity"><div>— yuklanmoqda —</div></div>
@@ -269,8 +270,9 @@ async function refreshStatus(){
     setDot("d-monitor", s.monitor); $("s-monitor").textContent = s.monitor ? "faol" : "o'chirilgan";
     setDot("d-sentinel", s.sentinel); $("s-sentinel").textContent = s.sentinel ? "tinglamoqda" : "yo'q";
     $("m-primary").textContent = s.model.primary;
+    $("m-realtime").textContent = s.model.realtime;
     $("m-vision").textContent = s.model.vision;
-    $("m-fallback").textContent = s.model.fallback;
+    $("m-fallback").textContent = s.model.expert;
 
     if (s.paused) setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
     else if (s.gateway && s.bot && s.daemon && micHealthy && realtimeHealthy) setState("active", "FAOL", "HAMMASI ISHLAMOQDA");
