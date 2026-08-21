@@ -40,6 +40,7 @@ const { HotwordDetector } = require('./core/hotword-detector');
 const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
 const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
+const { detectWakeSoundMs, playWakeSound, playSystemSound, playUrgentSound, playTaskDoneSound } = require('./core/voice-sounds');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
@@ -170,43 +171,7 @@ const WAKE_SOUND_PATH = path.join(PROJECT_DIR, 'assets', 'wake-sound.mp3');
 // butun oqimdagi eng katta kechikish edi; hozir "Labbay boss" 0.72s).
 // Davomiylik fayldan O'QIB olinadi — fayl almashtirilsa, qo'lda raqam
 // yangilash esdan chiqib, mos kelmay qolmasin.
-function detectWakeSoundMs() {
-  try {
-    const out = execSync('afinfo "' + WAKE_SOUND_PATH + '" 2>/dev/null | grep -i "estimated duration"', { encoding: 'utf8' });
-    const m = out.match(/([\d.]+)\s*sec/);
-    if (m) return Math.round(parseFloat(m[1]) * 1000) + 200; // + kichik zaxira (karnay/ijro kechikishi)
-  } catch (e) {}
-  return 1000; // afinfo ishlamasa — ehtiyotkor, lekin eski 2400dan ancha kichik qiymat
-}
-const WAKE_SOUND_MS = detectWakeSoundMs();
-
-function playWakeSound() {
-  if (!fs.existsSync(WAKE_SOUND_PATH)) return;
-  try {
-    const p = spawn('afplay', [WAKE_SOUND_PATH], { stdio: 'ignore' });
-    p.on('error', () => {});
-    p.unref();
-  } catch (e) {}
-}
-
-// ── QOSHIMCHA TOVUSH BELGILARI ── tizimning tayyor (macOS) tovushlaridan
-// foydalaniladi — sifatli, yangi audio generatsiya qilish shart emas.
-// Sosumi = klassik "diqqat" ogohlantirish tovushi (shoshilinch signal
-// oldidan); Glass = yengil, ijobiy "tugadi" tovushi (uzoqroq run_task
-// vazifasi tugaganda — HUD-dek "bajarildi" hissi beradi). fast_action
-// uchun ATAYIN ishlatilmaydi — u allaqachon deyarli oniy, qo'shimcha
-// tovush faqat ortiqcha shovqin bo'lardi.
-function playSystemSound(name) {
-  const p_ = path.join('/System/Library/Sounds', name + '.aiff');
-  if (!fs.existsSync(p_)) return;
-  try {
-    const p = spawn('afplay', [p_], { stdio: 'ignore' });
-    p.on('error', () => {});
-    p.unref();
-  } catch (e) {}
-}
-function playUrgentSound() { playSystemSound('Sosumi'); }
-function playTaskDoneSound() { playSystemSound('Glass'); }
+const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
 
 // ════════════════════════════════════════════
 // TELEGRAM / HELPERS
@@ -960,7 +925,7 @@ async function mainLoop() {
     // Ack tugagach, ulanish hali tayyor bo'lmasa haqiqiy buyruq bounded
     // preroll'ga yig'iladi va ready bo'lgan zahoti yuboriladi.
     const wakeMuteUntil = Date.now() + WAKE_SOUND_MS + 80;
-    playWakeSound();
+    playWakeSound(WAKE_SOUND_PATH);
     let idleTimer = null;
     let finished = false;
     let sessionWasReady = false;
@@ -1214,7 +1179,7 @@ async function mainLoop() {
     cmdBuffers = [];
     cmdStartTime = now;
     lastVoiceTime = now;
-    playWakeSound();
+    playWakeSound(WAKE_SOUND_PATH);
     inf(reason + ' — buyruq tinglanyapti');
     return true;
   }
