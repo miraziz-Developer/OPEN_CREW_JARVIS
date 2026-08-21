@@ -81,6 +81,67 @@ test('native transcript recovers a turn when authoritative Uzbek STT returns no 
   assert.deepEqual(accepted, ['Safari och']);
 });
 
+test('a confident native transcript responds without waiting for authoritative STT', async () => {
+  let resolveAuthoritative;
+  const session = new RealtimeSession({
+    transcribeUzbek: () => new Promise(resolve => { resolveAuthoritative = resolve; }),
+    fastActionRunner: async () => ({ status: 'ok', message: 'Bajarildi' })
+  });
+  session.ready = true;
+  session.ws = { send: () => {} };
+  session._flushPlayback = () => {};
+  const accepted = [];
+  const telemetry = [];
+  session.on('user_transcript', text => accepted.push(text));
+  session.on('telemetry', (type, data) => telemetry.push(type));
+
+  session._beginAuthoritativeTranscription({ chunks: [Buffer.alloc(3200)] });
+  session._onMessage({ data: JSON.stringify({
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'native-fast', transcript: "Xo'p, Chrome dasturini och"
+  }) });
+
+  // Authoritative Azure STT hali javob bermagan (Promise pending) --
+  // shunga qaramay, native ishonchli bo'lgani uchun darhol qabul qilingan.
+  assert.deepEqual(accepted, ["Xo'p, Chrome dasturini och"]);
+  assert.equal(session._pendingAuthoritativeTurn, null);
+  assert.ok(telemetry.includes('stt.native-fast-path'));
+
+  // Authoritative kech kelsa ham -- ikkinchi/dublikat javob YARATILMAYDI.
+  resolveAuthoritative({ text: 'boshqacha eshitilgan matn', confidence: 0.4 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(accepted, ["Xo'p, Chrome dasturini och"]);
+  assert.ok(telemetry.includes('stt.authoritative.completed'));
+});
+
+test('a short or ambiguous native transcript still waits for authoritative STT', async () => {
+  const session = new RealtimeSession({
+    transcribeUzbek: async () => ({ text: 'Musiqani to\'xtat', confidence: 0.85 }),
+    // "Musiqani to'xtat" bir vaqtning o'zida matchDirectFastAction
+    // (media:spotify_stop) bilan mos keladi -- fastActionRunner
+    // mock qilinmasa bu HAQIQIY AppleScript chaqiruvini ishga tushiradi.
+    fastActionRunner: async () => ({ status: 'ok', message: 'Bajarildi' })
+  });
+  session.ready = true;
+  session.ws = { send: () => {} };
+  session._flushPlayback = () => {};
+  const accepted = [];
+  session.on('user_transcript', text => accepted.push(text));
+
+  session._beginAuthoritativeTranscription({ chunks: [Buffer.alloc(3200)] });
+  session._onMessage({ data: JSON.stringify({
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'native-short', transcript: 'Musiqani toxtat'
+  }) });
+
+  // Native 2 token -- fast-path chegarasidan past, hali qaror qilinmagan.
+  assert.deepEqual(accepted, []);
+  assert.notEqual(session._pendingAuthoritativeTurn, null);
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(accepted, ["Musiqani to'xtat"]);
+});
+
 test('contextual turns are grounded with screen and Obsidian before Realtime speaks', async () => {
   const calls = [];
   const session = new RealtimeSession({

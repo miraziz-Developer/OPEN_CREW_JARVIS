@@ -41,6 +41,23 @@ function chooseTranscript(authoritativeResult, nativeText, options = {}) {
   return { source: native.text ? 'native-low-quality' : 'none', text: native.text, authoritative, native };
 }
 
+// Realtime API'ning o'z (native) transkripti YETARLICHA aniq bo'lsa,
+// authoritative Azure STT tugashini kutmasdan darhol javob boshlash uchun
+// ishlatiladi. `chooseTranscript()`ning "usable" chegarasidan ATAYLAB
+// qattiqroq: bitta/ikkita so'zli qisqa buyruqlar (masalan "Musiqani
+// to'xtat", 2 token) hali ham authoritative STT'ni kutadi — faqat aniq,
+// bir necha so'zli, past ehtimolli-xato buyruqlar darhol o'tadi.
+// Empirik kalibratsiya (core/stt-recovery.js smoke-test orqali): "Chrome
+// ni och" (3 token) ~64 ball, "Xo'p, Chrome dasturini och" (4 token) ~87,
+// "Musiqani to'xtat" (2 token) 60 ball lekin token-soni gate'idan
+// o'tolmaydi, "ha"/"xo'p" kabi tasdiqlar policy'ning o'zida rad etiladi.
+function nativeIsConfident(text, options = {}) {
+  const quality = transcriptQuality(text, options);
+  const minScore = Number.isFinite(options.minScore) ? options.minScore : 60;
+  const minTokens = Number.isFinite(options.minTokens) ? options.minTokens : 3;
+  return quality.usable && quality.score >= minScore && quality.tokens >= minTokens;
+}
+
 function authoritativeTimeoutMs(audioBytes, options = {}) {
   const sampleRate = options.sampleRate || 16000;
   const bytesPerSample = options.bytesPerSample || 2;
@@ -50,4 +67,4 @@ function authoritativeTimeoutMs(audioBytes, options = {}) {
   return Math.round(Math.max(floorMs, Math.min(ceilingMs, 1800 + durationMs * 0.55)));
 }
 
-module.exports = { transcriptQuality, chooseTranscript, authoritativeTimeoutMs };
+module.exports = { transcriptQuality, chooseTranscript, authoritativeTimeoutMs, nativeIsConfident };

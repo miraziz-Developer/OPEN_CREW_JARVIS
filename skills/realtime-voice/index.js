@@ -22,7 +22,7 @@ const { DuplexVoiceEngine } = require('../../core/duplex-voice-engine');
 const { PcmPlaybackBuffer } = require('../../core/pcm-playback-buffer');
 const { classifyUserTurn, isRepeatedResponse } = require('../../core/voice-turn-policy');
 const { correctTranscript } = require('../../core/transcript-corrector');
-const { chooseTranscript, authoritativeTimeoutMs } = require('../../core/stt-recovery');
+const { chooseTranscript, authoritativeTimeoutMs, nativeIsConfident } = require('../../core/stt-recovery');
 const { loadCalibration, resolveCalibratedNumber } = require('../../core/audio-calibration');
 const { normalizeUzbekSpeech, voiceStyleInstructions } = require('../../core/uzbek-speech-normalizer');
 
@@ -837,17 +837,33 @@ class RealtimeSession extends EventEmitter {
         }
         this.emit('user_speech_stopped');
         break;
-      case 'conversation.item.input_audio_transcription.completed':
+      case 'conversation.item.input_audio_transcription.completed': {
         if (this._authoritativeTranscribe && this._pendingAuthoritativeTurn) {
-          this._pendingAuthoritativeTurn.native = {
+          const pending = this._pendingAuthoritativeTurn;
+          pending.native = {
             text: msg.transcript || '',
             itemId: msg.item_id || msg.item?.id || ''
           };
-          this._finalizeAuthoritativeTurn();
+          // Native transkript o'zi YETARLICHA aniq bo'lsa (nativeIsConfident),
+          // authoritative Azure STT tugashini kutmasdan darhol javob boshlanadi
+          // -- eng katta kechikish manbai (p50 ~1.3s, ba'zan 2-5s) shu kutish
+          // edi. Noaniq/qisqa/tasdiq-turdagi buyruqlarda esa MAVJUD mantiq
+          // (ikkalasini kutish) o'zgarishsiz qoladi -- xavfsizlik ustuvor.
+          if (!pending.settled && nativeIsConfident(pending.native.text)) {
+            pending.settled = true;
+            clearTimeout(pending.timer);
+            this._pendingAuthoritativeTurn = null;
+            const latencyMs = Date.now() - pending.startedAt;
+            this.emit('telemetry', 'stt.native-fast-path', { durationMs: latencyMs });
+            this._acceptTranscript(pending.native.text, { source: 'native-fast-path', sttLatencyMs: latencyMs });
+          } else {
+            this._finalizeAuthoritativeTurn();
+          }
         } else {
           this._acceptTranscript(msg.transcript || '');
         }
         break;
+      }
       case 'response.audio_transcript.delta':
         this.assistantTranscript += msg.delta || '';
         if (!this._suppressCurrentResponse && isRepeatedResponse(this.assistantTranscript, this._lastAssistantTranscript)) {
@@ -1092,15 +1108,23 @@ class RealtimeSession extends EventEmitter {
     }, authoritativeTimeoutMs(pcm.length));
 
     Promise.resolve(this._authoritativeTranscribe(pcm)).then(result => {
-      if (this._pendingAuthoritativeTurn !== pending || pending.settled) return;
+      // Agar native-fast-path bu turnni allaqachon yakunlagan bo'lsa
+      // (pending.settled=true), javobga endi ta'sir qilmaymiz -- lekin
+      // authoritative natijani baribir telemetriyaga yozamiz (kelajakda
+      // fast-path qarorini tekshirish/tuzatish uchun foydali material).
+      // Butunlay BOSHQA (keyingi) turn boshlangan bo'lsa (na settled, na
+      // hozirgi pending) -- bu haqiqiy eskirgan chaqiruv, e'tibor bermaymiz.
+      if (this._pendingAuthoritativeTurn !== pending && !pending.settled) return;
       pending.result = result && typeof result === 'object' ? result : { text: String(result || '') };
       this.emit('telemetry', 'stt.authoritative.completed', {
         durationMs: Date.now() - pending.startedAt,
-        confidence: pending.result.confidence
+        confidence: pending.result.confidence,
+        afterFastPath: pending.settled
       });
-      this._finalizeAuthoritativeTurn();
+      if (!pending.settled) this._finalizeAuthoritativeTurn();
     }).catch(() => {
-      if (this._pendingAuthoritativeTurn !== pending || pending.settled) return;
+      if (this._pendingAuthoritativeTurn !== pending && !pending.settled) return;
+      if (pending.settled) return;
       pending.result = { text: '' };
       this._finalizeAuthoritativeTurn();
     });
