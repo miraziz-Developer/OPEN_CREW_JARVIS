@@ -1444,7 +1444,25 @@ async function mainLoop() {
         wrn('Realtime ulanmagan — batch STT fallback tinglayapti');
       }
     });
-    session.on('close', () => finishRealtimeSession('ulanish yopildi'));
+    session.on('close', () => {
+      // WebSocket ko'pincha 'error' chiqarmasdan to'g'ridan-to'g'ri 'close'
+      // bilan uziladi (server-tomonidan yopilish/tarmoq uzilishi) — bu holda
+      // heartbeat oxirgi 'ready' holatida yopishib qolib, diagnose-voice.js
+      // muammoni ko'rmay qolardi. `finished` hali false bo'lsa (ya'ni 'error'
+      // yoki idle-timeout orqali allaqachon yakunlanmagan bo'lsa) — bu
+      // kutilmagan uzilish, holatni to'g'ri belgilaymiz.
+      if (!finished) {
+        runtime.heartbeat('realtime-api', {
+          status: sessionWasReady ? 'degraded' : 'error',
+          reason: 'socket-closed-unexpectedly'
+        });
+        if (sessionWasReady) {
+          playSystemSound('Basso');
+          sendTelegram('⚠️ Ovozli suhbat kutilmaganda uzildi — keyingi chaqiruvda qayta ulanadi.');
+        }
+      }
+      finishRealtimeSession('ulanish yopildi');
+    });
 
     inf(reason + ' — realtime suhbat ulanmoqda');
     session.connect();
