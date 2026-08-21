@@ -38,7 +38,7 @@ const { HotwordDetector } = require('./core/hotword-detector');
 const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
 const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
-const { detectWakeSoundMs, playWakeSound, playSystemSound, playUrgentSound, playTaskDoneSound } = require('./core/voice-sounds');
+const { detectWakeSoundMs, playWakeSound, playSystemSound, playTaskDoneSound } = require('./core/voice-sounds');
 const { createAgentBridge } = require('./core/agent-bridge');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
@@ -180,513 +180,128 @@ const { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders,
 });
 
 // ════════════════════════════════════════════
+// FON JOB'LARI (core/background-jobs/*.js) — har biri o'z holat faylini
+// va bog'liqliklarini o'zi oladi; bu yerda faqat yoqish/rejalashtirish
+// qoladi. proactivePolicy ikkalasiga (proactive + urgent) umumiy.
+// ════════════════════════════════════════════
+const { createProactiveCheckJob } = require('./core/background-jobs/proactive-check');
+const { createUrgentCheckJob } = require('./core/background-jobs/urgent-check');
+const { createDailySynthesisJob } = require('./core/background-jobs/daily-synthesis-job');
+const { createDailyTasksJob } = require('./core/background-jobs/daily-tasks-job');
+const { createDailyReportJob } = require('./core/background-jobs/daily-report-job');
+const { createProjectsJob } = require('./core/background-jobs/projects-job');
+const { createFastActionLearnJob } = require('./core/background-jobs/fast-action-learn-job');
+const { createEmbedIndexJob } = require('./core/background-jobs/embed-index-job');
+
 // PROAKTIV REJIM — davriy ravishda screen-monitor yozgan Obsidian
 // xotirasini ko'rib chiqadi; agent chindan foydali narsa topsa,
-// Telegram/ovoz orqali taklif qiladi. Hech qachon so'ramasdan
-// mustaqil harakat (klik/yozish) qilmaydi — faqat kuzatib, taklif beradi.
-// ════════════════════════════════════════════
+// Telegram/ovoz orqali taklif qiladi. Hech qachon so'ramasdan mustaqil
+// harakat (klik/yozish) qilmaydi — faqat kuzatib, taklif beradi.
 const PROACTIVE_ENABLED_RT = (env('PROACTIVE_ENABLED') || 'false') === 'true';
 const PROACTIVE_INTERVAL_MIN_RT = parseInt(env('PROACTIVE_INTERVAL_MIN'), 10) || 30;
-const PROACTIVE_STATE_FILE = path.join(PROJECT_DIR, '.proactive-state.json');
 const proactivePolicy = new ProactivePolicy({
   file: path.join(PROJECT_DIR, '.proactive-policy.json'),
   cooldownMs: (parseInt(env('PROACTIVE_COOLDOWN_MIN'), 10) || 30) * 60e3,
   dailySuggestionBudget: parseInt(env('PROACTIVE_DAILY_BUDGET'), 10) || 8
 });
-
-function loadProactiveState() {
-  try { return JSON.parse(fs.readFileSync(PROACTIVE_STATE_FILE, 'utf8')); } catch (e) { return { lastCheck: Date.now() }; }
-}
-function saveProactiveState(s) {
-  try { fs.writeFileSync(PROACTIVE_STATE_FILE, JSON.stringify(s)); } catch (e) {}
-}
-
-async function checkProactive() {
-  const state = loadProactiveState();
-  let mem;
-  try { mem = require('./skills/memory'); } catch (e) { return; }
-  const date = localDateStr();
-  const filePath = path.join(mem.MEMORY_DIR, date + '.md');
-  if (!fs.existsSync(filePath)) { state.lastCheck = Date.now(); saveProactiveState(state); return; }
-
-  const content = fs.readFileSync(filePath, 'utf8');
-  const blocks = content.split(/^---$/m).map(b => b.trim()).filter(Boolean);
-  const newBlocks = [];
-  const now = new Date();
-  for (const block of blocks) {
-    const m = block.match(/^## (\d{2}):(\d{2}) — (.+)$/m);
-    if (!m) continue;
-    const [, hh, mm, topic] = m;
-    if (!topic.includes('Ekran')) continue;
-    const blockTime = new Date(now); blockTime.setHours(+hh, +mm, 0, 0);
-    if (blockTime.getTime() > state.lastCheck) newBlocks.push(block);
-  }
-
-  state.lastCheck = Date.now();
-  saveProactiveState(state);
-  if (!newBlocks.length) return;
-
-  // Ko'p kunlik o'rganilgan naqshlarni ham qo'shamiz — shunda taklif faqat
-  // "hozir shu ko'rinyapti" emas, balki "odatda shu vaqt/holatda siz shuni
-  // qilasiz" darajasida, haqiqiy odatlarga asoslangan bo'ladi.
-  let patternsBlock = '';
-  try {
-    const profile = mem.readProfile();
-    if (profile.status === 'ok') {
-      const sections = profile.content.split(/^## /m).slice(1).filter(s => s.startsWith('O\'rganilgan naqshlar') || s.startsWith('Odatlar'));
-      if (sections.length) patternsBlock = '\n\n=== SIZNING ODDIY VAQTLARDA O\'RGANILGAN ODATLARINGIZ ===\n' + sections.slice(-5).map(s => '## ' + s).join('\n');
-    }
-  } catch (e) {}
-
-  const now2 = new Date();
-  const prompt = 'Hozirgi vaqt: ' + now2.toTimeString().slice(0, 5) + ' (' + ['Yakshanba','Dushanba','Seshanba','Chorshanba','Payshanba','Juma','Shanba'][now2.getDay()] + ').\n\n' +
-    'So\'nggi ' + PROACTIVE_INTERVAL_MIN_RT + ' daqiqada ekranda quyidagi o\'zgarishlar qayd etildi:\n\n' +
-    newBlocks.join('\n\n') +
-    patternsBlock +
-    '\n\nYuqoridagi ODATLARGA qarab, hozirgi vaqt/holat bilan solishtiring: foydalanuvchi odatda shu payt/holatda ' +
-    'nima qilishi kerak edi, lekin qilmagandek ko\'rinsa (masalan unutgan, chalg\'igan) — yoki hozirgi ekrandan chindan ' +
-    'foydali/muhim bir taklif (xato, unutilgan vazifa, yordam kerak bo\'lgan holat) ko\'rsangiz — qisqa (2-3 gap) taklif ' +
-    'qiling, nega bu taklifni berayotganingizni ham qisqa izohlang (masalan "odatda shu vaqt atrofida..."). Aks holda ' +
-    'faqat "HECH_NARSA" deb javob bering, boshqa hech narsa yozmang.';
-  const reply = await askAgent(prompt, 'agent:main:jarvis-proactive');
-  const decision = proactivePolicy.evaluate({
-    source: 'screen-proactive', summary: reply, confidence: 0.72,
-    urgency: 0.35, benefit: 0.65, reversibility: 1, risk: 0.15, disruption: 0.35
-  });
-  if (reply && !reply.includes('HECH_NARSA') && reply.trim().length > 5 && decision.mode === 'suggest') {
-    ok('💡 Proaktiv taklif: ' + reply.substring(0, 80));
-    sendTelegram('💡 ' + reply);
-    const audio = await ttsToFile(reply.substring(0, 300));
-    if (audio) { try { execSync('afplay "' + audio + '"'); } catch (e) {} }
-  }
-}
-
+const proactiveCheckJob = createProactiveCheckJob({
+  projectDir: PROJECT_DIR, intervalMin: PROACTIVE_INTERVAL_MIN_RT, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile
+});
 if (PROACTIVE_ENABLED_RT) {
   inf('Proaktiv rejim yoqilgan — har ' + PROACTIVE_INTERVAL_MIN_RT + ' daqiqada tekshiradi');
-  setInterval(() => { checkProactive().catch(() => {}); }, PROACTIVE_INTERVAL_MIN_RT * 60 * 1000);
+  setInterval(() => { proactiveCheckJob.run().catch(() => {}); }, PROACTIVE_INTERVAL_MIN_RT * 60 * 1000);
 }
 
-// ── SHOSHILINCH ekran ogohlantirishlari — checkProactive()'ning umumiy
-// 30 daqiqalik tsiklidan FARQLI, screen-monitor #urgent deb belgilagan
+// SHOSHILINCH ekran ogohlantirishlari — proaktiv rejimning umumiy 30
+// daqiqalik tsiklidan FARQLI, screen-monitor #urgent deb belgilagan
 // (xato/crash, xavfsizlik, muddat kabi) yozuvlarni ANCHA tez-tez (default
-// 3 daqiqada) tekshiradi va DARHOL ovozli+Telegram xabar beradi — muhim
-// narsa 30 daqiqagacha "kutib qolmasin". Alohida state fayli ishlatadi,
-// checkProactive()ning umumiy hisobiga aralashmaydi.
+// 3 daqiqada) tekshiradi va DARHOL ovozli+Telegram xabar beradi.
 const URGENT_CHECK_ENABLED = (env('URGENT_CHECK_ENABLED') || 'true') !== 'false';
 const URGENT_CHECK_INTERVAL_MIN = parseInt(env('URGENT_CHECK_INTERVAL_MIN'), 10) || 3;
-const URGENT_STATE_FILE = path.join(PROJECT_DIR, '.urgent-check-state.json');
-
-function loadUrgentState() {
-  try { return JSON.parse(fs.readFileSync(URGENT_STATE_FILE, 'utf8')); } catch (e) { return { lastCheck: Date.now() }; }
-}
-function saveUrgentState(s) {
-  try { fs.writeFileSync(URGENT_STATE_FILE, JSON.stringify(s)); } catch (e) {}
-}
-
-async function checkUrgentScreen() {
-  const state = loadUrgentState();
-  let mem;
-  try { mem = require('./skills/memory'); } catch (e) { return; }
-  const filePath = path.join(mem.MEMORY_DIR, localDateStr() + '.md');
-  if (!fs.existsSync(filePath)) { state.lastCheck = Date.now(); saveUrgentState(state); return; }
-
-  const content = fs.readFileSync(filePath, 'utf8');
-  const blocks = content.split(/^---$/m).map(b => b.trim()).filter(Boolean);
-  const now = new Date();
-  const urgentBlocks = [];
-  for (const block of blocks) {
-    if (!/#urgent\b/.test(block)) continue;
-    const m = block.match(/^## (\d{2}):(\d{2}) — (.+)$/m);
-    if (!m) continue;
-    const [, hh, mm, topic] = m;
-    const blockTime = new Date(now); blockTime.setHours(+hh, +mm, 0, 0);
-    if (blockTime.getTime() > state.lastCheck) urgentBlocks.push({ topic, block });
-  }
-  state.lastCheck = Date.now();
-  saveUrgentState(state);
-  if (!urgentBlocks.length) return;
-
-  for (const { block } of urgentBlocks) {
-    const summary = block.replace(/^## .+$/m, '').replace(/\*\*Teglar:\*\*.*$/m, '').trim();
-    const decision = proactivePolicy.evaluate({
-      source: 'screen-urgent', summary, confidence: 0.82, urgency: 0.95,
-      benefit: 0.9, reversibility: 1, risk: 0.25, disruption: 0.25
-    });
-    if (decision.mode === 'observe') continue;
-    ok('🚨 Shoshilinch: ' + summary.substring(0, 80));
-    playUrgentSound();
-    sendTelegram('🚨 ' + summary);
-    const audio = await ttsToFile(('Diqqat. ' + summary).substring(0, 300));
-    if (audio) { try { execSync('afplay "' + audio + '"'); } catch (e) {} }
-  }
-}
-
+const urgentCheckJob = createUrgentCheckJob({ projectDir: PROJECT_DIR, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile });
 if (URGENT_CHECK_ENABLED) {
   inf('Shoshilinch ekran ogohlantirishi yoqilgan — har ' + URGENT_CHECK_INTERVAL_MIN + ' daqiqada tekshiradi');
-  setInterval(() => { checkUrgentScreen().catch(() => {}); }, URGENT_CHECK_INTERVAL_MIN * 60 * 1000);
+  setInterval(() => { urgentCheckJob.run().catch(() => {}); }, URGENT_CHECK_INTERVAL_MIN * 60 * 1000);
 }
 
-// ── Kunlik o'rganish: xom kuzatuvlardan barqaror naqshlarni ajratib,
+// Kunlik o'rganish: xom kuzatuvlardan barqaror naqshlarni ajratib,
 // profilga qo'shadi. Skill o'zi qaysi kunlar bajarilganini eslab qoladi,
 // shuning uchun tez-tez chaqirish xavfsiz (takror bajarilmaydi).
 const SYNTHESIS_ENABLED = (env('DAILY_SYNTHESIS_ENABLED') || 'true') !== 'false';
-
-async function runDailySynthesis() {
-  try {
-    const { synthesize, yesterday } = require('./skills/daily-synthesis');
-    const r = await synthesize(yesterday());
-    if (r && r.learned && r.learned.length) {
-      ok('🧠 O\'rganildi (' + r.date + '): ' + r.learned.length + ' ta naqsh profilga qo\'shildi');
-      sendTelegram('🧠 Kecha kuzatilganlardan o\'rgandim:\n' + r.learned.join('\n'));
-    }
-  } catch (e) { er('Kunlik o\'rganish xatolik: ' + (e.message || e)); }
-}
-
+const dailySynthesisJob = createDailySynthesisJob({ sendTelegram });
 if (SYNTHESIS_ENABLED) {
   inf('Kunlik o\'rganish yoqilgan');
-  setTimeout(() => { runDailySynthesis(); }, 2 * 60 * 1000);          // ishga tushgach
-  setInterval(() => { runDailySynthesis(); }, 60 * 60 * 1000);        // keyin har soatda tekshiradi
+  setTimeout(() => { dailySynthesisJob.run(); }, 2 * 60 * 1000);          // ishga tushgach
+  setInterval(() => { dailySynthesisJob.run(); }, 60 * 60 * 1000);        // keyin har soatda tekshiradi
 }
 
-// ════════════════════════════════════════════
-// KUNLIK VAZIFALAR — Obsidian'dagi ro'yxat (skills/tasks).
-// Foydalanuvchi Obsidian'da to'g'ridan-to'g'ri qo'shishi mumkin; Jarvis
-// ham daily-synthesis orqali o'zi foydali naqshlarni qo'shib boradi.
-// Ro'yxatga tushgan narsa uchun alohida ruxsat so'ralmaydi — kun
-// davomida navbat bilan avtomatik bajariladi (SOUL.md Chegaralar hali
-// kuchda: qaytarib bo'lmaydigan amallar baribir so'raladi).
-// ════════════════════════════════════════════
+// KUNLIK VAZIFALAR — Obsidian'dagi ro'yxat (skills/tasks). Ro'yxatga
+// tushgan narsa uchun alohida ruxsat so'ralmaydi — kun davomida navbat
+// bilan avtomatik bajariladi (SOUL.md Chegaralar hali kuchda: qaytarib
+// bo'lmaydigan amallar baribir so'raladi).
 const DAILY_TASKS_ENABLED = (env('DAILY_TASKS_ENABLED') || 'true') !== 'false';
 const DAILY_TASK_LEAD_MIN = Math.max(0, parseInt(env('DAILY_TASK_LEAD_MIN'), 10) || 0);
-const DAILY_TASKS_STATE_FILE = path.join(PROJECT_DIR, '.daily-tasks-state.json');
-
-function todayStr() { return localDateStr(); }
-
-function loadDailyTasksState() {
-  let s;
-  try { s = JSON.parse(fs.readFileSync(DAILY_TASKS_STATE_FILE, 'utf8')); } catch (e) { s = null; }
-  if (!s || s.date !== todayStr()) s = { date: todayStr(), completed: [] };
-  return s;
-}
-function saveDailyTasksState(s) {
-  try { fs.writeFileSync(DAILY_TASKS_STATE_FILE, JSON.stringify(s)); } catch (e) {}
-}
-
-// Vazifa matnidagi vaqt belgisi ("Har kuni 19:30 — ...", "soat 11:00 da")
-// — shu vaqtdan OLDIN bajarilmasligi kerak. Avval bu umuman qaralmasdi:
-// ro'yxatdagi birinchi bajarilmagan vazifa qaysi vaqt bo'lishidan qat'i
-// nazar darhol ishga tushardi. Real oqibat (Obsidian yozuvlaridan
-// tasdiqlangan): "11:00 — WhatsApp" vazifasi 00:15da, "19:30 — zal
-// rejasi" 00:25da bajarilgan. Eslatma noto'g'ri vaqtda kelsa, umuman
-// ma'nosini yo'qotadi.
-function scheduledMinutes(text) {
-  const m = String(text).match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/);
-  if (!m) return null;
-  return (+m[1]) * 60 + (+m[2]);
-}
-function nowMinutes() {
-  const d = new Date();
-  return d.getHours() * 60 + d.getMinutes();
-}
-
-async function checkDailyTasks() {
-  let tasksMod;
-  try { tasksMod = require('./skills/tasks'); } catch (e) { return; }
-  const active = tasksMod.activeTasks();
-  if (!active.length) return;
-
-  const state = loadDailyTasksState();
-  const cur = nowMinutes();
-  // Vaqti belgilangan vazifa faqat o'sha vaqt kelgach bajariladi. Vaqt
-  // yozilmagan vazifa (avvalgidek) istalgan paytda bajarilaveradi.
-  // Belgilangan vaqt o'tib ketgan bo'lsa ham bajariladi (masalan kompyuter
-  // 19:30da o'chiq bo'lsa, 20:10da yoqilganda baribir eslatadi).
-  // Oldindan tayyorlanish: vazifaning o'zi bajarilishi ham vaqt oladi
-  // (agent chaqiruvi, brauzer va h.k.), shuning uchun belgilangan vaqtdan
-  // DAILY_TASK_LEAD_MIN daqiqa oldin boshlanadi — natija/eslatma
-  // foydalanuvchiga aynan kerakli vaqtda yetib borsin, kechikib emas.
-  const next = active.find(t => {
-    if (state.completed.includes(t)) return false;
-    const sched = scheduledMinutes(t);
-    return sched === null || cur >= (sched - DAILY_TASK_LEAD_MIN);
-  });
-  if (!next) return;
-
-  const execution = beginSingleStepMission(next, {
-    id: stableId('daily', todayStr() + ':' + next), source: 'daily-task',
-    idempotencyKey: 'daily:' + todayStr() + ':' + next, maxAttempts: 3
-  });
-  if (!execution.step) return;
-  const prompt = 'Kunlik vazifalar ro\'yxatidagi vazifa: "' + next + '". Buni bajaring va natijani qisqa ayting.';
-  const reply = await askAgent(prompt, 'agent:main:jarvis-daily-tasks-' + Date.now());
-  const verified = recordMissionResult(execution.mission.id, execution.step.id, reply, { type: 'agent-result', value: reply });
-  if (!verified || verified.status !== 'verified') {
-    wrn('📋 Vazifa tasdiqlanmadi, completed qilinmadi: ' + next);
-    return;
-  }
-  state.completed.push(next);
-  saveDailyTasksState(state);
-  if (reply) {
-    ok('📋 Vazifa bajarildi: ' + next);
-    sendTelegram('✅ "' + next + '":\n' + reply);
-    try { writeMemory('Kunlik vazifa bajarildi', 'Vazifa: ' + next + '\nNatija: ' + reply.substring(0, 500), ['daily-task', 'autonomous']); } catch (e) {}
-  }
-}
-
+const dailyTasksJob = createDailyTasksJob({
+  projectDir: PROJECT_DIR, localDateStr, leadMin: DAILY_TASK_LEAD_MIN, stableId, beginSingleStepMission, recordMissionResult, askAgent, sendTelegram, writeMemory
+});
 if (DAILY_TASKS_ENABLED) {
   inf('Kunlik vazifalar rejimi yoqilgan');
-  setTimeout(() => { checkDailyTasks().catch(() => {}); }, 3 * 60 * 1000);
-  setInterval(() => { checkDailyTasks().catch(() => {}); }, 20 * 60 * 1000);
+  setTimeout(() => { dailyTasksJob.run().catch(() => {}); }, 3 * 60 * 1000);
+  setInterval(() => { dailyTasksJob.run().catch(() => {}); }, 20 * 60 * 1000);
 }
 
-// ════════════════════════════════════════════
 // KUNLIK O'Z-O'ZINI HISOBOT — kun oxirida (mahalliy soat) bugun mustaqil
-// bajarilgan barcha ishlar (ovozli buyruqlar, kunlik vazifalar, jonli
-// suhbatdagi parallel task'lar) qisqa xulosa qilinib, Telegram+ovoz orqali
+// bajarilgan barcha ishlar qisqa xulosa qilinib, Telegram+ovoz orqali
 // aytiladi. To'liq avtonom ruxsat berilgani uchun — nazorat o'rniga
 // shaffoflikni saqlash uchun.
-// ════════════════════════════════════════════
 const DAILY_REPORT_ENABLED = (env('DAILY_REPORT_ENABLED') || 'true') !== 'false';
 const DAILY_REPORT_HOUR = parseInt(env('DAILY_REPORT_HOUR'), 10) || 22; // mahalliy soat
-const DAILY_REPORT_STATE_FILE = path.join(PROJECT_DIR, '.daily-report-state.json');
-const REPORT_TAGS = ['task', 'daily-task', 'realtime', 'voice', 'autonomous'];
-
-function loadDailyReportState() {
-  let s;
-  try { s = JSON.parse(fs.readFileSync(DAILY_REPORT_STATE_FILE, 'utf8')); } catch (e) { s = null; }
-  if (!s || s.date !== todayStr()) s = { date: todayStr(), sent: false };
-  return s;
-}
-function saveDailyReportState(s) {
-  try { fs.writeFileSync(DAILY_REPORT_STATE_FILE, JSON.stringify(s)); } catch (e) {}
-}
-
-async function runDailySelfReport() {
-  const state = loadDailyReportState();
-  if (state.sent) return;
-  if (new Date().getHours() < DAILY_REPORT_HOUR) return;
-
-  let mem;
-  try { mem = require('./skills/memory'); } catch (e) { return; }
-  const filePath = path.join(mem.MEMORY_DIR, todayStr() + '.md');
-  if (!fs.existsSync(filePath)) { state.sent = true; saveDailyReportState(state); return; }
-
-  const content = fs.readFileSync(filePath, 'utf8');
-  const blocks = content.split(/^---$/m).map(b => b.trim()).filter(Boolean);
-  const relevant = blocks.filter(b => REPORT_TAGS.some(t => b.includes('#' + t)));
-
-  state.sent = true; // natijadan qat'iy nazar bugun qayta yubormaymiz
-  saveDailyReportState(state);
-  if (!relevant.length) return; // bugun mustaqil ish bo'lmagan bo'lsa, hisobot yubormaymiz
-
-  const prompt = 'Bugun quyidagi ishlar (ovozli buyruqlar, mustaqil bajarilgan vazifalar) amalga oshirildi:\n\n' +
-    relevant.join('\n\n').slice(0, 8000) +
-    '\n\nFoydalanuvchi uchun QISQA (3-6 gap), oddiy tilda, texnik tafsilotsiz kunlik hisobot yozing — nima qilindi, ' +
-    'muhim natijalar. Kirish/xulosa jumlasi shart emas, to\'g\'ridan-to\'g\'ri mazmun bilan boshlang.';
-  const reply = await askAgent(prompt, 'agent:main:jarvis-daily-report-' + todayStr());
-  if (!reply) return;
-
-  ok('📊 Kunlik hisobot tayyor');
-  sendTelegram('📊 Bugungi hisobot:\n\n' + reply);
-  try { writeMemory('Kunlik hisobot', reply, ['report']); } catch (e) {}
-  const audio = await ttsToFile(reply.substring(0, 400));
-  if (audio) { try { execSync('afplay "' + audio + '"'); } catch (e) {} }
-}
-
+const dailyReportJob = createDailyReportJob({
+  projectDir: PROJECT_DIR, localDateStr, reportHour: DAILY_REPORT_HOUR, askAgent, sendTelegram, writeMemory, ttsToFile
+});
 if (DAILY_REPORT_ENABLED) {
   inf('Kunlik hisobot rejimi yoqilgan — har kuni soat ' + DAILY_REPORT_HOUR + ':00dan keyin');
-  setInterval(() => { runDailySelfReport().catch(() => {}); }, 15 * 60 * 1000);
+  setInterval(() => { dailyReportJob.run().catch(() => {}); }, 15 * 60 * 1000);
 }
 
-// ════════════════════════════════════════════
 // LOYIHALAR — ko'p bosqichli, kun davomida ketma-ket bajariladigan
-// avtonom ishlar (skills/projects). Oddiy kunlik vazifalardan farqi:
-// bosqichlar BITTA umumiy session'da (bir-biridan xabardor holda)
-// ketma-ket bajariladi, va loyiha tugagach ALOHIDA, konsolidatsiyalangan
-// yakuniy hisobot beriladi (har bosqich uchun alohida emas).
-// ════════════════════════════════════════════
+// avtonom ishlar (skills/projects). Bosqichlar BITTA umumiy session'da
+// ketma-ket bajariladi, loyiha tugagach ALOHIDA yakuniy hisobot beriladi.
 const PROJECTS_ENABLED = (env('PROJECTS_ENABLED') || 'true') !== 'false';
-
 const PROJECT_STEP_MAX_ATTEMPTS = parseInt(env('PROJECT_STEP_MAX_ATTEMPTS'), 10) || 2;
-
-async function checkProjects() {
-  let projMod;
-  try { projMod = require('./skills/projects'); } catch (e) { return; }
-  const active = projMod.activeStep();
-  if (!active) return;
-
-  const missionId = stableId('project-step', active.slug + ':' + active.step);
-  const execution = beginSingleStepMission(active.step, {
-    id: missionId, source: 'project', idempotencyKey: 'project:' + active.slug + ':' + active.step,
-    maxAttempts: PROJECT_STEP_MAX_ATTEMPTS, metadata: { project: active.project, slug: active.slug }
-  });
-  if (!execution.step) return;
-  const sessionKey = 'agent:main:jarvis-project-' + active.slug;
-  const prompt = 'Loyiha "' + active.project + '" ning navbatdagi bosqichi (' + (active.doneSteps + 1) + '/' + active.totalSteps + '): "' +
-    active.step + '". Buni bajaring va natijani qisqa ayting. (Oldingi bosqichlar shu sessiyada allaqachon bajarilgan — ' +
-    'ularning kontekstidan foydalaning.)';
-  const reply = await askAgent(prompt, sessionKey);
-  if (!reply) {
-    missions.failStep(missionId, execution.step.id, 'Agent bo‘sh natija qaytardi');
-    return;
-  }
-
-  // Agent xato/cheklov sabab vazifani bajarmaganini aniq aytsa, uni
-  // muvaffaqiyatli bosqich sifatida yopib yubormaymiz. Cheksiz loopga
-  // tushmaslik uchun urinishlar persistent hisoblanadi.
-  const stepIncomplete = /\b(xato|bajarilmadi|uddalay olmadim|muvaffaqiyatsiz|permission denied|ruxsat yo.q)\b/i.test(reply);
-  if (stepIncomplete) {
-    const failed = missions.failStep(missionId, execution.step.id, reply);
-    const attempts = failed.attempts;
-    wrn('Loyiha bosqichi bajarilmadi (' + attempts + '/' + PROJECT_STEP_MAX_ATTEMPTS + '): ' + active.step);
-    return; // Hech qachon chala bosqichni completeStep() orqali keyingisiga o'tkazmaymiz.
-  } else {
-    const verified = recordMissionResult(missionId, execution.step.id, reply, { type: 'agent-result', value: reply });
-    if (!verified || verified.status !== 'verified') return;
-  }
-
-  const result = projMod.completeStep(active.slug, active.step);
-  if (result.status !== 'ok') return;
-
-  ok('📁 Loyiha bosqichi bajarildi: ' + active.project + ' (' + (active.doneSteps + 1) + '/' + active.totalSteps + ')');
-  try {
-    writeMemory('Loyiha bosqichi: ' + active.project, 'Bosqich: ' + active.step + '\nNatija: ' + reply.substring(0, 500),
-      ['project', 'autonomous', 'verified']);
-  } catch (e) {}
-
-  if (result.complete) {
-    // Barcha bosqichlar tugadi — yakuniy, konsolidatsiyalangan hisobot
-    const reportPrompt = 'Loyiha "' + active.project + '" barcha bosqichlari (' + result.allSteps.join(', ') +
-      ') muvaffaqiyatli bajarildi (shu sessiyada). Foydalanuvchi uchun QISQA (3-5 gap) yakuniy hisobot yozing — ' +
-      'nima qilindi, muhim natijalar. Texnik tafsilotsiz, oddiy tilda.';
-    const finalReport = await askAgent(reportPrompt, sessionKey);
-    if (finalReport) {
-      ok('📁 Loyiha yakunlandi: ' + active.project);
-      sendTelegram('📁 Loyiha yakunlandi — "' + active.project + '":\n\n' + finalReport);
-      try { writeMemory('Loyiha yakunlandi: ' + active.project, finalReport, ['project', 'report', 'autonomous']); } catch (e) {}
-    }
-  }
-}
-
+const projectsJob = createProjectsJob({
+  missions, stableId, beginSingleStepMission, recordMissionResult, stepMaxAttempts: PROJECT_STEP_MAX_ATTEMPTS, askAgent, sendTelegram, writeMemory
+});
 if (PROJECTS_ENABLED) {
   inf('Ko\'p bosqichli loyihalar rejimi yoqilgan');
-  setTimeout(() => { checkProjects().catch(() => {}); }, 4 * 60 * 1000);
-  setInterval(() => { checkProjects().catch(() => {}); }, 15 * 60 * 1000);
+  setTimeout(() => { projectsJob.run().catch(() => {}); }, 4 * 60 * 1000);
+  setInterval(() => { projectsJob.run().catch(() => {}); }, 15 * 60 * 1000);
 }
 
-// ════════════════════════════════════════════
 // TEZ AMALLARNI O'RGANISH (fast-actions) — vaqti-vaqti bilan Obsidian
-// xotirasidagi so'nggi kunlar vazifalarini (skills/memory'ga
-// 'Vazifa boshlandi'/'Vazifa yakunlandi' sifatida yozilgan, qarang:
-// startRealtimeSession()) ko'rib, "shunchaki biror dastur ochish"
-// turidagi, hali fast-actions ro'yxatida yo'q so'rovlarni topadi va
-// avtomatik qo'shadi (faqat "ilova ochish" turi — xavfsiz, chunki
-// noto'g'ri/mavjud bo'lmagan nom shunchaki xato qaytaradi, boshqa
-// hech qanday amal bajarilmaydi). Shu bilan tizim vaqt o'tishi bilan
-// tobora ko'proq amalni to'liq agent ishga tushirmasdan, TEZ bajaradigan
-// bo'lib boradi — foydalanuvchi hech narsa qilmasa ham.
-// ════════════════════════════════════════════
+// xotirasidagi so'nggi kunlar vazifalarini ko'rib, "shunchaki biror
+// dastur ochish" turidagi, hali fast-actions ro'yxatida yo'q so'rovlarni
+// topadi va avtomatik qo'shadi.
 const FAST_ACTION_LEARN_ENABLED = (env('FAST_ACTION_LEARN_ENABLED') || 'true') !== 'false';
 const FAST_ACTION_LEARN_INTERVAL_MIN = parseInt(env('FAST_ACTION_LEARN_INTERVAL_MIN'), 10) || 720; // 12 soatda bir
-const FAST_ACTION_LEARN_STATE_FILE = path.join(PROJECT_DIR, '.fast-action-learn-state.json');
-
-function loadFastActionLearnState() {
-  try { return JSON.parse(fs.readFileSync(FAST_ACTION_LEARN_STATE_FILE, 'utf8')); } catch (e) { return { lastCheck: 0 }; }
-}
-function saveFastActionLearnState(s) {
-  try { fs.writeFileSync(FAST_ACTION_LEARN_STATE_FILE, JSON.stringify(s)); } catch (e) {}
-}
-
-async function checkFastActionLearning() {
-  let mem, fa;
-  try { mem = require('./skills/memory'); fa = require('./skills/fast-actions'); } catch (e) { return; }
-  const state = loadFastActionLearnState();
-
-  // So'nggi 3 kunlik xotiradan vazifa tavsiflarini yig'amiz.
-  const descriptions = [];
-  for (let i = 0; i < 3; i++) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    const fp = path.join(mem.MEMORY_DIR, localDateStr(d) + '.md');
-    if (!fs.existsSync(fp)) continue;
-    const content = fs.readFileSync(fp, 'utf8');
-    const blocks = content.split(/^---$/m);
-    for (const b of blocks) {
-      const m = b.match(/^## \d{2}:\d{2} — Vazifa (boshlandi|yakunlandi)\n([\s\S]{0,300})/m);
-      if (m) descriptions.push(m[2].trim());
-    }
-  }
-  state.lastCheck = Date.now();
-  saveFastActionLearnState(state);
-  if (descriptions.length < 3) return; // yetarli tarix yo'q, keyingi safar qayta ko'radi
-
-  let existingIds;
-  try { existingIds = fa.actionIds().join(', '); } catch (e) { return; }
-
-  const prompt = 'Quyidagi ro\'yxat — foydalanuvchi so\'nggi kunlarda ovozli buyruq bilan so\'ragan vazifalar tavsifi:\n\n' +
-    descriptions.slice(-60).map(d => '- ' + d).join('\n') +
-    '\n\nHozir tizimda quyidagi TEZ AMALLAR (fast actions) allaqachon mavjud (id ro\'yxati): ' + existingIds +
-    '\n\nYuqoridagi vazifalar orasidan, FAQAT "biror kompyuter dasturi/ilovasini shunchaki OCHISH" turidagi ' +
-    '(boshqa hech narsa qilmasdan, murakkab bo\'lmagan) so\'rovlarni top, va ular orasida HALI fast actions ' +
-    'ro\'yxatida YO\'Q bo\'lgan, ANIQ ilova nomlarini JSON massiv sifatida qaytar (masalan ["Figma","Discord"]). ' +
-    'Agar mos keluvchi yangi ilova topilmasa, bo\'sh massiv qaytar: []. Faqat JSON massiv yoz, boshqa hech narsa qo\'shma.';
-
-  const reply = await askAgent(prompt, 'agent:main:jarvis-fast-action-learn');
-  if (!reply) return;
-  let apps = [];
-  try {
-    const jsonMatch = reply.match(/\[[\s\S]*\]/);
-    if (jsonMatch) apps = JSON.parse(jsonMatch[0]);
-  } catch (e) { return; }
-  if (!Array.isArray(apps) || !apps.length) return;
-
-  const added = [];
-  for (const app of apps.slice(0, 5)) { // bir safarda ko'pi bilan 5 ta — sekin-asta, nazorat ostida o'sish
-    if (typeof app !== 'string' || !app.trim()) continue;
-    const r = fa.learnOpenAppAction(app.trim());
-    if (r.status === 'ok') added.push(app.trim());
-  }
-  if (added.length) {
-    ok('⚡ Yangi tez amallar o\'rganildi: ' + added.join(', '));
-    sendTelegram('⚡ So\'rovlaringiz asosida yangi tez amallar qo\'shdim: ' + added.join(', ') + ' — endi bular tezroq bajariladi.');
-    try { writeMemory('Tez amal o\'rganildi', 'Avtomatik qo\'shilgan yangi fast-action(lar): ' + added.join(', '), ['fast-action', 'autonomous']); } catch (e) {}
-  }
-}
-
+const fastActionLearnJob = createFastActionLearnJob({ projectDir: PROJECT_DIR, localDateStr, askAgent, sendTelegram, writeMemory });
 if (FAST_ACTION_LEARN_ENABLED) {
   inf('Tez amallarni o\'rganish yoqilgan — har ' + FAST_ACTION_LEARN_INTERVAL_MIN + ' daqiqada tekshiradi');
-  setTimeout(() => { checkFastActionLearning().catch(() => {}); }, 10 * 60 * 1000);
-  setInterval(() => { checkFastActionLearning().catch(() => {}); }, FAST_ACTION_LEARN_INTERVAL_MIN * 60 * 1000);
+  setTimeout(() => { fastActionLearnJob.run().catch(() => {}); }, 10 * 60 * 1000);
+  setInterval(() => { fastActionLearnJob.run().catch(() => {}); }, FAST_ACTION_LEARN_INTERVAL_MIN * 60 * 1000);
 }
 
-// ════════════════════════════════════════════
 // XOTIRA INDEKSINI FONDA YANGILASH — semantik (ma'no bo'yicha) qidiruv
 // butun tarix bo'ylab ishlashi uchun har bir yangi xotira bloki
-// indekslanishi kerak. Avval bu indekslash QIDIRUV ichida bajarilardi,
-// ya'ni har bir qidiruv yangi bloklarni indekslashni kutardi — real
-// o'lchovda 125 SONIYA (qidiruvning o'zi esa atigi 611 ms). Endi u
-// shu yerda, fonda, muntazam bajariladi; qidiruv esa doim tayyor
-// indeksdan o'qib, bir zumda javob beradi.
-// ════════════════════════════════════════════
+// indekslanishi kerak; bu fonda, muntazam bajariladi, qidiruv esa doim
+// tayyor indeksdan o'qib, bir zumda javob beradi.
 const EMBED_INDEX_ENABLED = (env('EMBED_INDEX_ENABLED') || 'true') !== 'false';
 const EMBED_INDEX_INTERVAL_MIN = parseInt(env('EMBED_INDEX_INTERVAL_MIN'), 10) || 15;
-let _embedIndexRunning = false;
-
-async function refreshEmbedIndex() {
-  if (_embedIndexRunning) return; // oldingisi hali tugamagan bo'lsa, ustma-ust ishga tushmasin
-  _embedIndexRunning = true;
-  try {
-    const mem = require('./skills/memory');
-    const t0 = Date.now();
-    const r = await mem.updateEmbedIndex();
-    if (r && r.added > 0) inf('🧠 Xotira indeksi yangilandi: +' + r.added + ' (jami ' + r.total + ', ' + Math.round((Date.now() - t0) / 1000) + 's)');
-  } catch (e) { wrn('Xotira indeksi yangilanmadi: ' + (e.message || e)); }
-  finally { _embedIndexRunning = false; }
-}
-
+const embedIndexJob = createEmbedIndexJob();
 if (EMBED_INDEX_ENABLED) {
   inf('Xotira indeksi fonda yangilanadi — har ' + EMBED_INDEX_INTERVAL_MIN + ' daqiqada');
-  setTimeout(() => { refreshEmbedIndex(); }, 60 * 1000);
-  setInterval(() => { refreshEmbedIndex(); }, EMBED_INDEX_INTERVAL_MIN * 60 * 1000);
+  setTimeout(() => { embedIndexJob.run(); }, 60 * 1000);
+  setInterval(() => { embedIndexJob.run(); }, EMBED_INDEX_INTERVAL_MIN * 60 * 1000);
 }
 
 function adaptGain(energy) {
