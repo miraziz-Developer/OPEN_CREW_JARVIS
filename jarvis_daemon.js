@@ -33,6 +33,13 @@ const { ProactivePolicy } = require('./core/proactive-policy');
 const { ProviderPool } = require('./core/skill-platform');
 const { createSkillPlatform } = require('./skills/platform');
 const { loadCalibration, resolveCalibratedNumber } = require('./core/audio-calibration');
+const { ok, er, inf, wrn } = require('./core/log');
+const { makeWavHeader, pcmToWavBuffer, getEnergy, getPeakAmplitude } = require('./core/audio-utils');
+const { RollingBuffer } = require('./core/rolling-buffer');
+const { HotwordDetector } = require('./core/hotword-detector');
+const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
+const { ClapDetector } = require('./core/clap-detector');
+const { STTPool } = require('./core/stt-pool');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
@@ -139,18 +146,11 @@ function rtTaskCompleted(callId, result) {
 const CLAP_TRIGGER_ENABLED = (env('CLAP_TRIGGER_ENABLED') || 'false') === 'true';
 const CLAP_SPIKE_RATIO = parseFloat(env('CLAP_SPIKE_RATIO')) || 4;     // spike, tinch fondan necha barobar baland
 const CLAP_ABS_FLOOR = parseFloat(env('CLAP_ABS_FLOOR')) || 250;       // mutlaq minimal spike (juda tinch xonada ham)
-const CLAP_QUIET_RATIO = 0.4;      // spike'dan oldingi step shundan past bo'lishi kerak
-const CLAP_MIN_GAP_MS = 120;       // ikki qarsak orasidagi eng qisqa oraliq
-const CLAP_MAX_GAP_MS = 900;       // ikki qarsak orasidagi eng uzoq oraliq (tabiiy ritmga biroz kengroq joy)
+// Qolgan qarsak-vaqt konstantalari (quiet ratio, min/max gap) core/clap-detector.js
+// ichida saqlanadi — o'sha modulning o'z default qiymatlari shu yerdagi eski
+// qiymatlar bilan bir xil.
 
 let _gain = 2.0;  // START LOW — adapt, don't clip
-
-// ── Colors ──────────────────────────────────────────────
-const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', B = '\x1b[36m', X = '\x1b[0m';
-function ok(m)  { console.log(G + '✅ ' + m + X); }
-function er(m)  { console.error(R + '❌ ' + m + X); }
-function inf(m) { console.log(B + 'ℹ️  ' + m + X); }
-function wrn(m) { console.log(Y + '⚠️  ' + m + X); }
 
 inf('JARVIS v5.1 BLAZING — 16 kHz stream | local wake-word | STT fallback');
 
@@ -805,131 +805,6 @@ if (EMBED_INDEX_ENABLED) {
   setInterval(() => { refreshEmbedIndex(); }, EMBED_INDEX_INTERVAL_MIN * 60 * 1000);
 }
 
-// ════════════════════════════════════════════
-// STT PROMISE POOL (pre-spawned children)
-// ════════════════════════════════════════════
-class STTPool {
-  constructor(size = 2) {
-    this.size = size;
-    this.pool = [];
-    this.env = { ...process.env, AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION') };
-    for (let i = 0; i < size; i++) this._spawn(i);
-  }
-
-  _spawn(idx) {
-    const proc = spawn('node', ['skills/azure-stt/index.js'], { cwd: PROJECT_DIR, env: this.env, stdio: ['pipe', 'pipe', 'pipe'] });
-    proc._busy = false;
-    proc._idx = idx;
-    proc._buffer = '';
-    // stdout listener recognize() ichida qo'shiladi — bu yerda emas
-    // (ikkalasi baravar bo'lsa har bir chunk ikki marta buffer'ga
-    // qo'shilib, JSON'ni buzib, timeout'gacha "natija topilmadi" bergan)
-    proc.stderr.on('data', () => {});
-    proc.stdin.on('error', () => {}); // EPIPE qo'lga olinmasa butun daemon'ni yiqitadi
-    proc.on('error', () => { this._respawn(idx); });
-    proc.on('exit', () => { this._respawn(idx); });
-    this.pool[idx] = proc;
-  }
-
-  _respawn(idx) {
-    try { this.pool[idx]?.kill?.(); } catch(e){}
-    this._spawn(idx);
-  }
-
-  async recognize(audioWavBuffer, locale = 'uz-UZ') {
-    // find idle child
-    let child = this.pool.find(p => !p._busy);
-    if (!child) {
-      // all busy, just take the one with most data
-      child = this.pool.reduce((a, b) => (a._buffer.length < b._buffer.length ? a : b));
-      child._buffer = '';
-    }
-    child._busy = true;
-    child._buffer = '';
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        child.stdout.off('data', onData); // aks holda listener to'planib, keyingi chaqiruvlarni buzadi
-        child._busy = false;
-        resolve({ status: 'error', text: '', reason: 'timeout' });
-      }, 12000);
-      const onData = (d) => {
-        child._buffer += d;
-        const lines = child._buffer.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          try {
-            const parsed = JSON.parse(line);
-            if (parsed.status || parsed.error) {
-              clearTimeout(timeout);
-              child.stdout.off('data', onData);
-              child._busy = false;
-              resolve(parsed.status === 'ok' ? parsed : { status: 'error', text: '', reason: parsed.error || 'unknown' });
-              return;
-            }
-          } catch(e) {}
-        }
-      };
-      child.stdout.on('data', onData);
-      child.stdin.write(JSON.stringify({ audioBase64: audioWavBuffer.toString('base64'), locale }) + '\n');
-    });
-  }
-
-  killAll() { this.pool.forEach(p => { try { p.kill('SIGKILL'); } catch(e){} }); }
-}
-
-// ════════════════════════════════════════════
-// AUDIO UTILITIES (buffer-based, zero disk)
-// ════════════════════════════════════════════
-function makeWavHeader(dataLen, sampleRate = 16000, channels = 1, bits = 16) {
-  const blockAlign = channels * bits / 8;
-  const byteRate = sampleRate * blockAlign;
-  const buf = Buffer.alloc(44);
-  buf.write('RIFF', 0);
-  buf.writeUInt32LE(36 + dataLen, 4);
-  buf.write('WAVE', 8);
-  buf.write('fmt ', 12);
-  buf.writeUInt32LE(16, 16);        // subchunk1Size
-  buf.writeUInt16LE(1, 20);         // audioFormat PCM
-  buf.writeUInt16LE(channels, 22);
-  buf.writeUInt32LE(sampleRate, 24);
-  buf.writeUInt32LE(byteRate, 28);
-  buf.writeUInt16LE(blockAlign, 32);
-  buf.writeUInt16LE(bits, 34);
-  buf.write('data', 36);
-  buf.writeUInt32LE(dataLen, 40);
-  return buf;
-}
-
-function pcmToWavBuffer(pcm16leBuffer) {
-  return Buffer.concat([makeWavHeader(pcm16leBuffer.length, 16000, 1, 16), pcm16leBuffer]);
-}
-
-function getEnergy(pcm16leBuffer) {
-  if (pcm16leBuffer.length < 2) return 0;
-  const samples = pcm16leBuffer.length / 2;
-  let sum = 0;
-  for (let i = 0; i < pcm16leBuffer.length; i += 2) {
-    const v = pcm16leBuffer.readInt16LE(i);
-    sum += v * v;
-  }
-  return Math.sqrt(sum / samples);
-}
-
-// Qarsak — juda qisqa (bir necha millisekund) zarba. getEnergy() (RMS)
-// butun 200ms oynani o'rtachalashtiradi, shuning uchun qisqa zarba tinch
-// fon bilan aralashib, "yumshab" ketadi va chegaradan pastda qolib
-// ketishi mumkin edi. Peak (eng baland cho'qqi) qarsakni yo'qotmaydi.
-function getPeakAmplitude(pcm16leBuffer) {
-  let peak = 0;
-  for (let i = 0; i < pcm16leBuffer.length; i += 2) {
-    const v = Math.abs(pcm16leBuffer.readInt16LE(i));
-    if (v > peak) peak = v;
-  }
-  return peak;
-}
-
 function adaptGain(energy) {
   if (energy < ENERGY_MIN_STT) _gain = Math.min(_gain * 1.2, GAIN_MAX);
   else if (energy > ENERGY_TARGET * 2.5) _gain = Math.max(_gain * 0.8, GAIN_MIN);
@@ -946,180 +821,6 @@ function applyGain(pcm16, gain) {
     pcm16.writeInt16LE(nv, i);
   }
   return pcm16;
-}
-
-// ════════════════════════════════════════════
-// ROLLING PCM BUFFER (overlap chunking)
-// ════════════════════════════════════════════
-class RollingBuffer {
-  constructor(maxDurationMs = 5000) {
-    this.maxSamples = (maxDurationMs * SAMPLE_RATE) / 1000;
-    this.buf = Buffer.alloc(0);
-  }
-
-  push(chunk) { this.buf = Buffer.concat([this.buf, chunk]).slice(-this.maxSamples * 2); }
-  get samples() { return Math.floor(this.buf.length / 2); }
-
-  // Extract last N milliseconds as PCM
-  sliceLast(ms) {
-    const bytes = (ms * SAMPLE_RATE * 2) / 1000;
-    return this.buf.slice(-bytes);
-  }
-
-  clear() { this.buf = Buffer.alloc(0); }
-}
-
-// ════════════════════════════════════════════
-// PORCUPINE HOTWORD (frame-level, real-time)
-// ════════════════════════════════════════════
-class HotwordDetector {
-  constructor(accessKey, PorcupineClass, keywordPath) {
-    this.porcupine = new PorcupineClass(accessKey, [keywordPath], [0.7]);
-    this.frameLength = this.porcupine.frameLength;  // e.g. 512 samples
-    this.sampleRate = this.porcupine.sampleRate;    // 16000
-    this.remainder = Buffer.alloc(0);
-  }
-
-  // Process new PCM chunk. Returns true once when hotword detected.
-  processChunk(pcm16Buffer) {
-    const pcm = Buffer.concat([this.remainder, pcm16Buffer]);
-    const frameLen = this.frameLength * 2; // bytes per frame
-    let detected = false;
-    for (let i = 0; i + frameLen <= pcm.length; i += frameLen) {
-      const frame = new Int16Array(this.frameLength);
-      for (let j = 0; j < this.frameLength; j++) {
-        frame[j] = pcm.readInt16LE(i + j * 2);
-      }
-      const keywordIndex = this.porcupine.process(frame);
-      if (keywordIndex >= 0) { detected = true; }
-    }
-    this.remainder = pcm.slice(Math.floor(pcm.length / frameLen) * frameLen);
-    return detected;
-  }
-
-  release() { this.porcupine.release(); }
-}
-
-// Bepul va to'liq lokal hey_jarvis modeli. Python worker ishlamay qolsa
-// daemon qulamaydi: Azure STT backup hotword ishlashda davom etadi.
-class OpenWakeWordDetector {
-  constructor() {
-    this.detected = false;
-    this.ready = false;
-    this.closed = false;
-    this.lineBuffer = '';
-    this.worker = spawn(OPENWAKEWORD_PYTHON, ['-u', path.join(PROJECT_DIR, 'scripts', 'openwakeword-worker.py')], {
-      cwd: PROJECT_DIR,
-      env: {
-        ...process.env,
-        JARVIS_OWNER_PID: String(process.pid),
-        OPENWAKEWORD_THRESHOLD: env('OPENWAKEWORD_THRESHOLD') || '0.38',
-        OPENWAKEWORD_STRONG_THRESHOLD: env('OPENWAKEWORD_STRONG_THRESHOLD') || '0.55'
-      },
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    this.worker.stdout.on('data', data => this._handleOutput(data.toString()));
-    this.worker.stderr.on('data', data => {
-      const text = data.toString().trim();
-      if (text) wrn('openWakeWord: ' + text.split('\n').pop());
-    });
-    this.worker.on('error', error => {
-      this.closed = true;
-      wrn('openWakeWord worker ishga tushmadi: ' + error.message);
-    });
-    this.worker.on('close', code => {
-      this.closed = true;
-      this.ready = false;
-      if (code !== 0) wrn('openWakeWord worker to\'xtadi (code=' + code + ') — STT fallback faol');
-    });
-  }
-
-  _handleOutput(text) {
-    this.lineBuffer += text;
-    const lines = this.lineBuffer.split('\n');
-    this.lineBuffer = lines.pop();
-    for (const line of lines) {
-      if (line === 'READY') {
-        this.ready = true;
-        ok('openWakeWord "hey Jarvis" modeli tayyor (lokal, bepul)');
-      } else if (line.startsWith('DETECT ')) {
-        this.detected = true;
-        inf('openWakeWord score=' + line.slice(7));
-      } else if (line.startsWith('SCORE ')) {
-        inf('openWakeWord candidate score=' + line.slice(6));
-      } else if (line.startsWith('ERROR ')) {
-        wrn('openWakeWord: ' + line.slice(6));
-      }
-    }
-  }
-
-  processChunk(pcm16Buffer) {
-    if (!this.closed && this.worker.stdin.writable && this.worker.stdin.writableLength < SAMPLE_RATE * 2) {
-      this.worker.stdin.write(pcm16Buffer);
-    }
-    const result = this.detected;
-    this.detected = false;
-    return result;
-  }
-
-  release() {
-    this.closed = true;
-    try { this.worker.stdin.end(); } catch (e) {}
-    try { this.worker.kill(); } catch (e) {}
-  }
-}
-
-// ════════════════════════════════════════════
-// IKKI MARTA QARSAK TRIGGER (ovozsiz chaqirish)
-// Har step'da hisoblangan xom energiyani kuzatadi: tinch → keskin spike
-// ikki marta ketma-ket bo'lsa — hotword bilan bir xil trigger ishlaydi.
-// Yangi audio pipeline shart emas, mavjud getEnergy() qiymatidan foydalanadi.
-// ════════════════════════════════════════════
-class ClapDetector {
-  constructor() {
-    this.prevEnergy = 0;
-    this.baseline = 40;     // tinch fon energiyasi — sekin adaptatsiya qilinadi
-    this.threshold = CLAP_ABS_FLOOR;
-    this.firstClapAt = 0;
-    this.recentLoud = [];   // so'nggi steplar "baland bo'ldimi" tarixi — uzluksiz gapirishni sezish uchun
-  }
-
-  // Har step'da chaqiriladi. Ikkinchi qarsak aniqlansa true qaytaradi.
-  feedEnergy(energy, now) {
-    // Baseline faqat tinch paytlarda (spike emasda) sekin yangilanadi,
-    // shunda turli mikrofon sezgirligi/xona shovqiniga o'zi moslashadi.
-    if (energy < this.baseline * 2.5) this.baseline = this.baseline * 0.95 + energy * 0.05;
-    this.threshold = Math.max(CLAP_ABS_FLOOR, this.baseline * CLAP_SPIKE_RATIO);
-    const quietCutoff = this.threshold * CLAP_QUIET_RATIO;
-
-    const isTransient = energy > this.threshold && this.prevEnergy < quietCutoff;
-    this.prevEnergy = energy;
-
-    // Uzluksiz gapirishda ham ayrim bo'g'inlar orasida qisqa "tinch"
-    // moment bo'lib, tasodifan "tinch->spike" ko'rinishini hosil qilishi
-    // mumkin (ayniqsa peak asosidagi o'lchovda). Shuni ajratish uchun:
-    // so'nggi ~1.2s (6 step) ichida necha marta baland bo'lganini
-    // kuzatamiz — agar ko'p bo'lsa (uzluksiz faol tovush, ya'ni gapirish),
-    // bu vaqt oralig'ida yangi qarsak-trigger qabul qilinmaydi. Haqiqiy
-    // qarsak esa aksincha, tinch fonda YAKKA holda sodir bo'ladi.
-    this.recentLoud.push(energy > quietCutoff);
-    if (this.recentLoud.length > 6) this.recentLoud.shift();
-    const busyLikelySpeech = this.recentLoud.filter(Boolean).length >= 4;
-
-    if (!isTransient || busyLikelySpeech) {
-      if (this.firstClapAt && (now - this.firstClapAt) > CLAP_MAX_GAP_MS) this.firstClapAt = 0;
-      return false;
-    }
-
-    if (!this.firstClapAt) {
-      this.firstClapAt = now;
-      return false;
-    }
-
-    const gap = now - this.firstClapAt;
-    this.firstClapAt = 0;
-    return gap >= CLAP_MIN_GAP_MS && gap <= CLAP_MAX_GAP_MS;
-  }
 }
 
 // ════════════════════════════════════════════
@@ -1158,10 +859,10 @@ function startMicProcess() {
 }
 
 async function mainLoop() {
-  _sttPool = new STTPool(2);
-  _clap = CLAP_TRIGGER_ENABLED ? new ClapDetector() : null;
+  _sttPool = new STTPool({ size: 2, projectDir: PROJECT_DIR, env });
+  _clap = CLAP_TRIGGER_ENABLED ? new ClapDetector({ absFloor: CLAP_ABS_FLOOR, spikeRatio: CLAP_SPIKE_RATIO }) : null;
   if (OPENWAKEWORD_ENABLED && fs.existsSync(OPENWAKEWORD_PYTHON)) {
-    _detector = new OpenWakeWordDetector();
+    _detector = new OpenWakeWordDetector({ projectDir: PROJECT_DIR, pythonPath: OPENWAKEWORD_PYTHON, env, sampleRate: SAMPLE_RATE });
   } else if (PICOVOICE_ACCESS_KEY && PICOVOICE_ACCESS_KEY.length > 10) {
     try {
       const { Porcupine, BuiltinKeyword, getBuiltinKeywordPath } = require('@picovoice/porcupine-node');
