@@ -1373,6 +1373,24 @@ async function mainLoop() {
     });
     session.on('telemetry', (type, data) => {
       flightRecorder.event(type, data);
+      if (type === 'stt.authoritative.completed' && Number.isFinite(data?.durationMs)) {
+        runtime.observeLatency('authoritative-stt', data.durationMs);
+      }
+      if (type === 'stt.selection' && Number.isFinite(data?.durationMs)) {
+        runtime.observeLatency('stt-selection', data.durationMs);
+        const recovered = data.source !== 'authoritative';
+        runtime.heartbeat('azure-stt', {
+          status: recovered ? 'degraded' : 'ready',
+          source: data.source,
+          latencyMs: data.durationMs
+        });
+      }
+      if (type === 'stt.recovery') {
+        runtime.heartbeat('azure-stt', { status: 'degraded', recovery: data?.source || 'native-fallback' });
+      }
+      if (type === 'stt.timeout') {
+        runtime.heartbeat('azure-stt', { status: 'error', error: 'authoritative STT timeout' });
+      }
       if (type !== 'assistant.audio.first' || firstAudioObserved) return;
       firstAudioObserved = true;
       const now = Date.now();

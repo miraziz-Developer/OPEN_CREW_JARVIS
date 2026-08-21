@@ -22,6 +22,7 @@ const { DuplexVoiceEngine } = require('../../core/duplex-voice-engine');
 const { PcmPlaybackBuffer } = require('../../core/pcm-playback-buffer');
 const { classifyUserTurn, isRepeatedResponse } = require('../../core/voice-turn-policy');
 const { correctTranscript } = require('../../core/transcript-corrector');
+const { chooseTranscript, authoritativeTimeoutMs } = require('../../core/stt-recovery');
 const { loadCalibration, resolveCalibratedNumber } = require('../../core/audio-calibration');
 const { normalizeUzbekSpeech, voiceStyleInstructions } = require('../../core/uzbek-speech-normalizer');
 
@@ -924,7 +925,9 @@ class RealtimeSession extends EventEmitter {
 
     this.emit('telemetry', 'stt.final', {
       transcript: this.userTranscript,
-      authoritative: Boolean(options.replaceAudioItem)
+      authoritative: Boolean(options.replaceAudioItem),
+      source: options.source || (options.replaceAudioItem ? 'authoritative' : 'native'),
+      sttLatencyMs: options.sttLatencyMs
     });
 
     if (options.replaceAudioItem) {
@@ -1044,7 +1047,7 @@ class RealtimeSession extends EventEmitter {
   _beginAuthoritativeTranscription(turn) {
     // Oldingi turn favqulodda holatda tugamay qolgan bo'lsa, yangi turn uni
     // almashtiradi; timeout stale callback'ni javob yaratishdan saqlaydi.
-    const pending = { id: Symbol('voice-turn'), native: null, result: null, settled: false, timer: null };
+    const pending = { id: Symbol('voice-turn'), native: null, result: null, settled: false, timer: null, startedAt: Date.now() };
     this._pendingAuthoritativeTurn = pending;
     const pcm = Buffer.concat(turn.chunks || []);
     pending.timer = setTimeout(() => {
@@ -1052,16 +1055,22 @@ class RealtimeSession extends EventEmitter {
       if (pending.native?.text) {
         pending.settled = true;
         this._pendingAuthoritativeTurn = null;
-        this._acceptTranscript(pending.native.text);
+        this.emit('telemetry', 'stt.recovery', { source: 'native-timeout', timeoutMs: Date.now() - pending.startedAt });
+        this._acceptTranscript(pending.native.text, { source: 'native-timeout', sttLatencyMs: Date.now() - pending.startedAt });
       } else {
         this.emit('turn_suppressed', 'uzbek-stt-timeout', '');
+        this.emit('telemetry', 'stt.timeout', { timeoutMs: Date.now() - pending.startedAt });
         this._pendingAuthoritativeTurn = null;
       }
-    }, 6000);
+    }, authoritativeTimeoutMs(pcm.length));
 
     Promise.resolve(this._authoritativeTranscribe(pcm)).then(result => {
       if (this._pendingAuthoritativeTurn !== pending || pending.settled) return;
       pending.result = result && typeof result === 'object' ? result : { text: String(result || '') };
+      this.emit('telemetry', 'stt.authoritative.completed', {
+        durationMs: Date.now() - pending.startedAt,
+        confidence: pending.result.confidence
+      });
       this._finalizeAuthoritativeTurn();
     }).catch(() => {
       if (this._pendingAuthoritativeTurn !== pending || pending.settled) return;
@@ -1076,16 +1085,22 @@ class RealtimeSession extends EventEmitter {
     pending.settled = true;
     clearTimeout(pending.timer);
     this._pendingAuthoritativeTurn = null;
-    const authoritative = String(pending.result.text || '').trim();
-    if (authoritative) {
-      this._acceptTranscript(authoritative, {
-        replaceAudioItem: true,
-        itemId: pending.native.itemId
-      });
-    } else {
-      // Azure Speech vaqtincha NoMatch/xato qaytarsa suhbat uzilib qolmaydi.
-      this._acceptTranscript(pending.native.text || '');
-    }
+    const selected = chooseTranscript(pending.result, pending.native.text, {
+      context: { lastAssistant: this._lastAssistantTranscript, mediaMode: this._mediaModeActive }
+    });
+    const latencyMs = Date.now() - pending.startedAt;
+    this.emit('telemetry', 'stt.selection', {
+      source: selected.source,
+      authoritativeScore: selected.authoritative.score,
+      nativeScore: selected.native.score,
+      durationMs: latencyMs
+    });
+    this._acceptTranscript(selected.text, {
+      replaceAudioItem: selected.source === 'authoritative',
+      itemId: pending.native.itemId,
+      source: selected.source,
+      sttLatencyMs: latencyMs
+    });
   }
 
   // Bu funksiya har bir chaqiruv uchun MUSTAQIL ravishda (kutmasdan) chaqiriladi

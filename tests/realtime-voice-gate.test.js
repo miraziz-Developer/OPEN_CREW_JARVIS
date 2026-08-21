@@ -68,6 +68,19 @@ test('authoritative Uzbek STT replaces unsupported Realtime auto-detection', asy
   assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
 });
 
+test('native transcript recovers a turn when authoritative Uzbek STT returns no match', async () => {
+  const session = new RealtimeSession({ transcribeUzbek: async () => ({ text: '', confidence: 0 }) });
+  session.ws = { send: () => {} };
+  session._flushPlayback = () => {};
+  const accepted = [];
+  session.on('user_transcript', text => accepted.push(text));
+  session._beginAuthoritativeTranscription({ chunks: [Buffer.alloc(3200)] });
+  session._pendingAuthoritativeTurn.native = { text: 'Safari och', itemId: 'native-2' };
+  session._finalizeAuthoritativeTurn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(accepted, ['Safari och']);
+});
+
 test('contextual turns are grounded with screen and Obsidian before Realtime speaks', async () => {
   const calls = [];
   const session = new RealtimeSession({
