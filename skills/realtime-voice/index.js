@@ -184,6 +184,32 @@ function recentContextBlock() {
   } catch (e) { return ''; }
 }
 
+// FOYDALANUVCHI PROFILI (Jarvis/Profile/User.md) — daily-synthesis har kuni
+// yangi sana-bo'limi qo'shib boradi (birlashtirmaydi), shuning uchun fayl
+// vaqt o'tishi bilan cheksiz o'sadi. Avval bu profil jonli ovozli suhbatga
+// UMUMAN kirmasdi (haqiqiy topilma) — Jarvis foydalanuvchi haqida o'zi
+// o'rgangan hech narsani suhbatda ishlatmasdi. Endi qo'lda kiritilgan
+// "Odatlar" bo'limi (barqaror) + eng so'nggi bir nechta avtomatik
+// o'rganilgan-naqshlar bo'limi (chegaralangan hajmda) qo'shiladi.
+const PROFILE_SUMMARY_MAX_SECTIONS = 3;
+const PROFILE_SUMMARY_MAX_CHARS = 2000;
+
+function profileSummaryBlock() {
+  try {
+    const profile = require('../memory').readProfile();
+    if (profile.status !== 'ok' || !profile.content) return '';
+    const sections = profile.content.split(/^## /m).slice(1);
+    if (!sections.length) return '';
+    const stable = sections.filter(s => s.trim().startsWith('Odatlar'));
+    const recent = sections.filter(s => !s.trim().startsWith('Odatlar')).slice(-PROFILE_SUMMARY_MAX_SECTIONS);
+    const combined = [...stable, ...recent].map(s => '## ' + s.trim()).join('\n\n').slice(0, PROFILE_SUMMARY_MAX_CHARS);
+    if (!combined) return '';
+    return "\n\nFOYDALANUVCHI PROFILI (vaqt o'tishi bilan o'rganilgan odatlar/naqshlar — bu haqiqiy, " +
+      "tekshirilgan ma'lumot; foydalaning, lekin \"profilimda yozilishicha\" kabi meta-izoh bermang):\n" +
+      combined + '\n\n';
+  } catch (e) { return ''; }
+}
+
 // SOUL.md ning FAQAT ovozli suhbatga taalluqli bo'limlari. Qolganlari
 // (xotira yozish qoidalari, ekran kuzatuv, brauzer/skill ishlatish,
 // kunlik vazifalar) — `run_task` ichidagi TO'LIQ AGENTNING ishi, ovozli
@@ -299,6 +325,7 @@ function loadInstructions() {
     (voiceStyle ? voiceStyle + '\n\n' : '') +
     pronunciationBlock +
     recentContextBlock() +
+    profileSummaryBlock() +
     // Eslatma: avval bu yerda soul.slice(0, 1500) edi — SOUL.md 10.3KB,
     // eng muhim XARAKTER/USLUB bo'limi esa faylning OXIRIDA (~10100-belgida)
     // joylashgan bo'lib chiqdi. Natijada u HECH QACHON real ovozli suhbatga

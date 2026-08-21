@@ -17,7 +17,11 @@ const VAULT = process.env.OBSIDIAN_VAULT
 const MEMORY_DIR = path.join(VAULT, 'Jarvis', 'Memory');
 const PROFILE_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'User.md');
 const CONTEXT_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'SessionContext.md');
-const PRONUNCIATION_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'Pronunciations.md');
+// Diskdagi haqiqiy fayl nomi birlik ("Pronunciation.md") -- bu konstanta
+// avval ko'plik ("Pronunciations.md") deb yozilgan bo'lib, mos kelmagani
+// uchun getPronunciationNotes() doim bo'sh qaytargan va foydalanuvchi
+// tuzatgan barcha talaffuz xatolari amalda hech qachon ishlatilmagan.
+const PRONUNCIATION_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'Pronunciation.md');
 const PRONUNCIATION_MAX = 100;
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
