@@ -443,6 +443,19 @@ async function mainLoop() {
         const result = await _sttPool.recognize(pcmToWavBuffer(pcm16), 'uz-UZ');
         if (!result || result.status !== 'ok') return { text: '', confidence: 0 };
         return { text: result.text || '', confidence: result.confidence || 0 };
+      },
+      // Default RealtimeSession'ning o'z ichki askExpert()'i `openclaw agent`
+      // CLI'ni (run_task bilan bir xil, Kimi-K2.6) spawn qiladi — haqiqiy
+      // kuchli `deep-think` (gpt-5.4, to'g'ridan-to'g'ri Azure Chat
+      // Completions, tool-loop'siz — shu sabab 3-4 baravar tezroq ham)
+      // hech qachon ishlatilmasdi. Shu yerga ulash orqali `ask_expert` va
+      // deterministik expert/grounding yo'li ham haqiqiy kuchli modelga boradi.
+      expertAnswer: async (question, callId, grounding) => {
+        try {
+          return await skillPlatform.invoke('deep-think', 'askExpert', { question, context: grounding });
+        } catch (e) {
+          return "Ekspert bilan bog'lanib bo'lmadi.";
+        }
       }
     });
     const flightRecorder = new VoiceFlightRecorder({ file: VOICE_FLIGHT_RECORDER_FILE });
