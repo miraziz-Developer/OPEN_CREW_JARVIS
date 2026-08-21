@@ -18,7 +18,6 @@ const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const https = require('https');
 const net = require('net');
 
 const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
@@ -30,7 +29,6 @@ const { JarvisRuntime } = require('./core/jarvis-runtime');
 const { VoiceFlightRecorder } = require('./core/voice-flight-recorder');
 const { MissionControl, stableId } = require('./core/mission-control');
 const { ProactivePolicy } = require('./core/proactive-policy');
-const { ProviderPool } = require('./core/skill-platform');
 const { createSkillPlatform } = require('./skills/platform');
 const { loadCalibration, resolveCalibratedNumber } = require('./core/audio-calibration');
 const { ok, er, inf, wrn } = require('./core/log');
@@ -41,6 +39,7 @@ const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
 const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
 const { detectWakeSoundMs, playWakeSound, playSystemSound, playUrgentSound, playTaskDoneSound } = require('./core/voice-sounds');
+const { createAgentBridge } = require('./core/agent-bridge');
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
@@ -174,91 +173,11 @@ const WAKE_SOUND_PATH = path.join(PROJECT_DIR, 'assets', 'wake-sound.mp3');
 const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
 
 // ════════════════════════════════════════════
-// TELEGRAM / HELPERS
+// TELEGRAM / TTS / AGENT BRIDGE (core/agent-bridge.js)
 // ════════════════════════════════════════════
-function sendTelegram(text) {
-  return new Promise((resolve) => {
-    if (!CHAT_ID) { resolve(false); return; }
-    const payload = JSON.stringify({ chat_id: CHAT_ID, text: String(text).substring(0, 4096) });
-    const req = https.request({ hostname: 'api.telegram.org', path: '/bot' + TOKEN + '/sendMessage', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(true)); });
-    req.on('error', () => resolve(false)); req.setTimeout(15000, () => { req.destroy(); resolve(false); });
-    req.write(payload); req.end();
-  });
-}
-function sendTelegramVoice(oggPath) {
-  return new Promise((resolve) => {
-    if (!CHAT_ID || !fs.existsSync(oggPath)) { resolve(false); return; }
-    try { execSync('curl -s -X POST "https://api.telegram.org/bot' + TOKEN + '/sendVoice" -F "chat_id=' + CHAT_ID + '" -F "voice=@' + oggPath + '" > /dev/null 2>&1'); resolve(true); }
-    catch (e) { resolve(false); }
-  });
-}
-
-async function ttsToFile(text) {
-  const cleanText = String(text || '').trim();
-  // Agent ba'zan bo'sh JSON konteyner qaytaradi. Azure bunday matn uchun
-  // yaroqsiz/juda kichik MP3 berishi mumkin va afplay "AudioFileOpen failed"
-  // deb stderr'ni to'ldiradi.
-  if (!cleanText || /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(cleanText)) return null;
-  return new Promise((resolve) => {
-    const tmpIn = '/tmp/tts_' + Date.now() + '.json';
-    fs.writeFileSync(tmpIn, JSON.stringify({ text: cleanText }), 'utf8');
-    const proc = spawn('node', ['skills/azure-tts/index.js'], {
-      cwd: PROJECT_DIR, env: { ...process.env, AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'), AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'uz-UZ-SardorNeural' }
-    });
-    let out = '';
-    proc.stdout.on('data', d => out += d); proc.stderr.on('data', () => {});
-    proc.on('close', (code) => {
-      try { fs.unlinkSync(tmpIn); } catch(e){}
-      try {
-        const audioFile = JSON.parse(out.trim()).audioFile;
-        if (code === 0 && audioFile && fs.statSync(audioFile).size > 512) resolve(audioFile);
-        else resolve(null);
-      } catch(e) { resolve(null); }
-    });
-    fs.createReadStream(tmpIn).pipe(proc.stdin);
-  });
-}
-
-function askOpenClaw(message, sessionKey) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY }, timeout: 15000 });
-    let out = '';
-    let err = '';
-    proc.stdout.on('data', d => out += d); proc.stderr.on('data', d => err += d);
-    proc.on('error', reject);
-    proc.on('close', (code) => {
-      const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
-      const emptyPayload = /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(clean);
-      if (code !== 0 || !clean || emptyPayload || clean.includes("couldn't generate") || clean.includes('tool policy removed')) {
-        reject(new Error((err || clean || `openclaw exit ${code}`).slice(0, 300)));
-        return;
-      }
-      resolve(clean);
-    });
-  });
-}
-
-const agentProviders = new ProviderPool([
-  { id: 'openclaw', priority: 0, timeoutMs: 18000, invoke: (message, context) => askOpenClaw(message, context.sessionKey) },
-  {
-    id: 'azure-deep-think', priority: 1, timeoutMs: 45000,
-    invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
-      question: message,
-      context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined
-    })
-  }
-], { failureThreshold: 2, cooldownMs: 120000 });
-
-async function askAgent(message, sessionKey) {
-  try {
-    const response = await agentProviders.invoke(message, { sessionKey });
-    return response.value;
-  } catch (error) {
-    runtime.recordError?.('agent.providers', error);
-    er('Barcha agent providerlari ishlamadi: ' + error.message);
-    return null;
-  }
-}
+const { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders, askAgent } = createAgentBridge({
+  chatId: CHAT_ID, token: TOKEN, projectDir: PROJECT_DIR, env, azureOpenAiKey: AZURE_OPENAI_KEY, skillPlatform, runtime
+});
 
 // ════════════════════════════════════════════
 // PROAKTIV REJIM — davriy ravishda screen-monitor yozgan Obsidian
