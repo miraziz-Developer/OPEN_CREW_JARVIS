@@ -18,12 +18,12 @@ function saveFastActionLearnState(stateFile, s) {
 // avtomatik qo'shadi (faqat "ilova ochish" turi — xavfsiz, chunki
 // noto'g'ri/mavjud bo'lmagan nom shunchaki xato qaytaradi, boshqa hech
 // qanday amal bajarilmaydi).
-function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTelegram, writeMemory }) {
+function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTelegram, writeMemory, skillPlatform }) {
   const stateFile = path.join(projectDir, '.fast-action-learn-state.json');
 
   async function run() {
-    let mem, fa;
-    try { mem = require('../../skills/memory'); fa = require('../../skills/fast-actions'); } catch (e) { return; }
+    let mem;
+    try { mem = require('../../skills/memory'); } catch (e) { return; }
     const state = loadFastActionLearnState(stateFile);
 
     // So'nggi 3 kunlik xotiradan vazifa tavsiflarini yig'amiz.
@@ -44,7 +44,7 @@ function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTele
     if (descriptions.length < 3) return; // yetarli tarix yo'q, keyingi safar qayta ko'radi
 
     let existingIds;
-    try { existingIds = fa.actionIds().join(', '); } catch (e) { return; }
+    try { existingIds = (await skillPlatform.invoke('fast-actions', 'actionIds', {})).join(', '); } catch (e) { return; }
 
     const prompt = 'Quyidagi ro\'yxat — foydalanuvchi so\'nggi kunlarda ovozli buyruq bilan so\'ragan vazifalar tavsifi:\n\n' +
       descriptions.slice(-60).map(d => '- ' + d).join('\n') +
@@ -66,8 +66,10 @@ function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTele
     const added = [];
     for (const app of apps.slice(0, 5)) { // bir safarda ko'pi bilan 5 ta — sekin-asta, nazorat ostida o'sish
       if (typeof app !== 'string' || !app.trim()) continue;
-      const r = fa.learnOpenAppAction(app.trim());
-      if (r.status === 'ok') added.push(app.trim());
+      try {
+        const r = await skillPlatform.invoke('fast-actions', 'learnOpenAppAction', { appName: app.trim() });
+        if (r.status === 'ok') added.push(app.trim());
+      } catch (e) {}
     }
     if (added.length) {
       ok('⚡ Yangi tez amallar o\'rganildi: ' + added.join(', '));

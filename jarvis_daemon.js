@@ -101,7 +101,7 @@ const runtime = new JarvisRuntime({
 const DAEMON_STARTED_AT = Date.now();
 const runtimeIdentity = () => ({ pid: process.pid, startedAt: DAEMON_STARTED_AT });
 const missions = new MissionControl({ file: MISSION_CONTROL_FILE, defaultMaxAttempts: 3 });
-const skillPlatform = createSkillPlatform();
+const skillPlatform = createSkillPlatform({ projectDir: PROJECT_DIR, env });
 const recoveredMissions = missions.recoverStale();
 if (recoveredMissions) console.log('Mission Control: ' + recoveredMissions + ' ta stale worker tiklandi');
 runtime.on('runtime.error', error => console.error('Jarvis runtime state xatoligi:', error.message));
@@ -284,7 +284,7 @@ if (PROJECTS_ENABLED) {
 // topadi va avtomatik qo'shadi.
 const FAST_ACTION_LEARN_ENABLED = (env('FAST_ACTION_LEARN_ENABLED') || 'true') !== 'false';
 const FAST_ACTION_LEARN_INTERVAL_MIN = parseInt(env('FAST_ACTION_LEARN_INTERVAL_MIN'), 10) || 720; // 12 soatda bir
-const fastActionLearnJob = createFastActionLearnJob({ projectDir: PROJECT_DIR, localDateStr, askAgent, sendTelegram, writeMemory });
+const fastActionLearnJob = createFastActionLearnJob({ projectDir: PROJECT_DIR, localDateStr, askAgent, sendTelegram, writeMemory, skillPlatform });
 if (FAST_ACTION_LEARN_ENABLED) {
   inf('Tez amallarni o\'rganish yoqilgan — har ' + FAST_ACTION_LEARN_INTERVAL_MIN + ' daqiqada tekshiradi');
   setTimeout(() => { fastActionLearnJob.run().catch(() => {}); }, 10 * 60 * 1000);
@@ -456,7 +456,12 @@ async function mainLoop() {
         } catch (e) {
           return "Ekspert bilan bog'lanib bo'lmadi.";
         }
-      }
+      },
+      // fast-actions endi SkillPlatform orqali chaqiriladi -- osilib qolgan
+      // holat (masalan ruxsat dialogi kutayotgan osascript) platformaning
+      // timeout/circuit-breaker'i bilan himoyalanadi, o'zi hech qachon
+      // reject qilmasa ham.
+      fastActionRunner: (id) => skillPlatform.invoke('fast-actions', 'runFastAction', { id })
     });
     const flightRecorder = new VoiceFlightRecorder({ file: VOICE_FLIGHT_RECORDER_FILE });
     flightRecorder.beginSession({ trigger: reason, mode: reason.includes('Fn') ? 'push-to-talk' : 'wake-word' });

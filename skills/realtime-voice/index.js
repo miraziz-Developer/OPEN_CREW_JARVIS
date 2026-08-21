@@ -1251,7 +1251,11 @@ class RealtimeSession extends EventEmitter {
     // xavfini tug'diradi — run_task'dagi bilan bir xil himoya.
     if (/^media:/.test(id)) this._setMediaLikelyPlaying();
     let result;
-    try { result = await require('../fast-actions').runFastAction(id); }
+    // Ilgari bu yer to'g'ridan-to'g'ri modulni chaqirardi, deterministik
+    // router (_runDirectFastAction) ishlatadigan inject qilinadigan
+    // this._fastActionRunner seamini chetlab o'tib -- ikkala yo'l endi bir
+    // xil (himoyalangan) seamdan o'tadi.
+    try { result = await this._fastActionRunner(id); }
     catch (e) { result = { status: 'error', message: e.message }; }
     const output = (result.status === 'ok' ? result.message : ('Xatolik: ' + result.message)) || 'Bajarildi.';
     this.emit('tool_result', output, msg.call_id);

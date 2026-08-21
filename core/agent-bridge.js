@@ -36,24 +36,15 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
     // yaroqsiz/juda kichik MP3 berishi mumkin va afplay "AudioFileOpen failed"
     // deb stderr'ni to'ldiradi.
     if (!cleanText || /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(cleanText)) return null;
-    return new Promise((resolve) => {
-      const tmpIn = '/tmp/tts_' + Date.now() + '.json';
-      fs.writeFileSync(tmpIn, JSON.stringify({ text: cleanText }), 'utf8');
-      const proc = spawn('node', ['skills/azure-tts/index.js'], {
-        cwd: projectDir, env: { ...process.env, AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'), AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'uz-UZ-SardorNeural' }
-      });
-      let out = '';
-      proc.stdout.on('data', d => out += d); proc.stderr.on('data', () => {});
-      proc.on('close', (code) => {
-        try { fs.unlinkSync(tmpIn); } catch(e){}
-        try {
-          const audioFile = JSON.parse(out.trim()).audioFile;
-          if (code === 0 && audioFile && fs.statSync(audioFile).size > 512) resolve(audioFile);
-          else resolve(null);
-        } catch(e) { resolve(null); }
-      });
-      fs.createReadStream(tmpIn).pipe(proc.stdin);
-    });
+    // Spawn mantig'i endi skills/platform.js'dagi 'azure-tts' registratsiyasi
+    // ichida -- osilib qolgan child process SkillPlatform'ning timeout/
+    // circuit-breaker'i bilan himoyalanadi (avval bu spawn'da umuman
+    // parent-side timeout yo'q edi).
+    try {
+      return await skillPlatform.invoke('azure-tts', 'synthesize', { text: cleanText });
+    } catch (e) {
+      return null;
+    }
   }
 
   function askOpenClaw(message, sessionKey) {
