@@ -49,7 +49,6 @@ process.on('unhandledRejection', (err) => {
 });
 
 console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
-console.log('Token:', TOKEN.substring(0, 10) + '...');
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -438,22 +437,25 @@ let _pollErrCount = 0;
 let _pollErrFirstAt = 0;
 let _pollRecovering = false;
 let _pollLastLogAt = 0;
+function logPolling(level, message) {
+  console[level]('[' + new Date().toISOString() + '] ' + message);
+}
 bot.on('polling_error', (err) => {
   const now = Date.now();
   if (!_pollErrFirstAt) _pollErrFirstAt = now;
   _pollErrCount++;
   if (!_pollLastLogAt || now - _pollLastLogAt >= 60000) {
     _pollLastLogAt = now;
-    console.error('Telegram polling vaqtincha uzildi (' + _pollErrCount + ' urinish): ' + (err.message || err));
+    logPolling('error', 'Telegram polling vaqtincha uzildi (' + _pollErrCount + ' urinish): ' + (err.message || err));
   }
   if (now - _pollErrFirstAt >= 30000 && !_pollRecovering) {
     _pollRecovering = true;
-    console.error('Telegram polling 30s+ uzildi — qayta ulanmoqda...');
+    logPolling('error', 'Telegram polling 30s+ uzildi — qayta ulanmoqda...');
     bot.stopPolling().then(() => bot.startPolling()).then(() => {
-      console.log('Telegram polling qayta ulanish so\'rovi yuborildi.');
+      logPolling('log', 'Telegram polling qayta ulanish so\'rovi yuborildi.');
       _pollErrCount = 0; _pollErrFirstAt = 0; _pollLastLogAt = 0; _pollRecovering = false;
     }).catch((e) => {
-      console.error('Qayta ulanishda xatolik: ' + (e.message || e));
+      logPolling('error', 'Qayta ulanishda xatolik: ' + (e.message || e));
       _pollRecovering = false;
     });
   }

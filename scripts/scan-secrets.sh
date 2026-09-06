@@ -38,6 +38,7 @@ fi
 shift
 
 PATTERN='(token|secret|api[_-]?key|password)["[:space:]]*[:=]["[:space:]]*[A-Za-z0-9_./+-]{24,}'
+SECRET_FRAGMENT_LOG_PATTERN='console\.(log|error|warn|info)[^(]*\([^\n]*(TOKEN|KEY|SECRET)\.(substring|slice)[[:space:]]*\('
 PATHS=('--' ':!package-lock.json' ':!.env.example' ':!tests/**')
 
 scan_tree() {
@@ -67,6 +68,25 @@ if ! scan_tree; then
   exit 1
 fi
 echo '✅ Tracked working tree ichida plaintext secret topilmadi.'
+
+# Hatto qisman secret ham loglarda credential fingerprint qoldiradi. Bu qoida
+# joriy tracked source'ni tekshiradi; oldingi tarix alohida plaintext scan bilan
+# qamrab olinadi va ushbu guard yangi regressiyani commit qilishdan to'xtatadi.
+fragment_output="$(mktemp "${TMPDIR:-/tmp}/jarvis-secret-fragment-scan.XXXXXX")"
+fragment_status=0
+git grep -n -I -E "${SECRET_FRAGMENT_LOG_PATTERN}" "${PATHS[@]}" >"${fragment_output}" || fragment_status=$?
+if [[ "${fragment_status}" -eq 0 ]]; then
+  cat "${fragment_output}"
+  rm -f "${fragment_output}"
+  echo '❌ Source kod secret fragmentini logga chiqaradi.' >&2
+  exit 1
+fi
+rm -f "${fragment_output}"
+if [[ "${fragment_status}" -ne 1 ]]; then
+  echo '❌ Secret fragment log scan bajarilmadi.' >&2
+  exit "${fragment_status}"
+fi
+echo '✅ Source kod secret fragmentlarini loglamaydi.'
 
 while IFS= read -r commit; do
   if ! scan_tree "${commit}"; then
