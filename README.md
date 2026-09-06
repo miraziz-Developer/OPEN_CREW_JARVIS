@@ -58,7 +58,27 @@ Bu skript avtomatik ravishda `.env` yaratadi, kalitlar to'g'rligini tekshiradi, 
 | `launchctl bootout gui/$(id -u)/com.jarvis.openclaw` | Joriy agentni to'xtatish |
 | `./scripts/disable-autostart.sh` | Avtostartni o'chirish |
 | `./scripts/enable-autostart.sh` | Avtostartni qayta yoqish |
+| `npm run doctor` | Butun tizim uchun read-only health diagnostika |
+
+### Tizim diagnostikasi
+
+JARVIS holatini config, secret permission, binary, launchd, process ownership,
+runtime heartbeat, gateway va dashboard API darajasida bitta buyruqda tekshiring:
+
+```bash
+npm run doctor
 ```
+
+Monitoring yoki avtomatlashtirish uchun machine-readable natija:
+
+```bash
+npm run doctor -- --json
+npm run doctor -- --strict   # warning mavjud bo‘lsa ham non-zero exit
+```
+
+Diagnostika read-only: servislarni restart qilmaydi va secret qiymatlarini
+chiqarmaydi. Oddiy rejimda faqat error exit code `1` beradi; `--strict` rejimida
+warning ham failure hisoblanadi.
 
 ---
 
