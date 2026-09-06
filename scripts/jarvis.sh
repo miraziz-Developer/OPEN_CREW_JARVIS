@@ -15,10 +15,19 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${PROJECT_DIR}/logs"
 DOTENV="${PROJECT_DIR}/.env"
+export OPENCLAW_CONFIG_PATH="${PROJECT_DIR}/openclaw.json"
 LAST_GREETING="${PROJECT_DIR}/.jarvis-last-greeting"
 SUPERVISOR_LOCK="${PROJECT_DIR}/.jarvis-supervisor.lock"
 
 mkdir -p "${LOG_DIR}"
+
+pid_owns_supervisor() {
+  local pid="$1" command
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  command=$(ps -o command= -p "${pid}" 2>/dev/null || true)
+  [[ " ${command} " == *" ${PROJECT_DIR}/scripts/jarvis.sh "* || "${command}" == *"/bash ${PROJECT_DIR}/scripts/jarvis.sh"* ]]
+}
 
 # launchd nusxasi ishlayotgan paytda skriptni qo'lda yana ishga tushirish
 # ikkinchi bot/daemon/dashboard yaratardi. macOS'ning standart bash'ida
@@ -31,7 +40,7 @@ acquire_supervisor_lock() {
   fi
 
   [[ -f "${SUPERVISOR_LOCK}/pid" ]] && owner=$(cat "${SUPERVISOR_LOCK}/pid" 2>/dev/null || true)
-  if [[ -n "${owner}" ]] && kill -0 "${owner}" 2>/dev/null; then
+  if [[ -n "${owner}" ]] && pid_owns_supervisor "${owner}"; then
     echo "JARVIS supervisor allaqachon ishlayapti (PID=${owner})." >&2
     exit 0
   fi
@@ -45,6 +54,13 @@ acquire_supervisor_lock() {
 }
 
 acquire_supervisor_lock
+
+# Child jarayonlar dependency yo'q holatda crash-loopga tushmasin. launchd aniq
+# xatoni ko'rsatadi va installer `npm ci` muvaffaqiyatidan keyingina qayta yuklaydi.
+if ! node "${PROJECT_DIR}/scripts/check-runtime-deps.js"; then
+  rm -rf "${SUPERVISOR_LOCK}" 2>/dev/null || true
+  exit 1
+fi
 
 # ── Timestamp funktsiyasi ──
 now() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -86,6 +102,7 @@ import_env AZURE_SPEECH_KEY
 import_env AZURE_SPEECH_REGION
 import_env TELEGRAM_BOT_TOKEN
 import_env JARVIS_CHAT_ID
+import_env OPENCLAW_GATEWAY_TOKEN
 
 log "ENV: AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-?}, KEY set=${AZURE_SPEECH_KEY:+yes}"
 
@@ -171,14 +188,20 @@ start_gateway() {
   # Port/bind/auth openclaw.json'da saqlanadi. OpenClaw 2026.7 dan boshlab
   # `gateway start` bu flaglarni qabul qilmaydi; eski flaglar service'ni
   # umuman start qilmasdan usage xatosi bilan chiqib ketardi.
-  openclaw gateway start 2>&1 || true
+  if ! openclaw gateway start 2>&1; then
+    err "[GATEWAY] Start so'rovi muvaffaqiyatsiz."
+    return 1
+  fi
   log "[GATEWAY] So'rov yuborildi."
 }
 
 # ── Gateway qayta ishga tushirish ──
 restart_gateway() {
   log "[GATEWAY] Qayta ishga tushirish..."
-  openclaw gateway restart 2>&1 || true
+  if ! openclaw gateway restart 2>&1; then
+    err "[GATEWAY] Restart so'rovi muvaffaqiyatsiz."
+    return 1
+  fi
   log "[GATEWAY] Restart so'rovi yuborildi."
 }
 

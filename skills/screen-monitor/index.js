@@ -13,7 +13,7 @@ const os = require('os');
 const { collectMacOSContext } = require('../../core/macos-context');
 const { WorldModel } = require('../../core/world-model');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../../core/paths');
 const STATE_FILE = path.join(PROJECT_DIR, '.screen-monitor-state');
 const LAST_SCREENSHOT = '/tmp/jarvis_prev_screen.png';
 const CUR_SCREENSHOT = '/tmp/jarvis_curr_screen.png';

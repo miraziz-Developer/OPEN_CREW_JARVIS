@@ -6,14 +6,15 @@
  * javobdan fayl yo'llarini chiqarib yuboradi.
  */
 
-const TelegramBot = require('node-telegram-bot-api').default;
+const TelegramBotModule = require('node-telegram-bot-api');
+const TelegramBot = TelegramBotModule.default || TelegramBotModule;
 const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { writeMemory, searchMemory, readProfile } = require('./skills/memory');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');

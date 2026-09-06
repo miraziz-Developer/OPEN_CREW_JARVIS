@@ -54,7 +54,7 @@ fi
 # Kalitlarning bo'sh emasligini tekshirish. Telegram ixtiyoriy: noto'g'ri
 # token voice/dashboard'ni o'rnatishga to'sqinlik qilmasligi kerak.
 missing_env=()
-for key in AZURE_SPEECH_KEY AZURE_SPEECH_REGION AZURE_OPENAI_KEY AZURE_OPENAI_ENDPOINT; do
+for key in AZURE_SPEECH_KEY AZURE_SPEECH_REGION AZURE_OPENAI_KEY AZURE_OPENAI_ENDPOINT OPENCLAW_GATEWAY_TOKEN; do
   val="$(grep "^${key}=" "${DOTENV}" 2>/dev/null | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
   if [[ -z "$val" || "$val" == "..." || "$val" == "YOUR_*" ]]; then
     missing_env+=("$key")
@@ -102,8 +102,10 @@ ok "OpenClaw konfiguratsiyasi to'g'ri."
 # Azure dependency'lari faqat skill ichidagi package.json'da bo'lib,
 # yangi clone/setup'da TTS `Cannot find module axios` bilan qular edi.
 step "Runtime dependency va Fn-key helper"
-npm install --no-audit --no-fund
-node -e "require('axios'); require('microsoft-cognitiveservices-speech-sdk')"
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+(( NODE_MAJOR >= 22 )) || { err "Node 22+ kerak; joriy versiya: $(node --version)"; exit 1; }
+npm ci --no-audit --no-fund
+npm run deps:check
 
 FNKEY_SOURCE="${PROJECT_DIR}/skills/fn-key/fnkey.swift"
 FNKEY_BINARY="${PROJECT_DIR}/skills/fn-key/fnkey"

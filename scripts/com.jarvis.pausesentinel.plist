@@ -7,8 +7,8 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/node</string>
-    <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/scripts/pause-sentinel.js</string>
+    <string>__NODE_BIN__</string>
+    <string>__PROJECT_DIR__/scripts/pause-sentinel.js</string>
   </array>
 
   <!-- Kompyuter yonganda avtomatik ishga tushsin — Jarvis o'zi to'xtatilgan
@@ -23,13 +23,13 @@
   <integer>10</integer>
 
   <key>StandardOutPath</key>
-  <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/logs/pause-sentinel.log</string>
+  <string>__PROJECT_DIR__/logs/pause-sentinel.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/logs/pause-sentinel.log</string>
+  <string>__PROJECT_DIR__/logs/pause-sentinel.log</string>
 
   <key>WorkingDirectory</key>
-  <string>/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS</string>
+  <string>__PROJECT_DIR__</string>
 
   <key>EnvironmentVariables</key>
   <dict>

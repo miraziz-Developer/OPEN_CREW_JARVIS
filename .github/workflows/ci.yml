@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run deps:check
+      - run: npm run check
+      - name: Validate synthetic configuration
+        env:
+          AZURE_SPEECH_KEY: ci-speech-secret
+          AZURE_SPEECH_REGION: southeastasia
+          AZURE_OPENAI_ENDPOINT: https://example.openai.azure.com
+          AZURE_OPENAI_KEY: ci-openai-secret
+          AZURE_OPENAI_DEPLOYMENT: ci-model
+          OPENCLAW_GATEWAY_TOKEN: ci-gateway-secret
+        run: npm run config:check -- .env.example
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run security:scan

@@ -25,5 +25,4 @@ else
 fi
 
 echo "   Hozir ishlatilayotgan Jarvis ni to'xtatish:"
-echo "   bash scripts/jarvis.sh stop  # yoki:"
-echo "   pkill -9 -f jarvis_daemon; pkill -9 -f telegram-bot"
+echo "   launchctl bootout gui/${USER_ID}/com.jarvis.openclaw"

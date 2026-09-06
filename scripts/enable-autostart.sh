@@ -8,6 +8,7 @@ PLIST_NAME="com.jarvis.openclaw.plist"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${PROJECT_DIR}/scripts/${PLIST_NAME}"
 DEST="${HOME}/Library/LaunchAgents/${PLIST_NAME}"
+NODE_BIN="$(command -v node)"
 
 echo "🚀 Jarvis avtostart yuklanmoqda..."
 
@@ -24,7 +25,8 @@ if launchctl list | grep -q "com.jarvis.openclaw"; then
 fi
 
 # Joriy clone yo'lidan portable plist yaratish.
-sed "s|/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS|${PROJECT_DIR}|g" "${SRC}" > "${DEST}"
+mkdir -p "${HOME}/Library/LaunchAgents" "${PROJECT_DIR}/logs"
+node "${PROJECT_DIR}/scripts/render-launchd.js" "${SRC}" "${DEST}" "${PROJECT_DIR}" "${NODE_BIN}"
 chmod 644 "${DEST}"
 
 # Yangi macOS (10.10+) da bootstrap, eskisida load
@@ -53,7 +55,7 @@ if [[ -f "${SENTINEL_SRC}" ]]; then
   if launchctl list | grep -q "com.jarvis.pausesentinel"; then
     launchctl bootout gui/$(id -u)/com.jarvis.pausesentinel 2>/dev/null || true
   fi
-  sed "s|/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS|${PROJECT_DIR}|g" "${SENTINEL_SRC}" > "${SENTINEL_DEST}"
+  node "${PROJECT_DIR}/scripts/render-launchd.js" "${SENTINEL_SRC}" "${SENTINEL_DEST}" "${PROJECT_DIR}" "${NODE_BIN}"
   chmod 644 "${SENTINEL_DEST}"
   if launchctl bootstrap gui/$USER_ID "${SENTINEL_DEST}" 2>/dev/null; then
     echo "✅ Pauza sentinel (Fn+Shift) yuklandi!"

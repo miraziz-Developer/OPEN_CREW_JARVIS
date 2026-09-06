@@ -12,6 +12,7 @@ const CONFIG_SCHEMA = Object.freeze({
   AZURE_OPENAI_ENDPOINT: { type: 'url', required: true },
   AZURE_OPENAI_KEY: { type: 'secret', required: true },
   AZURE_OPENAI_DEPLOYMENT: { type: 'string', required: true },
+  OPENCLAW_GATEWAY_TOKEN: { type: 'secret', required: true },
   AZURE_OPENAI_VISION_DEPLOYMENT: { type: 'string', default: 'gpt-4.1' },
   AZURE_REALTIME_DEPLOYMENT: { type: 'string', default: 'gpt-realtime-2.1' },
   AZURE_REALTIME_VOICE: { type: 'string', default: 'cedar' },

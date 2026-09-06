@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { inspectRuntimeOwner, inspectVoiceOwnership } = require('../core/runtime-health');
+const { commandOwnsScript, findMatchingProcesses, inspectRuntimeOwner, inspectVoiceOwnership } = require('../core/runtime-health');
 
 test('runtime owner requires fresh heartbeat, live PID and matching command', () => {
   const owner = inspectRuntimeOwner({
@@ -39,4 +39,15 @@ test('orphan wake worker makes ownership unhealthy', () => {
   const ownership = inspectVoiceOwnership({ daemonPids: [42], wakePids: [77], parentPid: () => 1 });
   assert.deepEqual(ownership.orphanWakePids, [77]);
   assert.equal(ownership.healthy, false);
+});
+
+test('exact process matching ignores diagnostic command text', () => {
+  const script = '/repo/jarvis_daemon.js';
+  const found = findMatchingProcesses(script, { listProcesses: () => [
+    '42 /opt/homebrew/bin/node /repo/jarvis_daemon.js',
+    '43 grep jarvis_daemon.js',
+    '44 node -e console.log("/repo/jarvis_daemon.js")'
+  ].join('\n') });
+  assert.deepEqual(found.map(item => item.pid), [42]);
+  assert.equal(commandOwnsScript('/bin/bash /repo/scripts/jarvis.sh', '/repo/scripts/jarvis.sh'), true);
 });

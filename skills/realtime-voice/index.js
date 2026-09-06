@@ -26,7 +26,7 @@ const { chooseTranscript, authoritativeTimeoutMs, nativeIsConfident } = require(
 const { loadCalibration, resolveCalibratedNumber } = require('../../core/audio-calibration');
 const { normalizeUzbekSpeech, voiceStyleInstructions } = require('../../core/uzbek-speech-normalizer');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../../core/paths');
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
 const ENV_VALUES = Object.fromEntries(ENV.split(/\r?\n/).map(line => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(match => [match[1], match[2].trim()]));

@@ -54,8 +54,8 @@ Bu skript avtomatik ravishda `.env` yaratadi, kalitlar to'g'rligini tekshiradi, 
 
 | Buyruq | Vazifa |
 |--------|--------|
-| `launchctl start com.jarvis.openclaw` | Qo'lda ishga tushirish |
-| `launchctl stop com.jarvis.openclaw` | To'xtatish |
+| `launchctl kickstart -k gui/$(id -u)/com.jarvis.openclaw` | Qayta ishga tushirish |
+| `launchctl bootout gui/$(id -u)/com.jarvis.openclaw` | Joriy agentni to'xtatish |
 | `./scripts/disable-autostart.sh` | Avtostartni o'chirish |
 | `./scripts/enable-autostart.sh` | Avtostartni qayta yoqish |
 ```
@@ -95,6 +95,9 @@ AZURE_OPENAI_ENDPOINT=...
 # TELEGRAM
 TELEGRAM_BOT_TOKEN=...
 JARVIS_CHAT_ID=...         # Sizning Telegram chat ID
+
+# OPENCLAW GATEWAY (openssl rand -hex 32 bilan yarating)
+OPENCLAW_GATEWAY_TOKEN=...
 ```
 
 ---
@@ -136,6 +139,8 @@ namunalar bilan hisoblaydi.
 
 - Mac-da **Accessibility**, **Screen Recording**, **Microphone** ruxsatlari kerak
 - `.env` faylni **HECH QACHON** gitga qo'shmang
+- `openclaw.json` faqat `${OPENCLAW_GATEWAY_TOKEN}` environment reference saqlaydi; plaintext token commit qilmang
+- Secret sizib chiqsa yangi qiymat yarating, servisni restart qiling va Git tarixini alohida tozalang
 - Hotword eshitish mikrofonni doimiy ishlatadi
 
 ---

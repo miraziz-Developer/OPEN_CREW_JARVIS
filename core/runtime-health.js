@@ -1,10 +1,34 @@
 'use strict';
 
+const { execFileSync } = require('child_process');
+const path = require('path');
+
 const HEARTBEAT_MAX_AGE_MS = 15000;
 
 function finitePid(value) {
   const pid = Number(value);
   return Number.isInteger(pid) && pid > 0 ? pid : 0;
+}
+
+function commandForPid(pid) {
+  try { return execFileSync('ps', ['-o', 'command=', '-p', String(finitePid(pid))], { encoding: 'utf8' }).trim(); }
+  catch (_) { return ''; }
+}
+
+function commandOwnsScript(command, scriptPath) {
+  const script = path.resolve(scriptPath);
+  return String(command || '').split(/\s+/).some(arg => path.resolve(arg) === script);
+}
+
+function findMatchingProcesses(scriptPath, options = {}) {
+  const list = options.listProcesses || (() => {
+    try { return execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }); }
+    catch (_) { return ''; }
+  });
+  return String(list()).split(/\r?\n/).map(line => {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    return match ? { pid: Number(match[1]), command: match[2] } : null;
+  }).filter(item => item && item.pid !== process.pid && commandOwnsScript(item.command, scriptPath));
 }
 
 function inspectRuntimeOwner(runtime, options = {}) {
@@ -46,4 +70,11 @@ function inspectVoiceOwnership({ daemonPids = [], wakePids = [], parentPid = () 
   };
 }
 
-module.exports = { HEARTBEAT_MAX_AGE_MS, inspectRuntimeOwner, inspectVoiceOwnership };
+module.exports = {
+  HEARTBEAT_MAX_AGE_MS,
+  commandForPid,
+  commandOwnsScript,
+  findMatchingProcesses,
+  inspectRuntimeOwner,
+  inspectVoiceOwnership
+};

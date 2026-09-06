@@ -9,7 +9,8 @@ const valid = {
   AZURE_SPEECH_REGION: 'southeastasia',
   AZURE_OPENAI_ENDPOINT: 'https://example.openai.azure.com',
   AZURE_OPENAI_KEY: 'openai-secret-value',
-  AZURE_OPENAI_DEPLOYMENT: 'model'
+  AZURE_OPENAI_DEPLOYMENT: 'model',
+  OPENCLAW_GATEWAY_TOKEN: 'gateway-secret-value'
 };
 
 test('env parser handles comments, export and quoted values', () => {
@@ -40,5 +41,6 @@ test('config redaction never exposes secret values', () => {
   const safe = redactConfig(result.values);
   assert.equal(safe.AZURE_SPEECH_KEY, '<redacted>');
   assert.equal(safe.AZURE_OPENAI_KEY, '<redacted>');
+  assert.equal(safe.OPENCLAW_GATEWAY_TOKEN, '<redacted>');
   assert.equal(safe.AZURE_SPEECH_REGION, 'southeastasia');
 });

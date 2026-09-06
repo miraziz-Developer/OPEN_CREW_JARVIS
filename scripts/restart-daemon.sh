@@ -16,8 +16,7 @@ if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
   sleep 3
   PID="$(launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '/pid =/{print $3; exit}')"
 else
-  pkill -9 -f "node.*jarvis_daemon" 2>/dev/null || true
-  pkill -9 -f "sox -d -t raw -r 16000" 2>/dev/null || true
+  node -e "const {findMatchingProcesses}=require('./core/runtime-health'); for(const p of findMatchingProcesses(require('path').join(process.cwd(),'jarvis_daemon.js'))) { try { process.kill(p.pid, 'SIGTERM'); } catch {} }"
   sleep 1
   nohup node "${PROJECT_DIR}/jarvis_daemon.js" >> "$LOGFILE" 2>&1 &
   PID=$!

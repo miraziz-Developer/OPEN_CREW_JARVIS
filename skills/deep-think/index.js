@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../../core/paths');
 let _env = null;
 function env(k, def) {
   if (_env === null) { try { _env = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (e) { _env = ''; } }

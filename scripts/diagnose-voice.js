@@ -5,7 +5,7 @@ const { spawnSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { loadCalibration } = require('../core/audio-calibration');
-const { inspectRuntimeOwner, inspectVoiceOwnership } = require('../core/runtime-health');
+const { commandForPid, findMatchingProcesses, inspectRuntimeOwner, inspectVoiceOwnership } = require('../core/runtime-health');
 
 const ROOT = path.resolve(__dirname, '..');
 const calibrationFile = path.join(ROOT, '.run', 'audio-calibration.json');
@@ -24,16 +24,6 @@ function envFile() {
   } catch (_) { return {}; }
 }
 
-function processAlive(pattern) {
-  try { return Boolean(execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).trim()); } catch (_) { return false; }
-}
-
-function matchingPids(pattern) {
-  try {
-    return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean).map(Number);
-  } catch (_) { return []; }
-}
-
 function parentPid(pid) {
   try { return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).trim()); }
   catch (_) { return 0; }
@@ -41,11 +31,6 @@ function parentPid(pid) {
 
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (_) { return false; }
-}
-
-function commandForPid(pid) {
-  try { return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim(); }
-  catch (_) { return ''; }
 }
 
 function checkBinary(name) {
@@ -89,12 +74,14 @@ function main() {
   ['node', 'sox', 'afplay'].forEach(checkBinary);
   add('config:azure-speech', Boolean(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION), 'key va region ' + (env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION ? 'mavjud' : 'yetishmaydi'));
   add('config:azure-openai', Boolean(env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY), 'realtime/agent key ' + (env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY ? 'mavjud' : 'yetishmaydi'));
-  add('process:voice-daemon', processAlive('jarvis_daemon.js'), processAlive('jarvis_daemon.js') ? 'ishlayapti' : 'ishlamayapti', 'warn');
-  add('process:pause-sentinel', processAlive('pause-sentinel.js'), processAlive('pause-sentinel.js') ? 'ishlayapti' : 'ishlamayapti', 'warn');
+  const daemonProcesses = findMatchingProcesses(path.join(ROOT, 'jarvis_daemon.js'));
+  const sentinelProcesses = findMatchingProcesses(path.join(ROOT, 'scripts', 'pause-sentinel.js'));
+  add('process:voice-daemon', daemonProcesses.length === 1, daemonProcesses.length ? `pid=${daemonProcesses.map(p => p.pid).join(',')}` : 'ishlamayapti', 'warn');
+  add('process:pause-sentinel', sentinelProcesses.length === 1, sentinelProcesses.length ? `pid=${sentinelProcesses.map(p => p.pid).join(',')}` : 'ishlamayapti', 'warn');
   const runtime = loadRuntime();
   const runtimeOwner = inspectRuntimeOwner(runtime, { pidAlive, commandForPid });
-  const daemonPids = matchingPids('jarvis_daemon\\.js').filter(pid => /(?:^|[\/\s])jarvis_daemon\.js(?:\s|$)/.test(commandForPid(pid)));
-  const wakePids = matchingPids('[o]penwakeword-worker\\.py');
+  const daemonPids = daemonProcesses.map(process => process.pid);
+  const wakePids = findMatchingProcesses(path.join(ROOT, 'core', 'openwakeword-worker.py')).map(process => process.pid);
   const ownership = inspectVoiceOwnership({ daemonPids, wakePids, parentPid, runtimeOwner });
   add('process:single-voice-owner', ownership.healthy,
     `daemon=${ownership.daemonPids.length}, wake-worker=${ownership.wakePids.length}, orphan=${ownership.orphanWakePids.length}${ownership.orphanWakePids.length ? ` (pid ${ownership.orphanWakePids.join(',')})` : ''}`);

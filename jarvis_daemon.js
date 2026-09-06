@@ -20,7 +20,7 @@ const path = require('path');
 const os = require('os');
 const net = require('net');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
 
 const { writeMemory, searchMemory } = require('./skills/memory');

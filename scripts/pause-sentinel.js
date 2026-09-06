@@ -21,7 +21,8 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../core/paths');
+const { findMatchingProcesses } = require('../core/runtime-health');
 const FNKEY_BIN = path.join(PROJECT_DIR, 'skills', 'fn-key', 'fnkey');
 const PAUSE_MARKER = path.join(PROJECT_DIR, '.jarvis-paused');
 const JARVIS_SH = path.join(PROJECT_DIR, 'scripts', 'jarvis.sh');
@@ -40,10 +41,7 @@ function log(m) {
 }
 
 function isRunning() {
-  try {
-    execSync('pgrep -f "node ' + PROJECT_DIR + '/jarvis_daemon.js"', { stdio: 'ignore' });
-    return true;
-  } catch (e) { return false; }
+  return findMatchingProcesses(path.join(PROJECT_DIR, 'jarvis_daemon.js')).length > 0;
 }
 
 function waitUntilReady(timeoutMs) {
@@ -100,8 +98,11 @@ async function pause() {
   // Ehtiyot uchun: supervisor skriptga "stop" berilmaydi — u argumentni
   // tushunmaydi va aksincha daemonni qayta yoqishi mumkin. Jarayonlar to'g'ridan
   // to'g'ri to'xtatiladi; pause marker supervisor qayta startini bloklaydi.
-  try { execSync('pkill -f "node ' + PROJECT_DIR + '/jarvis_daemon.js" || true', { timeout: 5000 }); } catch (e) {}
-  try { execSync('pkill -f "node ' + PROJECT_DIR + '/telegram-bot.js" || true', { timeout: 5000 }); } catch (e) {}
+  for (const script of ['jarvis_daemon.js', 'telegram-bot.js']) {
+    for (const owner of findMatchingProcesses(path.join(PROJECT_DIR, script))) {
+      try { process.kill(owner.pid, 'SIGTERM'); } catch (e) { log(`PID ${owner.pid} stop xatolik: ${e.message}`); }
+    }
+  }
   try { execSync('openclaw gateway stop', { timeout: 15000 }); } catch (e) {}
   fs.writeFileSync(PAUSE_MARKER, String(Date.now()));
   log('Pauzada. RAM bo\'shatildi.');

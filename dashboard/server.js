@@ -10,9 +10,10 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
+const { PROJECT_DIR } = require('../core/paths');
+const { findMatchingProcesses } = require('../core/runtime-health');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
 const PORT = parseInt(process.env.DASHBOARD_PORT, 10) || 7890;
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
@@ -32,13 +33,13 @@ function localDateStr(d) {
 }
 
 // ── Yordamchi funksiyalar ───────────────────────────────────────────────
-function isAlive(pattern) {
-  try { execSync('pgrep -f "' + pattern + '"', { stdio: 'ignore' }); return true; } catch (e) { return false; }
+function isAlive(scriptPath) {
+  return findMatchingProcesses(scriptPath).length > 0;
 }
 
 function gatewayHealthy() {
   try {
-    execSync('curl -sf http://127.0.0.1:18789/health', { stdio: 'ignore', timeout: 3000 });
+    execFileSync('curl', ['-sf', '--max-time', '3', 'http://127.0.0.1:18789/health'], { stdio: 'ignore' });
     return true;
   } catch (e) { return false; }
 }
@@ -56,8 +57,8 @@ function getStatus() {
     gateway: gatewayHealthy(),
     bot: isAlive(PROJECT_DIR + '/telegram-bot.js'),
     daemon: isAlive(PROJECT_DIR + '/jarvis_daemon.js'),
-    monitor: isAlive('skills/screen-monitor/index.js'),
-    sentinel: isAlive('pause-sentinel.js'),
+    monitor: isAlive(path.join(PROJECT_DIR, 'skills', 'screen-monitor', 'index.js')),
+    sentinel: isAlive(path.join(PROJECT_DIR, 'scripts', 'pause-sentinel.js')),
     runtime,
     model: {
       primary: env('AZURE_OPENAI_DEPLOYMENT', 'Kimi-K2.6'),

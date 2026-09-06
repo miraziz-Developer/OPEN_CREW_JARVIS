@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../../core/paths');
 const { apiRequest, isConnected } = require(path.join(PROJECT_DIR, 'skills', 'google-auth'));
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';

@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile, execFileSync } = require('child_process');
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../../core/paths');
 const BASE_FILE = path.join(__dirname, 'actions.json');
 const LEARNED_FILE = path.join(PROJECT_DIR, '.fast-actions-learned.json');
 

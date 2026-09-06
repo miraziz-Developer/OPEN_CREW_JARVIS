@@ -24,7 +24,7 @@ const CONTEXT_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'SessionContext.md');
 const PRONUNCIATION_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'Pronunciation.md');
 const PRONUNCIATION_MAX = 100;
 
-const PROJECT_DIR = '/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS';
+const { PROJECT_DIR } = require('../../core/paths');
 const EMBED_INDEX_FILE = path.join(PROJECT_DIR, '.memory-embeddings.json');
 const MEMORY_OS_FILE = process.env.JARVIS_MEMORY_OS_FILE || path.join(PROJECT_DIR, '.jarvis-memory-os.json');
 const memoryOS = new MemoryOS({ file: MEMORY_OS_FILE });

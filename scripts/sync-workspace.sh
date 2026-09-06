@@ -30,7 +30,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-PROJECT_DIR="/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORKSPACE="${HOME}/.openclaw/workspace"
 EXCLUDE_SKILLS=(wakeword)
 
