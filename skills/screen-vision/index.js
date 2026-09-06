@@ -15,8 +15,15 @@ const { collectMacOSContext } = require('../../core/macos-context');
 const { WorldModel } = require('../../core/world-model');
 
 const { PROJECT_DIR } = require('../../core/paths');
-const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
-function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
+let ENV = '';
+try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+function env(k, def) {
+  if (process.env[k] !== undefined) return process.env[k];
+  const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm'));
+  return m ? m[1].trim() : def;
+}
 
 const KEY = env('AZURE_OPENAI_KEY');
 const ENDPOINT = (env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '');

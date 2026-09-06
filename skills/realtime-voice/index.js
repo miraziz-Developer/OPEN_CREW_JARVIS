@@ -27,8 +27,15 @@ const { loadCalibration, resolveCalibratedNumber } = require('../../core/audio-c
 const { normalizeUzbekSpeech, voiceStyleInstructions } = require('../../core/uzbek-speech-normalizer');
 
 const { PROJECT_DIR } = require('../../core/paths');
-const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
-function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
+let ENV = '';
+try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+function env(k, def) {
+  if (process.env[k] !== undefined) return process.env[k];
+  const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm'));
+  return m ? m[1].trim() : def;
+}
 const ENV_VALUES = Object.fromEntries(ENV.split(/\r?\n/).map(line => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(match => [match[1], match[2].trim()]));
 const AUDIO_CALIBRATION = loadCalibration(path.join(PROJECT_DIR, '.run', 'audio-calibration.json'));
 
