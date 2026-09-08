@@ -49,7 +49,7 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
 
   function askOpenClaw(message, sessionKey) {
     return new Promise((resolve, reject) => {
-      const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], { cwd: projectDir, env: { ...process.env, AZURE_OPENAI_KEY: azureOpenAiKey }, timeout: 15000 });
+      const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], { cwd: projectDir, env: { ...process.env, AZURE_OPENAI_KEY: azureOpenAiKey }, timeout: 120000 });
       let out = '';
       let procErr = '';
       proc.stdout.on('data', d => out += d); proc.stderr.on('data', d => procErr += d);
@@ -67,9 +67,9 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
   }
 
   const agentProviders = new ProviderPool([
-    { id: 'openclaw', priority: 0, timeoutMs: 18000, invoke: (message, context) => askOpenClaw(message, context.sessionKey) },
+    { id: 'openclaw', priority: 0, timeoutMs: 125000, invoke: (message, context) => askOpenClaw(message, context.sessionKey) },
     {
-      id: 'azure-deep-think', priority: 1, timeoutMs: 45000,
+      id: 'azure-deep-think', priority: 1, timeoutMs: 95000,
       invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
         question: message,
         context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined

@@ -61,10 +61,10 @@ function getStatus() {
     sentinel: isAlive(path.join(PROJECT_DIR, 'scripts', 'pause-sentinel.js')),
     runtime,
     model: {
-      primary: env('AZURE_OPENAI_DEPLOYMENT', 'Kimi-K2.6'),
+      primary: env('AZURE_OPENAI_DEPLOYMENT', 'gpt-6-astra'),
       realtime: env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1'),
       vision: env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1'),
-      expert: env('DEEP_THINK_MODEL', 'gpt-5.4')
+      expert: env('DEEP_THINK_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-6-astra'))
     },
     now: new Date().toISOString()
   };

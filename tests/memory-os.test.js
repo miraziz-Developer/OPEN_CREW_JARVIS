@@ -49,3 +49,13 @@ test('legacy markdown migration is idempotent', () => {
   assert.equal(memory.migrateLegacy({ memoryDir: dir }).skipped, true);
   assert.equal(memory.snapshot().records.length, 1);
 });
+
+test('explicit turn id updates one durable record instead of duplicating it', () => {
+  const memory = store();
+  memory.remember({ id: 'turn:abc', title: 'Voice turn', content: 'accepted', tags: ['accepted'] });
+  const updated = memory.remember({ id: 'turn:abc', title: 'Voice turn', content: 'completed', tags: ['completed'] });
+  assert.equal(updated.status, 'updated');
+  assert.equal(memory.snapshot().records.length, 1);
+  assert.equal(memory.snapshot().records[0].content, 'completed');
+  assert.deepEqual(memory.snapshot().records[0].tags, ['completed']);
+});

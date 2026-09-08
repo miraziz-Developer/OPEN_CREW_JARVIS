@@ -4,6 +4,7 @@ const { SkillPlatform } = require('../core/skill-platform');
 
 function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
   const platform = new SkillPlatform(platformOptions);
+  const deepThinkTimeoutMs = Math.max(5000, parseInt(env?.('DEEP_THINK_TIMEOUT_MS'), 10) || 90000) + 5000;
   platform.register({
     id: 'google-calendar', version: '1.0.0', capabilities: ['calendar.read', 'calendar.write'],
     actions: {
@@ -34,7 +35,7 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
   });
   platform.register({
     id: 'deep-think', version: '1.0.0', capabilities: ['reasoning'],
-    actions: { askExpert: { input: { required: ['question'] }, timeoutMs: 45000 } }
+    actions: { askExpert: { input: { required: ['question'] }, timeoutMs: deepThinkTimeoutMs } }
   }, async () => {
     const expert = require('./deep-think');
     return { askExpert: input => expert.askExpert(input.question, input.context) };
@@ -76,7 +77,7 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
             ...process.env,
             AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'),
             AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'),
-            AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'uz-UZ-SardorNeural'
+            AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'en-US-GuyNeural'
           }
         });
         let out = '';

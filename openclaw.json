@@ -3,10 +3,10 @@
     "defaults": {
       "workspace": "/Users/mirazizerkinaliyev_dev/.openclaw/workspace",
       "model": {
-        "primary": "kimi-azure/Kimi-K2.6"
+        "primary": "azure-openai/gpt-6-astra"
       },
       "models": {
-        "kimi-azure/Kimi-K2.6": {}
+        "azure-openai/gpt-6-astra": {}
       },
       "skills": [
         "azure-tts",
@@ -50,8 +50,8 @@
   "models": {
     "mode": "merge",
     "providers": {
-      "kimi-azure": {
-        "api": "openai-completions",
+      "azure-openai": {
+        "api": "azure-openai-responses",
         "auth": "api-key",
         "baseUrl": "https://mirazizerkinaliyev553-4-resource.services.ai.azure.com/openai/v1",
         "apiKey": {
@@ -62,8 +62,8 @@
         "contextWindow": 128000,
         "models": [
           {
-            "id": "Kimi-K2.6",
-            "name": "Kimi K2.6",
+            "id": "gpt-6-astra",
+            "name": "GPT-6 Astra",
             "input": [
               "text"
             ],

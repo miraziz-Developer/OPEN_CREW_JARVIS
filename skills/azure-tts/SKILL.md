@@ -6,15 +6,15 @@ Azure Cognitive Services Speech TTS orqali matnni o'zbek tilida (uz-UZ) ovozga a
 
 ### `azure_tts_speak`
 
-Matnni ovozli faylga aylantiradi (MP3, 24 kHz, Mono).
+Matnni ovozli faylga aylantiradi (PCM WAV, 24 kHz, mono).
 
 **Kirish:**
 - `text` (string, majburiy): O'qilishi kerak bo'lgan matn
 - `voice` (string, ixtiyoriy): Ovoz modeli, masalan `uz-UZ-SardorNeural` yoki `uz-UZ-MadinaNeural`. K boshqa uz-UZ ovozlari qo'llab-quvvatlanadi.
 
 **Chiqish:**
-- `audioFile` (string): Yaratilgan MP3 fayl yo'li
-- `format` (string): `audio/mp3`
+- `audioFile` (string): Yaratilgan 24 kHz mono PCM WAV fayl yo'li
+- `format` (string): `audio/wav`
 - `status` (string): `ok` yoki `error`
 
 **Misol:**

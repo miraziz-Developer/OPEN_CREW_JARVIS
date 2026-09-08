@@ -1,6 +1,6 @@
 # screen-vision
 
-Foydalanuvchi ekranini haqiqiy ko'radi — Azure OpenAI'ning vision-qo'llab-quvvatlaydigan `gpt-4.1` deployment'i orqali skrinshotni tahlil qiladi. Kimi-K2.6 (asosiy suhbat modeli) rasmni tushunmaydi — shuning uchun ekran haqida savol berilganda ALBATTA shu skill ishlatilishi kerak, taxmin qilib javob berish taqiqlanadi.
+Foydalanuvchi ekranini haqiqiy ko'radi — Azure OpenAI'ning vision-qo'llab-quvvatlaydigan `gpt-4.1` deployment'i orqali skrinshotni tahlil qiladi. Primary agent modelining vision imkoniyatidan qat'i nazar, ekran haqida savol berilganda ground-truth screenshot va macOS konteksti uchun ALBATTA shu skill ishlatilishi kerak; taxmin qilib javob berish taqiqlanadi.
 
 ## Qachon ishlatish
 

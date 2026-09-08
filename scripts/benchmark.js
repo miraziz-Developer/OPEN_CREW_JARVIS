@@ -10,6 +10,7 @@ const { loadCorpus, summarizeCorpus } = require('../core/voice-benchmark-corpus'
 const ROOT = path.resolve(__dirname, '..');
 const runtimeFile = path.join(ROOT, '.jarvis-runtime.json');
 const samplesFile = process.argv.find(arg => arg.startsWith('--samples='))?.slice(10);
+const explicitSince = process.argv.find(arg => arg.startsWith('--since='))?.slice(8);
 
 function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; }
@@ -38,10 +39,14 @@ const privateCorpusFile = path.join(ROOT, 'benchmarks', 'private', 'voice-corpus
 const corpusSamples = fs.existsSync(privateCorpusFile) ? summarizeCorpus(loadCorpus(privateCorpusFile)) : {};
 const samples = samplesFile ? readJson(path.resolve(samplesFile), {}) : corpusSamples;
 const voiceTelemetryFile = path.join(ROOT, '.run', 'voice-flight-recorder.jsonl');
-const telemetry = loadVoiceTelemetry(voiceTelemetryFile);
+const daemonStartedAt = runtime?.components?.['voice-daemon']?.startedAt;
+const since = process.argv.includes('--all-history')
+  ? null
+  : (Number.isFinite(Number(explicitSince)) ? Number(explicitSince) : daemonStartedAt);
+const telemetry = loadVoiceTelemetry(voiceTelemetryFile, Number.isFinite(since) ? { since } : undefined);
 const metrics = metricsFrom(runtime, samples, telemetry);
 const evaluation = evaluateQuality(metrics);
-const report = { generatedAt: new Date().toISOString(), sources: { runtime: fs.existsSync(runtimeFile), voiceTelemetry: fs.existsSync(voiceTelemetryFile), samples: samplesFile || (fs.existsSync(privateCorpusFile) ? 'private-corpus' : null) }, metrics, corpus: corpusSamples.corpus || null, voiceTelemetry: telemetry, ...evaluation };
+const report = { generatedAt: new Date().toISOString(), sources: { runtime: fs.existsSync(runtimeFile), voiceTelemetry: fs.existsSync(voiceTelemetryFile), telemetrySince: Number.isFinite(since) ? new Date(since).toISOString() : null, samples: samplesFile || (fs.existsSync(privateCorpusFile) ? 'private-corpus' : null) }, metrics, corpus: corpusSamples.corpus || null, voiceTelemetry: telemetry, ...evaluation };
 
 for (const [name, item] of Object.entries(evaluation.results)) {
   const icon = item.status === 'pass' ? '✅' : item.status === 'fail' ? '❌' : '⬜';

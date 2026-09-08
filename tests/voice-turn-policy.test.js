@@ -12,6 +12,11 @@ test('short acknowledgements remain silent', () => {
   assert.equal(classifyUserTurn("xo'p").accept, false);
 });
 
+test('English acknowledgements remain silent while complete English turns pass', () => {
+  assert.equal(classifyUserTurn('Okay.').reason, 'acknowledgement');
+  assert.equal(classifyUserTurn('Please continue with the deployment.').accept, true);
+});
+
 test('low-information noise is silent but real short commands survive', () => {
   assert.equal(classifyUserTurn('um').reason, 'low-information');
   assert.equal(classifyUserTurn('Thank you').reason, 'low-information');
@@ -38,6 +43,11 @@ test('media mode rejects foreign playback but preserves concise Uzbek commands',
     accept: true,
     reason: 'speech'
   });
+  assert.deepEqual(classifyUserTurn('Salaam.', { mediaMode: true, explicitUserTrigger: true }), {
+    accept: true,
+    reason: 'speech'
+  });
+  assert.equal(classifyUserTurn('Salaam.', { mediaMode: true }).reason, 'media-background');
 });
 
 test('English questions and commands are accepted while passive media dialogue stays blocked', () => {

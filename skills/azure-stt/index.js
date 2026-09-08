@@ -2,7 +2,7 @@
 /**
  * JARVIS Azure STT Skill v2 — Azure Speech REST API bilan
  * Multi-request server mode (pool bilan ishlash uchun)
- * Kirish: har qatorda JSON  →  { audioBase64: "...", locale: "uz-UZ" }
+ * Input: one JSON object per line → { audioBase64: "...", locale: "en-US" }
  * Chiqish: har qatorda JSON →  { status: "ok", text: "...", confidence: 0.95 }
  */
 
@@ -12,7 +12,7 @@ const readline = require('readline');
 
 const REGION = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY    = process.env.AZURE_SPEECH_KEY;
-const LOCALE = process.env.AZURE_SPEECH_LANGUAGE || process.env.AZURE_STT_LOCALE || 'uz-UZ';
+const LOCALE = process.env.AZURE_SPEECH_LANGUAGE || process.env.AZURE_STT_LOCALE || 'en-US';
 
 function ensureKey() {
   if (!KEY) throw new Error('AZURE_SPEECH_KEY muhit ozgaruvchisi topilmadi.');

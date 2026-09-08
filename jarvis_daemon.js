@@ -23,7 +23,7 @@ const net = require('net');
 const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
 
-const { writeMemory, searchMemory } = require('./skills/memory');
+const { writeMemory, searchMemory, upsertTurnMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
 const { JarvisRuntime } = require('./core/jarvis-runtime');
 const { VoiceFlightRecorder } = require('./core/voice-flight-recorder');
@@ -33,9 +33,13 @@ const { createSkillPlatform } = require('./skills/platform');
 const { loadCalibration, resolveCalibratedNumber } = require('./core/audio-calibration');
 const { ok, er, inf, wrn } = require('./core/log');
 const { makeWavHeader, pcmToWavBuffer, getEnergy, getPeakAmplitude } = require('./core/audio-utils');
+const { buildSoxCaptureArgs } = require('./core/mic-capture');
 const { RollingBuffer } = require('./core/rolling-buffer');
 const { HotwordDetector } = require('./core/hotword-detector');
 const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
+const { findWakeRecognition, extractAddressedCommand } = require('./core/wake-word-policy');
+const { TurnJournal } = require('./core/turn-journal');
+const { ConversationContext } = require('./core/conversation-context');
 const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
 const { detectWakeSoundMs, playWakeSound, playSystemSound, playTaskDoneSound } = require('./core/voice-sounds');
@@ -64,8 +68,11 @@ const OPENWAKEWORD_PYTHON = path.join(PROJECT_DIR, '.venv-openwakeword', 'bin', 
 
 // ── Config ──────────────────────────────────────────────
 const SAMPLE_RATE = 16000;
+const MIC_FILTER_ENABLED = !/^(?:false|0|no|off)$/i.test(env('MIC_FILTER_ENABLED') || 'true');
+const MIC_HIGHPASS_HZ = parseFloat(env('MIC_HIGHPASS_HZ')) || 80;
+const MIC_LOWPASS_HZ = parseFloat(env('MIC_LOWPASS_HZ')) || 7600;
 const CHUNK_MS = 1200;             // overlap window (ms) — "Jarvis" to'liq sig'ish uchun
-const STEP_MS = 200;               // new chunk every (ms)
+const STEP_MS = 150;               // faster wake inference cadence without reducing confidence
 const ENERGY_MIN_STT = parseFloat(env('ENERGY_MIN_STT')) || 120; // past mikrofonlarda ham backup ishlasin
 const ENERGY_TARGET = 1500;        // adaptive gain target — low, no clip
 const SILENCE_MS = 500;            // silence = command end
@@ -74,14 +81,18 @@ const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
 const HOTWORD_COOLDOWN_MS = parseInt(env('HOTWORD_COOLDOWN_MS'), 10) || 3000;
 const REALTIME_INPUT_GAIN = Math.max(1, Math.min(8, resolveCalibratedNumber('REALTIME_INPUT_GAIN', ENV_VALUES, AUDIO_CALIBRATION, 3)));
-const OPENWAKEWORD_INPUT_GAIN = Math.max(1, Math.min(4, parseFloat(env('OPENWAKEWORD_INPUT_GAIN')) || 2));
-const WAKE_STT_SILENCE_MS = 450;
-const WAKE_STT_MAX_MS = 2800;
-const WAKE_STT_PREROLL_MS = 350;
+const OPENWAKEWORD_INPUT_GAIN = Math.max(1, Math.min(6, parseFloat(env('OPENWAKEWORD_INPUT_GAIN')) || 3));
+const WAKE_STT_SILENCE_MS = 420;
+const WAKE_STT_MAX_MS = 2200;
+const WAKE_STT_PREROLL_MS = 450;
+const WAKE_STT_MIN_SPEECH_MS = 480;
 
 const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
 const REALTIME_WAKE_PREROLL_MS = parseInt(env('REALTIME_WAKE_PREROLL_MS'), 10) || 1800;
+const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 20000;
+const ACTION_CONFIRMATION_TTL_MS = parseInt(env('ACTION_CONFIRMATION_TTL_MS'), 10) || 30000;
+const TURN_STALE_TIMEOUT_MS = Math.max(30000, parseInt(env('TURN_STALE_TIMEOUT_MS'), 10) || 600000);
 
 // Parallel bajarilayotgan jonli vazifalar (run_task) holati — dashboard
 // buni /api/realtime-tasks orqali o'qib, "hozir nima ustida ishlayapti"
@@ -102,6 +113,24 @@ const DAEMON_STARTED_AT = Date.now();
 const runtimeIdentity = () => ({ pid: process.pid, startedAt: DAEMON_STARTED_AT });
 const missions = new MissionControl({ file: MISSION_CONTROL_FILE, defaultMaxAttempts: 3 });
 const skillPlatform = createSkillPlatform({ projectDir: PROJECT_DIR, env });
+const conversationContext = new ConversationContext({ windowMs: CONVERSATION_FOLLOWUP_MS });
+const turnJournal = new TurnJournal({
+  file: path.join(PROJECT_DIR, '.run', 'addressed-turns.jsonl'),
+  materialize: upsertTurnMemory,
+  retryMs: 750,
+  maxRetries: 4,
+  maxBytes: parseInt(env('TURN_JOURNAL_MAX_BYTES'), 10) || 8 * 1024 * 1024,
+  retentionFiles: parseInt(env('TURN_JOURNAL_RETENTION_FILES'), 10) || 5
+});
+turnJournal.on('error', (error, context) => {
+  wrn(`Turn memory write failed (${context.turnId}, attempt ${context.attempt + 1}): ${error.message || error}`);
+  runtime.heartbeat('memory-write', { status: 'error', turnId: context.turnId, error: String(error.message || error).slice(0, 250) });
+});
+turnJournal.on('materialized', (turn, metrics) => {
+  runtime.observeLatency('memory-write', metrics.durationMs);
+  runtime.heartbeat('memory-write', { status: 'ready', turnId: turn.turnId, latencyMs: metrics.durationMs, origin: metrics.origin });
+  if (metrics.origin !== 'replay' && turn.status === 'completed') setTimeout(() => embedIndexJob.run(), 500).unref?.();
+});
 const recoveredMissions = missions.recoverStale();
 if (recoveredMissions) console.log('Mission Control: ' + recoveredMissions + ' ta stale worker tiklandi');
 runtime.on('runtime.error', error => console.error('Jarvis runtime state xatoligi:', error.message));
@@ -202,7 +231,12 @@ const PROACTIVE_INTERVAL_MIN_RT = parseInt(env('PROACTIVE_INTERVAL_MIN'), 10) ||
 const proactivePolicy = new ProactivePolicy({
   file: path.join(PROJECT_DIR, '.proactive-policy.json'),
   cooldownMs: (parseInt(env('PROACTIVE_COOLDOWN_MIN'), 10) || 30) * 60e3,
-  dailySuggestionBudget: parseInt(env('PROACTIVE_DAILY_BUDGET'), 10) || 8
+  dailySuggestionBudget: parseInt(env('PROACTIVE_DAILY_BUDGET'), 10) || 8,
+  defaultContext: {
+    privacyMode: /^(?:true|1|yes|on)$/i.test(env('JARVIS_PRIVACY_MODE') || 'false'),
+    focusMode: /^(?:true|1|yes|on)$/i.test(env('JARVIS_FOCUS_MODE') || 'false'),
+    meeting: /^(?:true|1|yes|on)$/i.test(env('JARVIS_MEETING_MODE') || 'false')
+  }
 });
 const proactiveCheckJob = createProactiveCheckJob({
   projectDir: PROJECT_DIR, intervalMin: PROACTIVE_INTERVAL_MIN_RT, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile
@@ -303,6 +337,13 @@ if (EMBED_INDEX_ENABLED) {
   setTimeout(() => { embedIndexJob.run(); }, 60 * 1000);
   setInterval(() => { embedIndexJob.run(); }, EMBED_INDEX_INTERVAL_MIN * 60 * 1000);
 }
+const replayResult = turnJournal.replay();
+turnJournal.startWatchdog({ maxAgeMs: TURN_STALE_TIMEOUT_MS, reason: 'turn watchdog timeout' });
+runtime.heartbeat('memory-recovery', { status: 'ready', ...replayResult });
+if (replayResult.replayed > 0) {
+  inf(`Turn journal recovery: ${replayResult.replayed} ta terminal turn qayta materialize qilindi`);
+  if (EMBED_INDEX_ENABLED) setTimeout(() => embedIndexJob.run(), 500).unref?.();
+}
 
 function adaptGain(energy) {
   if (energy < ENERGY_MIN_STT) _gain = Math.min(_gain * 1.2, GAIN_MAX);
@@ -343,18 +384,15 @@ const STEP_BYTES = Math.floor((STEP_MS * SAMPLE_RATE * 2) / 1000);   // 4800 byt
 const CHUNK_SAMPLES = Math.floor((CHUNK_MS * SAMPLE_RATE) / 1000);   // 5600 samples
 
 function startMicProcess() {
-  const ffmpeg = spawn('sox', [
-    '-d',                              // default device
-    '-t', 'raw',                        // output raw PCM
-    '-r', String(SAMPLE_RATE),
-    '-c', '1',
-    '-b', '16',
-    '-e', 'signed',
-    '-'                                 // stdout
-  ]);
-  ffmpeg.on('error', (err) => er('Mic process error: ' + err.message));
-  ffmpeg.stderr.on('data', () => {});
-  return ffmpeg;
+  const capture = spawn('sox', buildSoxCaptureArgs({
+    sampleRate: SAMPLE_RATE,
+    filterEnabled: MIC_FILTER_ENABLED,
+    highpassHz: MIC_HIGHPASS_HZ,
+    lowpassHz: MIC_LOWPASS_HZ
+  }));
+  capture.on('error', (err) => er('Mic process error: ' + err.message));
+  capture.stderr.on('data', () => {});
+  return capture;
 }
 
 async function mainLoop() {
@@ -397,14 +435,6 @@ async function mainLoop() {
   // 40 dan boshlash shovqinni nutq deb olib, uzluksiz STT segment yuborardi.
   let ambientEnergy = ENERGY_MIN_STT;
 
-  function isWakePhrase(text) {
-    const normalized = String(text || '').toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
-    const compact = normalized.replace(/\s+/g, '');
-    return ['jarvis', 'jarviz', 'jervis', 'djervis', 'yarvis', 'jorvis', 'djarvis', 'charvis', 'jarv'].some(word =>
-      normalized.includes(word) || compact.includes(word)
-    );
-  }
-
   function submitWakeStt(pcm, measuredEnergy) {
     if (!pcm.length || sttBackupInFlight || Date.now() - lastSttCheck < 900) return;
     lastSttCheck = Date.now();
@@ -412,15 +442,26 @@ async function mainLoop() {
     const gain = Math.max(1, Math.min(5, ENERGY_TARGET / Math.max(measuredEnergy, 1)));
     const wavBuf = pcmToWavBuffer(applyGain(Buffer.from(pcm), gain));
     inf('STT wake segment (' + Math.round(pcm.length / (SAMPLE_RATE * 2) * 1000) + 'ms, energy=' + Math.round(measuredEnergy) + ')...');
-    _sttPool.recognize(wavBuf, 'en-US').then(r => {
-      if (r && r.status === 'ok' && r.text) {
-        inf('STT wake heard: "' + r.text + '"');
-        if (isWakePhrase(r.text) && state === 'listening' && Date.now() - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
-          triggerVoice('🔥 HOTWORD (STT backup): "' + r.text + '"');
+    // Local openWakeWord is primary. The cloud fallback is English-only and
+    // uses one request, avoiding the former parallel Uzbek decoder wait/cost.
+    Promise.all([_sttPool.recognize(wavBuf, 'en-US')]).then(results => {
+      const heard = results.filter(r => r && r.status === 'ok' && r.text);
+      if (heard.length) {
+        inf('STT wake heard: ' + heard.map(r => '"' + r.text + '"').join(' / '));
+        const wake = findWakeRecognition(heard);
+        if (wake && state === 'listening' && Date.now() - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
+          const addressed = extractAddressedCommand(wake.text);
+          triggerVoice('🔥 HOTWORD (hybrid STT): "' + wake.text + '"', {
+            addressedWake: true,
+            initialTranscript: addressed?.command || '',
+            playAck: !addressed?.command
+          });
         }
-      } else if (r && r.reason && !['NoMatch', 'nomatch', 'unknown'].includes(r.reason) && Date.now() - lastSttBackupNotice > 60000) {
+      } else {
+        const failed = results.find(r => r && r.reason && !['NoMatch', 'nomatch', 'unknown'].includes(r.reason));
+        if (!failed || Date.now() - lastSttBackupNotice <= 60000) return;
         lastSttBackupNotice = Date.now();
-        wrn('STT backup vaqtincha javob bermadi: ' + r.reason);
+        wrn('STT backup vaqtincha javob bermadi: ' + failed.reason);
       }
     }).catch(e => {
       if (Date.now() - lastSttBackupNotice > 60000) {
@@ -430,31 +471,28 @@ async function mainLoop() {
     }).finally(() => { sttBackupInFlight = false; });
   }
 
-  // Wake-word'dan keyin eski batch STT → agent → TTS yo'li emas, mavjud
-  // gpt-realtime sessiyasi ishga tushadi. Realtime modul audio streaming,
-  // barge-in va run_task/fast_action vositalarini o'zi boshqaradi; daemon esa
-  // mikrofon oqimi, idle timeout va dashboard task holatini ulaydi.
-  function startRealtimeSession(reason) {
+  // English Realtime owns STT, VAD, conversation and speech. Astra remains
+  // available for complex reasoning and the full agent for executable tasks.
+  function startRealtimeSession(reason, trigger = {}) {
     if (_activeRealtimeSession || state !== 'listening') return false;
 
     const session = new RealtimeSession({
-      transcribeUzbek: async (pcm16) => {
-        if (!pcm16?.length || !_sttPool) return { text: '', confidence: 0 };
-        const result = await _sttPool.recognize(pcmToWavBuffer(pcm16), 'uz-UZ');
-        if (!result || result.status !== 'ok') return { text: '', confidence: 0 };
-        return { text: result.text || '', confidence: result.confidence || 0 };
-      },
+      explicitUserTrigger: reason.includes('Fn') || Boolean(trigger.addressedWake),
+      addressedWakeTrigger: Boolean(trigger.addressedWake && !trigger.initialTranscript),
+      initialTranscript: trigger.initialTranscript || '',
+      conversationContext,
+      actionConfirmationTtlMs: ACTION_CONFIRMATION_TTL_MS,
       // Default RealtimeSession'ning o'z ichki askExpert()'i `openclaw agent`
-      // CLI'ni (run_task bilan bir xil, Kimi-K2.6) spawn qiladi — haqiqiy
-      // kuchli `deep-think` (gpt-5.4, to'g'ridan-to'g'ri Azure Chat
-      // Completions, tool-loop'siz — shu sabab 3-4 baravar tezroq ham)
+      // CLI'ni (run_task bilan bir xil primary model) spawn qiladi — haqiqiy
+      // kuchli `deep-think` (gpt-6-astra, to'g'ridan-to'g'ri Azure Responses
+      // API, tool-loop'siz — shu sabab tezroq)
       // hech qachon ishlatilmasdi. Shu yerga ulash orqali `ask_expert` va
       // deterministik expert/grounding yo'li ham haqiqiy kuchli modelga boradi.
       expertAnswer: async (question, callId, grounding) => {
         try {
           return await skillPlatform.invoke('deep-think', 'askExpert', { question, context: grounding });
         } catch (e) {
-          return "Ekspert bilan bog'lanib bo'lmadi.";
+          return "I couldn't reach the reasoning service.";
         }
       },
       // fast-actions endi SkillPlatform orqali chaqiriladi -- osilib qolgan
@@ -476,16 +514,24 @@ async function mainLoop() {
     // boss" preroll'ga kirib, server uni foydalanuvchi nutqi deb qabul qiladi.
     // Ack tugagach, ulanish hali tayyor bo'lmasa haqiqiy buyruq bounded
     // preroll'ga yig'iladi va ready bo'lgan zahoti yuboriladi.
-    const wakeMuteUntil = Date.now() + WAKE_SOUND_MS + 80;
-    playWakeSound(WAKE_SOUND_PATH);
+    // WAKE_SOUND_MS ichida audio-driver uchun 100ms guard allaqachon bor.
+    // Bu yerda ikkinchi guard qo'shish foydalanuvchining birinchi so'zlarini
+    // keraksiz tashlab yuborar edi.
+    const shouldPlayAck = trigger.playAck !== false;
+    const wakeMuteUntil = shouldPlayAck ? Date.now() + WAKE_SOUND_MS : 0;
+    if (shouldPlayAck) playWakeSound(WAKE_SOUND_PATH);
     let idleTimer = null;
     let finished = false;
     let sessionWasReady = false;
     let lastUserTranscript = '';
+    let currentTurnId = '';
+    const pendingTurnIds = [];
     let activeToolCount = 0;
+    const toolTurns = new Map();
     let wakeAudioPending = true;
-    const wakePreroll = [];
-    let wakePrerollBytes = 0;
+    const wakePreroll = trigger.seedAudio?.length
+      ? [applyGain(Buffer.from(trigger.seedAudio), REALTIME_INPUT_GAIN)] : [];
+    let wakePrerollBytes = wakePreroll.reduce((total, chunk) => total + chunk.length, 0);
     let speechStoppedAt = 0;
     let transcriptAcceptedAt = 0;
     let firstAudioObserved = false;
@@ -503,6 +549,13 @@ async function mainLoop() {
     const finishRealtimeSession = (why) => {
       if (finished) return;
       finished = true;
+      for (const [callId, turnId] of toolTurns) {
+        turnJournal.append(turnId, 'tool.cancelled', { callId, reason: why });
+      }
+      toolTurns.clear();
+      while (pendingTurnIds.length) {
+        turnJournal.append(pendingTurnIds.shift(), /xato|error/i.test(why) ? 'turn.failed' : 'turn.cancelled', { reason: why });
+      }
       flightRecorder.endSession(why);
       clearTimeout(idleTimer);
       if (_activeRealtimeSession === session) _activeRealtimeSession = null;
@@ -548,6 +601,7 @@ async function mainLoop() {
       flightRecorder.textEvent('turn.suppressed', text, { reason });
       inf('🔇 Realtime turn bloklandi (' + reason + '): ' + String(text || '').slice(0, 100));
       runtime.setConversationMode('listening');
+      if (reason === 'wake-only' && !shouldPlayAck) playWakeSound(WAKE_SOUND_PATH);
       armIdleTimer();
     });
     session.on('user_transcript', (text) => {
@@ -559,6 +613,9 @@ async function mainLoop() {
         return;
       }
       lastUserTranscript = clean;
+      currentTurnId = turnJournal.createTurn('voice');
+      pendingTurnIds.push(currentTurnId);
+      turnJournal.append(currentTurnId, 'user.accepted', { text: clean, source: 'realtime' });
       transcriptAcceptedAt = Date.now();
       if (speechStoppedAt) runtime.observeLatency('speech-to-transcript', transcriptAcceptedAt - speechStoppedAt);
       flightRecorder.textEvent('command.accepted', clean, { source: 'realtime-transcript' });
@@ -567,7 +624,7 @@ async function mainLoop() {
       sendTelegram('🎙 ' + clean);
       armIdleTimer();
     });
-    session.on('assistant_transcript', (text) => {
+    session.on('assistant_transcript', (text, response = {}) => {
       const clean = String(text || '').trim();
       if (!clean) return;
       const accepted = runtime.acceptResponse(clean);
@@ -579,15 +636,27 @@ async function mainLoop() {
       flightRecorder.textEvent('assistant.transcript', clean);
       ok('🤖 Realtime: ' + clean.substring(0, 120));
       sendTelegram('🤖 ' + clean);
-      try {
-        writeMemory('Ovozli suhbat', 'Foydalanuvchi: ' + (lastUserTranscript || '(transkript yo\'q)') + '\nJarvis: ' + clean.substring(0, 700), ['voice', 'realtime']);
-      } catch (e) {}
+      const assistantTurnId = pendingTurnIds.shift() || currentTurnId;
+      if (assistantTurnId) {
+        if (response.status && response.status !== 'completed') {
+          turnJournal.append(assistantTurnId, 'assistant.recorded', { text: clean });
+          const type = /cancel/i.test(response.status + ' ' + response.reason) ? 'turn.cancelled' : 'turn.failed';
+          turnJournal.append(assistantTurnId, type, { reason: response.reason || response.status });
+        } else turnJournal.append(assistantTurnId, 'assistant.completed', { text: clean });
+      }
       lastUserTranscript = '';
       armIdleTimer();
     });
     session.on('turn_done', () => {
       flightRecorder.event('turn.completed');
       armIdleTimer();
+    });
+    session.on('response_status', ({ status, reason, hasAssistantTranscript }) => {
+      if (hasAssistantTranscript || status === 'completed') return;
+      const turnId = pendingTurnIds.shift() || currentTurnId;
+      if (!turnId) return;
+      const type = /cancel/i.test(status + ' ' + reason) ? 'turn.cancelled' : 'turn.failed';
+      turnJournal.append(turnId, type, { reason: reason || status });
     });
     session.on('telemetry', (type, data) => {
       flightRecorder.event(type, data);
@@ -624,6 +693,10 @@ async function mainLoop() {
         id: stableId('realtime', callId), source: 'realtime', idempotencyKey: 'realtime:' + callId
       });
       rtTaskStarted(callId, description);
+      if (currentTurnId) {
+        toolTurns.set(callId, currentTurnId);
+        turnJournal.append(currentTurnId, 'tool.started', { description, callId });
+      }
       inf('🛠 Jonli vazifa: ' + description);
       armIdleTimer();
     });
@@ -638,12 +711,18 @@ async function mainLoop() {
         if (step) recordMissionResult(missionId, step.id, result, { type: 'tool-result', value: result });
       } catch (e) { wrn('Mission Control: ' + e.message); }
       rtTaskCompleted(callId, result);
+      const toolTurnId = toolTurns.get(callId);
+      if (toolTurnId) {
+        turnJournal.append(toolTurnId, resultLooksSuccessful(result) ? 'tool.completed' : 'tool.failed', { callId, result });
+        toolTurns.delete(callId);
+      }
       const finishedTask = _realtimeTasks.find(t => t.callId === callId);
       if (finishedTask?.status === 'completed' && !/^fast_action:/i.test(String(finishedTask.description || ''))) playTaskDoneSound();
       armIdleTimer();
     });
     session.on('error', (err) => {
       flightRecorder.event('turn.failed', { error: String(err.message || err) });
+      if (currentTurnId) turnJournal.append(currentTurnId, 'turn.failed', { error: String(err.message || err) });
       _realtimeFailureCount += 1;
       if (_realtimeFailureCount >= REALTIME_FAILURE_LIMIT) {
         _realtimeDisabledUntil = Date.now() + REALTIME_COOLDOWN_MS;
@@ -670,6 +749,7 @@ async function mainLoop() {
       // yoki idle-timeout orqali allaqachon yakunlanmagan bo'lsa) — bu
       // kutilmagan uzilish, holatni to'g'ri belgilaymiz.
       if (!finished) {
+        if (currentTurnId) turnJournal.append(currentTurnId, 'turn.failed', { error: 'socket-closed-unexpectedly' });
         runtime.heartbeat('realtime-api', {
           status: sessionWasReady ? 'degraded' : 'error',
           reason: 'socket-closed-unexpectedly'
@@ -691,8 +771,9 @@ async function mainLoop() {
     session._jarvisWakeMuteUntil = wakeMuteUntil;
     session._jarvisQueueWakeAudio = (chunk) => {
       if (!wakeAudioPending || !chunk?.length) return false;
-      // `true` qaytarish daemon'ga bu chunk bilan boshqa ish qilmaslikni
-      // bildiradi. Ack tugamaguncha chunk ataylab saqlanmaydi.
+      // Ack faqat wake-only/Fn yo'lida ijro etiladi. Inline addressed speech
+      // uchun mute yo'q: triggerdan keyingi har bir chunk bounded preroll'ga
+      // tushadi va ulanish tayyor bo'lishi bilan ketma-ket forward qilinadi.
       if (Date.now() < wakeMuteUntil) return true;
       wakePreroll.push(Buffer.from(chunk));
       wakePrerollBytes += chunk.length;
@@ -708,7 +789,7 @@ async function mainLoop() {
   // qilingan snapshotda triggerVoice chaqiriqlari qolib, funksiyaning o'zi
   // yo'qolgan edi — Porcupine/qarsak topilganda ReferenceError bo'lib daemon
   // qular edi. Fn DOWN/UP ham pause-sentinel brokeridan shu yerga keladi.
-  function triggerVoice(reason) {
+  function triggerVoice(reason, trigger = {}) {
     if (state !== 'listening') return false;
     // Lokal model va STT fallback parallel tinglaydi. Ulardan biri trigger
     // qilishi bilan ikkinchisining yarim yig'ilgan segmentini tashlaymiz;
@@ -716,7 +797,7 @@ async function mainLoop() {
     wakeSpeechBuffers = [];
     wakeSpeechStartedAt = 0;
     wakeSpeechLastVoiceAt = 0;
-    if (REALTIME_ENABLED && Date.now() >= _realtimeDisabledUntil) return startRealtimeSession(reason);
+    if (REALTIME_ENABLED && Date.now() >= _realtimeDisabledUntil) return startRealtimeSession(reason, trigger);
     if (REALTIME_ENABLED && _realtimeDisabledUntil > Date.now()) {
       runtime.heartbeat('realtime-api', {
         status: 'degraded',
@@ -731,7 +812,7 @@ async function mainLoop() {
     cmdBuffers = [];
     cmdStartTime = now;
     lastVoiceTime = now;
-    playWakeSound(WAKE_SOUND_PATH);
+    if (trigger.playAck !== false) playWakeSound(WAKE_SOUND_PATH);
     inf(reason + ' — buyruq tinglanyapti');
     return true;
   }
@@ -842,7 +923,11 @@ async function mainLoop() {
           }
 
           if (detected && (now - lastHotwordTime > HOTWORD_COOLDOWN_MS)) {
-            triggerVoice('🔥 HOTWORD: "Hey Jarvis" (openWakeWord)');
+              triggerVoice('🔥 HOTWORD: "Hey Jarvis" (openWakeWord)', {
+                addressedWake: true,
+                playAck: false,
+                seedAudio: rolling.sliceLast(REALTIME_WAKE_PREROLL_MS)
+              });
             return;
           }
 
@@ -865,7 +950,7 @@ async function mainLoop() {
 
             const speechAge = now - wakeSpeechStartedAt;
             const silenceAge = now - wakeSpeechLastVoiceAt;
-            if ((silenceAge >= WAKE_STT_SILENCE_MS && speechAge >= 400) || speechAge >= WAKE_STT_MAX_MS) {
+            if ((silenceAge >= WAKE_STT_SILENCE_MS && speechAge >= WAKE_STT_MIN_SPEECH_MS) || speechAge >= WAKE_STT_MAX_MS) {
               const speechPcm = Buffer.concat(wakeSpeechBuffers);
               const speechEnergy = getEnergy(speechPcm);
               wakeSpeechBuffers = [];
@@ -894,7 +979,7 @@ async function mainLoop() {
           const totalPCM = Buffer.concat(cmdBuffers);
           const wavBuf = pcmToWavBuffer(totalPCM);
           inf('STT ishlanyapti...');
-          _sttPool.recognize(wavBuf, 'uz-UZ').then(r => {
+          _sttPool.recognize(wavBuf, 'en-US').then(r => {
             state = 'listening';
             nextStepTime = Date.now(); // reset timing
             if (r && r.status === 'ok' && r.text && r.text.length > 1) {
@@ -933,12 +1018,14 @@ async function processCommand(command) {
     wrn('Takror batch buyruq tashlandi: ' + command);
     return;
   }
+  const batchTurnId = turnJournal.createTurn('batch-voice');
+  turnJournal.append(batchTurnId, 'user.accepted', { text: command, source: 'batch-stt' });
   runtime.setConversationMode('thinking');
   const commandStartedAt = Date.now();
   inf('>>> ' + command); sendTelegram('🎙 ' + command);
   if (!fs.existsSync(path.join(PROJECT_DIR, '.jarvis-onboarded'))) {
     fs.writeFileSync(path.join(PROJECT_DIR, '.jarvis-onboarded'), 'true'); writeMemory('Onboard', 'start');
-    const ap = await ttsToFile('Salom, men Jarvisman'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
+    const ap = await ttsToFile('Hello. I am Jarvis.'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
   }
 
   // Quick commands
@@ -946,16 +1033,19 @@ async function processCommand(command) {
     const cl = command.replace(/eslab qol|esda tut/gi, '').trim();
     writeMemory('Voice', cl, ['voice']); sendTelegram('✅ Eslab qoldim');
     const ap = await ttsToFile('Eslab qoldim'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Eslab qoldim' });
     return;
   }
   if (/kuzatishni (boshla|yo?qish)/i.test(command)) {
     try { execSync('echo \'{"action":"start"}\' | node skills/screen-monitor/index.js', { cwd: PROJECT_DIR }); } catch(e){}
     const ap = await ttsToFile('Kuzatuv yoqildi'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Kuzatuv yoqildi' });
     return;
   }
   if (/kuzatishni (to.xtat|o.chir)/i.test(command)) {
     try { execSync('echo \'{"action":"stop"}\' | node skills/screen-monitor/index.js', { cwd: PROJECT_DIR }); } catch(e){}
     const ap = await ttsToFile('Kuzatuv o.chirildi'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Kuzatuv o\'chirildi' });
     return;
   }
 
@@ -971,21 +1061,23 @@ async function processCommand(command) {
     const acceptedResponse = runtime.acceptResponse(reply);
     if (!acceptedResponse.accepted) {
       wrn('Takror agent javobi ovozga chiqarilmadi');
+      turnJournal.append(batchTurnId, 'turn.cancelled', { reason: 'duplicate-response' });
       return;
     }
     runtime.setConversationMode('speaking');
     ok('<<< ' + reply.substring(0, 80)); sendTelegram('🤖 ' + reply);
-    try { writeMemory('Ovozli buyruq', 'Foydalanuvchi: ' + command + '\nJarvis: ' + reply.substring(0, 500), ['voice', 'buyruq']); } catch (e) {}
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: reply.substring(0, 4000) });
     const audio = await ttsToFile(reply.substring(0, 400));
     if (audio) {
       try { execSync('afplay "' + audio + '"'); ok('🔊 Ovoz'); } catch(e){}
-      const ogg = audio.replace(/\.mp3$/, '.ogg');
+      const ogg = audio.replace(/\.[^.\/]+$/, '') + '.ogg';
       try { execSync('ffmpeg -y -i "' + audio + '" -c:a libopus "' + ogg + '" 2>/dev/null'); sendTelegramVoice(ogg); } catch(e){}
       [ogg, audio].forEach(p => { try { fs.unlinkSync(p); } catch(e){} });
     }
   } else {
     const fallback = 'Hozir javobni tayyorlay olmadim. Iltimos, yana bir marta ayting.';
     wrn('Agent bo\'sh javob qaytardi');
+    turnJournal.append(batchTurnId, 'turn.failed', { reason: 'agent-empty-response' });
     sendTelegram('⚠️ ' + fallback);
     const audio = await ttsToFile(fallback);
     if (audio) {

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * JARVIS Azure TTS Skill
- * Azure Cognitive Services Speech bilan ozbek tilida (uz-UZ) ovoz chiqaradi.
- * Kirish:  { text: "...", voice?: "uz-UZ-SardorNeural" | "uz-UZ-MadinaNeural" }
- * Chiqish: { status: "ok", audioFile: "/tmp/jarvis_tts_*.mp3", format: "audio/mp3" }
+ * Azure Cognitive Services Speech English fallback output.
+ * Input: { text: "...", voice?: "en-US-GuyNeural" }
+ * Chiqish: { status: "ok", audioFile: "/tmp/jarvis_tts_*.wav", format: "audio/wav" }
  */
 
 const axios = require('axios');
@@ -12,7 +12,7 @@ const path = require('path');
 const https = require('https');
 
 // konstantalar
-const DEFAULT_VOICE = process.env.AZURE_SPEECH_VOICE || 'uz-UZ-SardorNeural';
+const DEFAULT_VOICE = process.env.AZURE_SPEECH_VOICE || 'en-US-GuyNeural';
 const REGION        = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY           = process.env.AZURE_SPEECH_KEY;
 
@@ -28,8 +28,8 @@ function escapeXml(text) {
 // SSML yaratish
 function buildSsml(text, voice) {
   return '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="uz-UZ">' +
-    '<voice name="' + voice + '">' + escapeXml(text) + '</voice>' +
+    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">' +
+    '<voice name="' + voice + '"><prosody rate="-4%" pitch="-8%">' + escapeXml(text) + '</prosody></voice>' +
     '</speak>';
 }
 
@@ -47,7 +47,9 @@ async function azureTts(text, voice) {
     headers: {
       'Ocp-Apim-Subscription-Key': KEY,
       'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
+      // Realtime voice AEC aynan karnayga yuborilgan PCM'ni reference sifatida
+      // ishlata olishi uchun siqilgan MP3 emas, 24 kHz PCM WAV so'raymiz.
+      'X-Microsoft-OutputFormat': 'riff-24khz-16bit-mono-pcm',
       'User-Agent': 'Jarvis-Azure-TTS/1.0'
     },
     responseType: 'arraybuffer',
@@ -55,9 +57,9 @@ async function azureTts(text, voice) {
     httpsAgent: new https.Agent({ keepAlive: false })
   });
 
-  const outFile = path.join('/tmp', 'jarvis_tts_' + Date.now() + '.mp3');
+  const outFile = path.join('/tmp', 'jarvis_tts_' + Date.now() + '.wav');
   fs.writeFileSync(outFile, Buffer.from(response.data));
-  return { audioFile: outFile, format: 'audio/mp3', status: 'ok' };
+  return { audioFile: outFile, format: 'audio/wav', sampleRate: 24000, status: 'ok' };
 }
 
 // stdin oqish

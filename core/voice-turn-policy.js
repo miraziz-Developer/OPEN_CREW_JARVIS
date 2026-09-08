@@ -87,7 +87,9 @@ function classifyUserTurn(text, context = {}) {
   if (tokens.length === 1 && !SINGLE_WORD_INTENTS.has(tokens[0]) && tokens[0].length < 5) {
     return { accept: false, reason: 'low-information' };
   }
-  if (context.mediaMode && !looksLikeAddressedTurn(value)) return { accept: false, reason: 'media-background' };
+  if (context.mediaMode && !context.explicitUserTrigger && !looksLikeAddressedTurn(value)) {
+    return { accept: false, reason: 'media-background' };
+  }
   const lastAssistant = normalize(context.lastAssistant);
   if (lastAssistant && (lastAssistant.includes(value) || similarity(value, lastAssistant) >= (context.echoSimilarity || 0.72))) {
     return { accept: false, reason: 'assistant-echo' };

@@ -10,7 +10,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_
 ## Tarif
 **Jarvis** — Mac kompyuteringizda 24/7 doimiy ishlaydigan, ovoz bilan chaqiriladigan, kompyuteringizni avtonom boshqaradigan shaxsiy AI-agent.
 
-> **Texnologiyalar:** OpenClaw + Kimi K2.6 (Azure) + Azure Speech (uz-UZ) + macOS Desktop Control + Telegram
+> **Texnologiyalar:** OpenClaw + GPT-6 Astra (Azure Responses API) + Azure Realtime/Speech (uz-UZ) + macOS Desktop Control + Telegram
 
 ---
 
@@ -20,6 +20,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_
 - **"Jarvis"** deb chaqiring → eshitib turadi
 - Buyruqingizni eshitadi, tushunadi, bajaradi
 - Javobni ovozli (SardorNeural) qaytaradi
+- Past latency asosiy yo‘l: **Azure Realtime (`gpt-realtime-2.1`) → native English STT/VAD → streaming voice**
+- Deterministik desktop amallari lokal fast-action yo‘lidan, murakkab reasoning va grounded savollar esa GPT-6 Astra orqali bajariladi
+- Xavfli/destructive amallar explicit, scoped, expiring va one-shot confirmation talab qiladi
 
 ### 📱 Telegram Bot
 - **Matnli:** suhbat + buyruqlar + fayl topish/yuborish
@@ -92,7 +95,7 @@ OPEN_CREW_JARVIS/
 ├── telegram-bot.js         # Telegram bot (v8)
 ├── jarvis_daemon.js        # Doimiy eshitish daemon
 └── skills/
-    ├── azure-tts/          # Ovoz chiqarish (uz-UZ-ZardorNeural)
+    ├── azure-tts/          # Ovoz chiqarish (uz-UZ-SardorNeural)
     └── azure-stt/          # Ovozni tushunish (uz-UZ)
 ```
 
@@ -108,9 +111,10 @@ AZURE_SPEECH_KEY=...
 AZURE_SPEECH_REGION=eastus2
 AZURE_SPEECH_VOICE=uz-UZ-SardorNeural
 
-# AZURE AI (Kimi K2.6)
+# AZURE AI (GPT-6 Astra)
 AZURE_OPENAI_KEY=...
-AZURE_OPENAI_ENDPOINT=...
+AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
+AZURE_OPENAI_DEPLOYMENT=gpt-6-astra
 
 # TELEGRAM
 TELEGRAM_BOT_TOKEN=...
@@ -153,12 +157,31 @@ Corpus `benchmarks/private/voice-corpus.json`da saqlanadi, Git’dan chiqarilgan
 va `0600`. U WER/STT accuracy, wake recall va false-wake/day gate’larini real
 namunalar bilan hisoblaydi.
 
+Default benchmark faqat joriy daemon ishga tushganidan keyingi telemetry’ni
+baholaydi. Shu sabab yangi build eski pipeline latency’si bilan aralashmaydi;
+yangi live turn hali bo‘lmasa metric `not_measured` bo‘lib qoladi va false-green
+release bermaydi. Tarixiy trendni alohida ko‘rish uchun:
+
+```bash
+node scripts/benchmark.js --all-history
+node scripts/benchmark.js --since=1788854053767  # Unix epoch millisecond
+```
+
+`reports/quality-latest.json` latency’ni route (`realtime-conversation`,
+`direct-fast-action`, `grounded-answer`, `expert-answer`) bo‘yicha ham ajratadi.
+`voiceTelemetry.latency.stages` va `stagesByRoute` esa command acceptance’dan
+routing, provider request/acknowledgement, first text, first server audio va
+haqiqiy playback start’gacha bo‘lgan P50/P95 bosqichlarni ko‘rsatadi. Shu bilan
+server/model kechikishi playback prebuffer yoki lokal action vaqtiga
+aralashtirilmaydi; sample yo‘q bosqichlar `null` bo‘lib qoladi.
+
 ---
 
 ## ⚠️ Eslatmalar
 
 - Mac-da **Accessibility**, **Screen Recording**, **Microphone** ruxsatlari kerak
 - `.env` faylni **HECH QACHON** gitga qo'shmang
+- Chat, issue yoki logga yuborilgan API key'ni darhol revoke/rotate qiling
 - `openclaw.json` faqat `${OPENCLAW_GATEWAY_TOKEN}` environment reference saqlaydi; plaintext token commit qilmang
 - Secret sizib chiqsa yangi qiymat yarating, servisni restart qiling va Git tarixini alohida tozalang
 - Hotword eshitish mikrofonni doimiy ishlatadi

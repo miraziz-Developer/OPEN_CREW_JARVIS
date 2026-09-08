@@ -14,7 +14,10 @@ function detectWakeSoundMs(wakeSoundPath) {
   try {
     const out = execSync('afinfo "' + wakeSoundPath + '" 2>/dev/null | grep -i "estimated duration"', { encoding: 'utf8' });
     const m = out.match(/([\d.]+)\s*sec/);
-    if (m) return Math.round(parseFloat(m[1]) * 1000) + 200; // + kichik zaxira (karnay/ijro kechikishi)
+    // `afplay` qaytishidan oldingi karnay/driver dumini yopish uchun bitta
+    // kichik zaxira yetadi. Daemon bu qiymat ustiga yana guard qo'shmaydi:
+    // aks holda 0.84s "Labbay, boss" amalda 1.12s mikrofon dead-time bergan.
+    if (m) return Math.round(parseFloat(m[1]) * 1000) + 100;
   } catch (e) {}
   return 1000; // afinfo ishlamasa — ehtiyotkor, lekin eski 2400dan ancha kichik qiymat
 }

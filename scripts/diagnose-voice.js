@@ -5,6 +5,7 @@ const { spawnSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { loadCalibration } = require('../core/audio-calibration');
+const { buildSpeechFilterArgs } = require('../core/mic-capture');
 const { commandForPid, findMatchingProcesses, inspectRuntimeOwner, inspectVoiceOwnership } = require('../core/runtime-health');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -38,15 +39,45 @@ function checkBinary(name) {
   add(`binary:${name}`, r.status === 0, r.status === 0 ? r.stdout.trim() : 'topilmadi');
 }
 
-function checkMic() {
+function checkMic(env) {
   const out = path.join('/tmp', `jarvis-diagnostic-${process.pid}.wav`);
-  const r = spawnSync('sox', ['-d', '-r', '16000', '-c', '1', '-b', '16', out, 'trim', '0', '0.35'], {
+  const filterOptions = {
+    sampleRate: 16000,
+    filterEnabled: !/^(?:false|0|no|off)$/i.test(env.MIC_FILTER_ENABLED || 'true'),
+    highpassHz: Number(env.MIC_HIGHPASS_HZ) || 80,
+    lowpassHz: Number(env.MIC_LOWPASS_HZ) || 7600
+  };
+  const r = spawnSync('sox', [
+    '-q', '-d', '-r', '16000', '-c', '1', '-b', '16', out,
+    ...buildSpeechFilterArgs(filterOptions), 'trim', '0', '0.35'
+  ], {
     encoding: 'utf8', timeout: 4000
   });
   let size = 0;
-  try { size = fs.statSync(out).size; fs.unlinkSync(out); } catch (_) {}
-  add('microphone:capture', r.status === 0 && size > 1000,
-    r.status === 0 ? `${size} byte audio olindi` : (r.stderr || r.error?.message || 'capture xato').trim().slice(-300));
+  let rms = 0;
+  let peak = 0;
+  try {
+    const wav = fs.readFileSync(out);
+    size = wav.length;
+    // SoX yozgan PCM16 WAV uchun data chunk odatda 44-baytdan boshlanadi.
+    // Diagnostika speech detector emas: uning vazifasi CoreAudio mutlaq nolga
+    // yaqin sample berayotganini ilg'ash. Shuning uchun juda past floor yetarli.
+    let sumSquares = 0;
+    let samples = 0;
+    for (let i = 44; i + 1 < wav.length; i += 2) {
+      const value = wav.readInt16LE(i);
+      peak = Math.max(peak, Math.abs(value));
+      sumSquares += value * value;
+      samples += 1;
+    }
+    rms = samples ? Math.sqrt(sumSquares / samples) : 0;
+    fs.unlinkSync(out);
+  } catch (_) {}
+  const hasSignal = rms >= 2 || peak >= 8;
+  add('microphone:capture', r.status === 0 && size > 1000 && hasSignal,
+    r.status === 0
+      ? `${size} byte, RMS=${rms.toFixed(1)}, peak=${peak}${hasSignal ? '' : ' — mikrofon signal bermayapti/mute bo‘lishi mumkin'}`
+      : (r.stderr || r.error?.message || 'capture xato').trim().slice(-300));
 }
 
 function loadRuntime() {
@@ -81,11 +112,15 @@ function main() {
   const runtime = loadRuntime();
   const runtimeOwner = inspectRuntimeOwner(runtime, { pidAlive, commandForPid });
   const daemonPids = daemonProcesses.map(process => process.pid);
-  const wakePids = findMatchingProcesses(path.join(ROOT, 'core', 'openwakeword-worker.py')).map(process => process.pid);
+  const wakePids = findMatchingProcesses(path.join(ROOT, 'scripts', 'openwakeword-worker.py')).map(process => process.pid);
   const ownership = inspectVoiceOwnership({ daemonPids, wakePids, parentPid, runtimeOwner });
   add('process:single-voice-owner', ownership.healthy,
     `daemon=${ownership.daemonPids.length}, wake-worker=${ownership.wakePids.length}, orphan=${ownership.orphanWakePids.length}${ownership.orphanWakePids.length ? ` (pid ${ownership.orphanWakePids.join(',')})` : ''}`);
-  checkMic();
+  const openWakeEnabled = !/^(?:false|0|no|off)$/i.test(env.OPENWAKEWORD_ENABLED || 'true');
+  add('wakeword:local-worker', !openWakeEnabled || wakePids.length === 1,
+    openWakeEnabled ? (wakePids.length === 1 ? `openWakeWord pid=${wakePids[0]}` : `kutilgan 1 ta worker, topildi ${wakePids.length}`) : 'config orqali o‘chirilgan',
+    openWakeEnabled ? 'error' : 'ok');
+  checkMic(env);
   checkRuntime(runtime, runtimeOwner);
 
   for (const c of checks) {

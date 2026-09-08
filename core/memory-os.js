@@ -95,6 +95,22 @@ class MemoryOS {
       const titleRedaction = redactSensitive(clean(input.title, 300));
       const contentRedaction = redactSensitive(clean(input.content, 8000));
       if (!titleRedaction.text && !contentRedaction.text) throw new Error('Memory title yoki content kerak');
+      const requestedId = clean(input.id, 300);
+      const existingById = requestedId && this.state.records.find(record => record.id === requestedId);
+      if (existingById) {
+        existingById.layer = layer;
+        existingById.title = titleRedaction.text;
+        existingById.content = contentRedaction.text;
+        existingById.tags = [...new Set((input.tags || existingById.tags || []).map(tag => clean(tag, 80)).filter(Boolean))];
+        existingById.source = clean(input.source || existingById.source || 'jarvis', 120);
+        existingById.confidence = clamp(input.confidence ?? existingById.confidence ?? 0.7);
+        existingById.privacy = input.privacy || existingById.privacy || 'private';
+        existingById.redacted = Boolean(existingById.redacted || titleRedaction.redacted || contentRedaction.redacted);
+        existingById.updatedAt = now;
+        existingById.status = 'active';
+        this._persist();
+        return { status: 'updated', record: existingById };
+      }
       const fact = input.fact && input.fact.subject && input.fact.predicate
         ? { subject: clean(input.fact.subject, 200), predicate: clean(input.fact.predicate, 120), object: clean(input.fact.object, 1000) }
         : null;
@@ -109,7 +125,7 @@ class MemoryOS {
         this._persist();
         return { status: 'reinforced', record: duplicate };
       }
-      const id = input.id || crypto.randomUUID();
+      const id = requestedId || crypto.randomUUID();
       const ttl = input.ttlMs === null ? null : (Number(input.ttlMs) || DEFAULT_TTL[layer] || null);
       const record = {
         id, layer, title: titleRedaction.text, content: contentRedaction.text,

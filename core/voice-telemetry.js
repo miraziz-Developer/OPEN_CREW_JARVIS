@@ -5,11 +5,55 @@ const { percentile } = require('./voice-flight-recorder');
 
 function readRecords(file, options = {}) {
   const maxLines = Number.isFinite(options.maxLines) ? options.maxLines : 5000;
+  const since = Number.isFinite(options.since) ? options.since : null;
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch (_) { return []; }
   return text.split('\n').filter(Boolean).slice(-maxLines).flatMap(line => {
-    try { return [JSON.parse(line)]; } catch (_) { return []; }
+    try {
+      const record = JSON.parse(line);
+      const occurredAt = record.type === 'turn.summary'
+        ? (record.data?.startedAt ?? record.at)
+        : record.at;
+      return since === null || (Number.isFinite(occurredAt) && occurredAt >= since) ? [record] : [];
+    } catch (_) { return []; }
   });
+}
+
+const STAGE_DEFINITIONS = Object.freeze({
+  commandToRoute: ['command.accepted', 'router.decision'],
+  routeToRequest: ['router.decision', 'provider.request.sent'],
+  requestToResponseCreated: ['provider.request.sent', 'provider.response.created'],
+  requestToFirstText: ['provider.request.sent', 'assistant.text.first'],
+  requestToFirstAudio: ['provider.request.sent', 'assistant.audio.first'],
+  firstAudioToPlayback: ['assistant.audio.first', 'playback.started'],
+  commandToPlayback: ['command.accepted', 'playback.started']
+});
+
+function firstEvent(events, type, notBefore = -Infinity) {
+  return events.find(event => event.type === type && Number.isFinite(event.at) && event.at >= notBefore);
+}
+
+function stageSamplesForTurn(events) {
+  const samples = {};
+  for (const [name, [startType, endType]] of Object.entries(STAGE_DEFINITIONS)) {
+    const start = firstEvent(events, startType);
+    const end = start && firstEvent(events, endType, start.at);
+    if (start && end) samples[name] = Math.max(0, end.at - start.at);
+  }
+  return samples;
+}
+
+function summarizeStages(samples) {
+  const result = {};
+  for (const name of Object.keys(STAGE_DEFINITIONS)) {
+    const values = samples.map(sample => sample[name]).filter(Number.isFinite);
+    result[name] = {
+      measuredTurns: values.length,
+      p50Ms: percentile(values, 0.5),
+      p95Ms: percentile(values, 0.95)
+    };
+  }
+  return result;
 }
 
 function summarizeVoiceTelemetry(records) {
@@ -23,16 +67,48 @@ function summarizeVoiceTelemetry(records) {
     if (!eventsByTurn.has(event.turnId)) eventsByTurn.set(event.turnId, []);
     eventsByTurn.get(event.turnId).push(event);
   }
-  const responseLatency = summaries.map(turn => {
-    if (Number.isFinite(turn.responseToFirstAudioMs)) return turn.responseToFirstAudioMs;
+  const latencySamples = summaries.map(turn => {
     const turnEvents = eventsByTurn.get(turn.turnId) || [];
     const firstAudio = turnEvents.find(event => event.type === 'assistant.audio.first');
-    if (!firstAudio) return Number.isFinite(turn.timeToFirstAudioMs) ? turn.timeToFirstAudioMs : null;
+    const route = turnEvents.find(event => event.type === 'router.decision')?.data?.route || 'unknown';
+    if (Number.isFinite(turn.responseToFirstAudioMs)) return turn.responseToFirstAudioMs;
+    if (!firstAudio) return Number.isFinite(turn.timeToFirstAudioMs)
+      ? { value: turn.timeToFirstAudioMs, route }
+      : null;
     const accepted = turnEvents
       .filter(event => event.type === 'command.accepted' && event.at <= firstAudio.at)
       .at(-1);
-    return accepted ? Math.max(0, firstAudio.at - accepted.at) : null;
-  }).filter(Number.isFinite);
+    return accepted ? { value: Math.max(0, firstAudio.at - accepted.at), route } : null;
+  }).map((sample, index) => Number.isFinite(sample)
+    ? {
+        value: sample,
+        route: (eventsByTurn.get(summaries[index].turnId) || [])
+          .find(event => event.type === 'router.decision')?.data?.route || 'unknown'
+      }
+    : sample).filter(sample => Number.isFinite(sample?.value));
+  const responseLatency = latencySamples.map(sample => sample.value);
+  const latencyByRoute = {};
+  for (const route of new Set(latencySamples.map(sample => sample.route))) {
+    const values = latencySamples.filter(sample => sample.route === route).map(sample => sample.value);
+    latencyByRoute[route] = {
+      measuredTurns: values.length,
+      firstAudioP50Ms: percentile(values, 0.5),
+      firstAudioP95Ms: percentile(values, 0.95)
+    };
+  }
+  const stageSamples = summaries.map(turn => {
+    const turnEvents = eventsByTurn.get(turn.turnId) || [];
+    return {
+      route: firstEvent(turnEvents, 'router.decision')?.data?.route || 'unknown',
+      stages: stageSamplesForTurn(turnEvents)
+    };
+  });
+  const stageLatencyByRoute = {};
+  for (const route of new Set(stageSamples.map(sample => sample.route))) {
+    stageLatencyByRoute[route] = summarizeStages(
+      stageSamples.filter(sample => sample.route === route).map(sample => sample.stages)
+    );
+  }
   const completed = summaries.filter(turn => turn.outcome === 'turn.completed').length;
   const suppressed = summaries.filter(turn => turn.outcome === 'turn.suppressed').length;
   const failed = summaries.filter(turn => turn.outcome === 'turn.failed').length;
@@ -55,7 +131,10 @@ function summarizeVoiceTelemetry(records) {
       firstAudioP50Ms: percentile(responseLatency, 0.5),
       firstAudioP95Ms: percentile(responseLatency, 0.95),
       measuredTurns: responseLatency.length,
-      basis: 'command-accepted-to-first-audio'
+      basis: 'command-accepted-to-first-audio',
+      byRoute: latencyByRoute,
+      stages: summarizeStages(stageSamples.map(sample => sample.stages)),
+      stagesByRoute: stageLatencyByRoute
     },
     eventCounts,
     suppressionReasons: reasons,

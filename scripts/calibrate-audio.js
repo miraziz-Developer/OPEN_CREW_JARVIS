@@ -6,10 +6,23 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { buildCalibration, estimateEchoLag, saveCalibration } = require('../core/audio-calibration');
+const { buildSpeechFilterArgs } = require('../core/mic-capture');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, '.run', 'audio-calibration.json');
 const RATE = 16000;
+let ENV = {};
+try {
+  ENV = Object.fromEntries(fs.readFileSync(path.join(ROOT, '.env'), 'utf8').split(/\r?\n/)
+    .map(line => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean)
+    .map(match => [match[1], match[2].trim()]));
+} catch (_) {}
+const MIC_FILTER_OPTIONS = {
+  sampleRate: RATE,
+  filterEnabled: !/^(?:false|0|no|off)$/i.test(ENV.MIC_FILTER_ENABLED || 'true'),
+  highpassHz: Number(ENV.MIC_HIGHPASS_HZ) || 80,
+  lowpassHz: Number(ENV.MIC_LOWPASS_HZ) || 7600
+};
 
 function wavHeader(bytes) {
   const h = Buffer.alloc(44); h.write('RIFF'); h.writeUInt32LE(36 + bytes, 4); h.write('WAVE', 8); h.write('fmt ', 12);
@@ -28,7 +41,11 @@ function probeWav() {
 function recordWav(seconds, onStarted) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    const proc = spawn('sox', ['-q', '-d', '-t', 'wav', '-r', String(RATE), '-c', '1', '-b', '16', '-e', 'signed-integer', '-', 'trim', '0', String(seconds)]);
+    const proc = spawn('sox', [
+      '-q', '-d', '-t', 'wav', '-r', String(RATE), '-c', '1', '-b', '16',
+      '-e', 'signed-integer', '-', ...buildSpeechFilterArgs(MIC_FILTER_OPTIONS),
+      'trim', '0', String(seconds)
+    ]);
     proc.stdout.on('data', chunk => chunks.push(chunk));
     proc.stderr.on('data', () => {});
     proc.on('error', reject);

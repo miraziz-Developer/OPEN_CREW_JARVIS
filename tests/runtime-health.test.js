@@ -51,3 +51,12 @@ test('exact process matching ignores diagnostic command text', () => {
   assert.deepEqual(found.map(item => item.pid), [42]);
   assert.equal(commandOwnsScript('/bin/bash /repo/scripts/jarvis.sh', '/repo/scripts/jarvis.sh'), true);
 });
+
+test('python wake worker is matched by its scripts path', () => {
+  const script = '/repo/scripts/openwakeword-worker.py';
+  const found = findMatchingProcesses(script, { listProcesses: () => [
+    '77 /repo/.venv/bin/python -u /repo/scripts/openwakeword-worker.py',
+    '78 grep openwakeword-worker.py'
+  ].join('\n') });
+  assert.deepEqual(found.map(item => item.pid), [77]);
+});

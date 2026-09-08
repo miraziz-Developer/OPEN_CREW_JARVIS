@@ -38,6 +38,25 @@ test('notification budget prevents nagging but urgent notices pass', () => {
   assert.equal(p.evaluate({ ...base, summary: 'urgent', urgency: 0.95 }).mode, 'suggest');
 });
 
+test('privacy, meeting and focus context suppress non-urgent proactive speech', () => {
+  const p = policy();
+  const useful = { confidence: 1, urgency: 0.8, benefit: 1, reversibility: 1, risk: 0 };
+  assert.equal(p.evaluate({ ...useful, summary: 'private', context: { privacyMode: true } }).reason, 'privacy-mode');
+  assert.equal(p.evaluate({ ...useful, summary: 'meeting', context: { meeting: true } }).reason, 'meeting');
+  assert.equal(p.evaluate({ ...useful, summary: 'focus', context: { focusMode: true } }).reason, 'focus-mode');
+  assert.equal(p.evaluate({ ...useful, summary: 'urgent', urgency: 0.95, context: { meeting: true } }).mode, 'suggest');
+});
+
+test('global privacy mode cannot be bypassed by a candidate context', () => {
+  const p = policy({ defaultContext: { privacyMode: true } });
+  const decision = p.evaluate({
+    summary: 'private default', confidence: 1, urgency: 1, benefit: 1,
+    reversibility: 1, risk: 0, context: { privacyMode: false, focusMode: false }
+  });
+  assert.equal(decision.mode, 'observe');
+  assert.equal(decision.reason, 'privacy-mode');
+});
+
 test('workflow becomes an automation candidate only after three observations', () => {
   const p = policy();
   const steps = ['open terminal', 'run tests', 'open report'];

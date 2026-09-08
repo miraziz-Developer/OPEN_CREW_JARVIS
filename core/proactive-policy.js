@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { InteractionPolicy } = require('./interaction-policy');
 
 function clamp(value) { return Math.max(0, Math.min(1, Number(value) || 0)); }
 function fingerprint(value) { return crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 20); }
@@ -14,6 +15,8 @@ class ProactivePolicy {
     this.now = options.now || Date.now;
     this.cooldownMs = options.cooldownMs || 30 * 60e3;
     this.dailySuggestionBudget = options.dailySuggestionBudget || 8;
+    this.interactionPolicy = options.interactionPolicy || new InteractionPolicy();
+    this.defaultContext = options.defaultContext || {};
     this.state = { version: 1, decisions: [], workflows: {}, budget: {} };
     this._load();
   }
@@ -50,6 +53,19 @@ class ProactivePolicy {
     if (explicit && score >= 0.72 && reversibility >= 0.8 && !hardBlocked) { mode = 'act'; reason = 'explicit_safe_reversible_action'; }
     if (hardBlocked && mode === 'act') { mode = 'suggest'; reason = 'risk_requires_confirmation'; }
     if (!explicit && mode === 'act') { mode = 'suggest'; reason = 'missing_explicit_authorization'; }
+
+    const suppliedContext = candidate.context || {};
+    const interruption = this.interactionPolicy.notification(candidate, {
+      ...this.defaultContext,
+      ...suppliedContext,
+      privacyMode: Boolean(this.defaultContext.privacyMode || suppliedContext.privacyMode),
+      focusMode: Boolean(this.defaultContext.focusMode || suppliedContext.focusMode),
+      meeting: Boolean(this.defaultContext.meeting || suppliedContext.meeting)
+    });
+    if (!interruption.allowed && mode !== 'observe') {
+      mode = 'observe';
+      reason = interruption.reason;
+    }
 
     const previous = [...this.state.decisions].reverse().find(item => item.id === id && item.mode !== 'observe');
     if (previous && now - previous.at < this.cooldownMs) { mode = 'observe'; reason = 'cooldown_duplicate'; }

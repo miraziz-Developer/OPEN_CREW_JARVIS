@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import types
+from collections import deque
 
 # Verifier training dependencies are not needed for inference.
 stub = types.ModuleType("openwakeword.custom_verifier_model")
@@ -16,12 +17,15 @@ import numpy as np
 from openwakeword.model import Model
 
 FRAME_BYTES = 1280 * 2
-# Tayyor hey_jarvis modeli turli mikrofon va aksentlarda 0.55 ga kamdan-kam
-# chiqadi. Pastroq threshold ketma-ket ikki ijobiy frame bilan himoyalanadi;
-# juda kuchli score esa darhol trigger bo'ladi.
-THRESHOLD = float(os.environ.get("OPENWAKEWORD_THRESHOLD", "0.38"))
+# Ushbu Mac mikrofonida aniq "Hey Jarvis" 0.19 atrofida ham chiqdi. Aksentli
+# talaffuzda score bitta frame'da cho'qqiga chiqib, yon frame'larda pasayadi.
+# Shu sabab qisqa temporal oyna ichida bitta asosiy va bitta yumshoq tasdiq
+# talab qilinadi; juda kuchli score esa darhol trigger bo'ladi.
+THRESHOLD = float(os.environ.get("OPENWAKEWORD_THRESHOLD", "0.18"))
 STRONG_THRESHOLD = float(os.environ.get("OPENWAKEWORD_STRONG_THRESHOLD", "0.55"))
-DIAGNOSTIC_FLOOR = float(os.environ.get("OPENWAKEWORD_DIAGNOSTIC_FLOOR", "0.08"))
+CONFIRM_THRESHOLD = float(os.environ.get("OPENWAKEWORD_CONFIRM_THRESHOLD", "0.06"))
+CONFIRM_WINDOW_FRAMES = int(os.environ.get("OPENWAKEWORD_CONFIRM_WINDOW_FRAMES", "4"))
+DIAGNOSTIC_FLOOR = float(os.environ.get("OPENWAKEWORD_DIAGNOSTIC_FLOOR", "0.03"))
 OWNER_PID = int(os.environ.get("JARVIS_OWNER_PID", "0") or "0")
 
 def owner_is_alive():
@@ -47,7 +51,7 @@ def main():
     model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
     print("READY", flush=True)
     pending = bytearray()
-    positive_frames = 0
+    recent_scores = deque(maxlen=max(2, CONFIRM_WINDOW_FRAMES))
     frames_since_diagnostic = 0
     diagnostic_peak = 0.0
     while True:
@@ -59,19 +63,17 @@ def main():
             frame = bytes(pending[:FRAME_BYTES])
             del pending[:FRAME_BYTES]
             score = float(model.predict(np.frombuffer(frame, dtype="<i2")).get("hey_jarvis", 0))
+            recent_scores.append(score)
             diagnostic_peak = max(diagnostic_peak, score)
             frames_since_diagnostic += 1
 
-            if score >= THRESHOLD:
-                positive_frames += 1
-            else:
-                # Bitta qisqa pasayish tabiiy talaffuzni buzmasin, ammo eski
-                # tasodifiy score keyingi so'z bilan qo'shilib ketmasin.
-                positive_frames = max(0, positive_frames - 1)
-
-            if score >= STRONG_THRESHOLD or positive_frames >= 2:
+            ordered_scores = sorted(recent_scores, reverse=True)
+            confirmed = (len(ordered_scores) >= 2
+                         and ordered_scores[0] >= THRESHOLD
+                         and ordered_scores[1] >= CONFIRM_THRESHOLD)
+            if score >= STRONG_THRESHOLD or confirmed:
                 print(f"DETECT {score:.4f}", flush=True)
-                positive_frames = 0
+                recent_scores.clear()
                 diagnostic_peak = 0.0
                 frames_since_diagnostic = 0
             elif frames_since_diagnostic >= 12:

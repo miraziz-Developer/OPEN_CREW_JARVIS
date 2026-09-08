@@ -23,6 +23,8 @@ const CONTEXT_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'SessionContext.md');
 // tuzatgan barcha talaffuz xatolari amalda hech qachon ishlatilmagan.
 const PRONUNCIATION_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'Pronunciation.md');
 const PRONUNCIATION_MAX = 100;
+const SESSION_CONTEXT_MAX_TURNS = 12;
+const SESSION_CONTEXT_MAX_CHARS = 6000;
 
 const { PROJECT_DIR } = require('../../core/paths');
 const EMBED_INDEX_FILE = path.join(PROJECT_DIR, '.memory-embeddings.json');
@@ -93,12 +95,77 @@ ${tagLine}
   let structured = null;
   try {
     structured = rememberStructured({
+      id: options.id,
       layer: options.layer || inferLayer(safeTopic, tags), title: safeTopic, content: safeContent,
       tags, source: options.source || 'legacy-writeMemory', confidence: options.confidence ?? 0.7,
       privacy: options.privacy, ttlMs: options.ttlMs, fact: options.fact, entities: options.entities
     });
   } catch (_) {}
   return { status: 'ok', file: filePath, memoryId: structured?.record?.id || null };
+}
+
+function atomicWrite(file, content) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+function renderTurn(turn) {
+  const lines = [
+    `<!-- turnId:${turn.turnId} -->`,
+    `**Turn ID:** ${turn.turnId}`,
+    `**Holat:** ${turn.status || 'accepted'}`,
+    `Foydalanuvchi: ${turn.user || '(javob kutilmoqda)'}`
+  ];
+  if (turn.assistant) lines.push(`Jarvis: ${turn.assistant}`);
+  for (const tool of turn.tools || []) {
+    lines.push(`Vazifa [${tool.status || 'running'}] ${tool.description || tool.callId}: ${tool.result || ''}`.trim());
+  }
+  if (turn.error) lines.push(`Xatolik: ${turn.error}`);
+  return lines.join('\n');
+}
+
+function upsertTurnMemory(turn) {
+  if (!turn?.turnId || !turn?.user) throw new Error('Persist qilish uchun turnId va accepted user text kerak');
+  ensureDirs();
+  const safeTurn = {
+    ...turn,
+    turnId: redactSensitive(turn.turnId).text.slice(0, 300),
+    user: redactSensitive(turn.user).text.slice(0, 4000),
+    assistant: redactSensitive(turn.assistant || '').text.slice(0, 4000),
+    error: redactSensitive(turn.error || '').text.slice(0, 1000),
+    tools: (turn.tools || []).slice(-20).map(tool => ({
+      callId: redactSensitive(tool.callId || '').text.slice(0, 300),
+      description: redactSensitive(tool.description || '').text.slice(0, 1000),
+      result: redactSensitive(tool.result || '').text.slice(0, 3000),
+      status: String(tool.status || '').slice(0, 40)
+    }))
+  };
+  const date = localDateStr(new Date(turn.createdAt || Date.now()));
+  const time = new Date(turn.createdAt || Date.now()).toTimeString().slice(0, 5);
+  const filePath = path.join(MEMORY_DIR, date + '.md');
+  const header = `# ${date} — Jarvis Xotirasi\n\nBog'liq: [[User]] · [[DailyTasks]]\n\n`;
+  let existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : header;
+  const marker = `<!-- turnId:${safeTurn.turnId} -->`;
+  const block = `---\n## ${time} — Ovozli turn\n${renderTurn(safeTurn)}\n\n**Teglar:** #voice #turn-journal\n`;
+  const start = existing.indexOf(marker);
+  if (start >= 0) {
+    const separator = existing.lastIndexOf('---\n', start);
+    const next = existing.indexOf('\n---\n', start);
+    existing = existing.slice(0, separator < 0 ? start : separator) + block + (next < 0 ? '' : existing.slice(next + 1));
+  } else {
+    existing += (existing.endsWith('\n') ? '' : '\n') + block;
+  }
+  atomicWrite(filePath, existing);
+
+  const content = renderTurn(safeTurn);
+  const structured = rememberStructured({
+    id: `turn:${safeTurn.turnId}`, layer: 'episodic', title: 'Ovozli turn', content,
+    tags: ['voice', 'turn-journal', safeTurn.status || 'accepted'], source: safeTurn.source || 'voice',
+    confidence: 0.95, privacy: 'private', createdAt: safeTurn.createdAt
+  });
+  updateSessionContext(safeTurn);
+  return { status: 'ok', file: filePath, memoryId: structured.record.id, turnId: safeTurn.turnId };
 }
 
 // ── 2. Xotira qidirish (grep) ────────────────────────────────────────
@@ -250,8 +317,8 @@ function cosineSim(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 }
 
-async function semanticSearch(query, limit = 5) {
-  await updateEmbedIndex();
+async function semanticSearch(query, limit = 5, options = {}) {
+  if (!options.skipIndexUpdate) await updateEmbedIndex();
   const idx = loadEmbedIndex();
   if (!idx.entries.length) return { status: 'empty', results: [] };
   let qEmbedding;
@@ -269,12 +336,67 @@ function readSessionContext() {
 }
 function writeSessionContext(text) {
   ensureDirs();
-  fs.writeFileSync(CONTEXT_FILE, text, 'utf8');
+  atomicWrite(CONTEXT_FILE, String(text || '').slice(-SESSION_CONTEXT_MAX_CHARS));
 }
 function appendSessionContext(text) {
   ensureDirs();
   const existing = fs.existsSync(CONTEXT_FILE) ? fs.readFileSync(CONTEXT_FILE, 'utf8') : '';
-  fs.writeFileSync(CONTEXT_FILE, existing + '\n' + text, 'utf8');
+  const bounded = (existing + '\n' + text).slice(-SESSION_CONTEXT_MAX_CHARS);
+  atomicWrite(CONTEXT_FILE, bounded);
+}
+
+function updateSessionContext(turn) {
+  ensureDirs();
+  let turns = [];
+  if (fs.existsSync(CONTEXT_FILE)) {
+    try {
+      const match = fs.readFileSync(CONTEXT_FILE, 'utf8').match(/```json\n([\s\S]*?)\n```/);
+      if (match) turns = JSON.parse(match[1]);
+    } catch (_) {}
+  }
+  const compact = {
+    turnId: turn.turnId, at: turn.updatedAt || Date.now(), status: turn.status,
+    user: String(turn.user || '').slice(0, 500), assistant: String(turn.assistant || '').slice(0, 700),
+    tasks: (turn.tools || []).slice(-5).map(tool => ({ status: tool.status, description: String(tool.description || '').slice(0, 240), result: String(tool.result || '').slice(0, 300) }))
+  };
+  const index = turns.findIndex(item => item.turnId === compact.turnId);
+  if (index >= 0) turns[index] = compact; else turns.push(compact);
+  turns = turns.slice(-SESSION_CONTEXT_MAX_TURNS);
+  while (JSON.stringify(turns).length > SESSION_CONTEXT_MAX_CHARS && turns.length > 1) turns.shift();
+  atomicWrite(CONTEXT_FILE, '# Jarvis Session Context\n\nFaqat Jarvisga qaratilgan so‘nggi turnlar. Avtomatik yangilanadi.\n\n```json\n' + JSON.stringify(turns, null, 2) + '\n```\n');
+  return { status: 'ok', turns: turns.length };
+}
+
+async function recallMemory(query, limit = 6) {
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return { status: 'error', message: 'query kerak', results: [] };
+  const merged = [];
+  const seen = new Set();
+  const add = (item) => {
+    const key = item.id || `${item.source}:${item.title}:${item.content}`;
+    if (!seen.has(key)) { seen.add(key); merged.push(item); }
+  };
+  try {
+    const semantic = await semanticSearch(cleanQuery, limit, { skipIndexUpdate: true });
+    for (const item of semantic.results || []) add({ id: item.id, source: 'semantic', date: item.date, title: item.topic, content: item.snippet, score: item.score });
+  } catch (_) {}
+  try {
+    const lexical = searchMemory(cleanQuery, limit);
+    for (const item of lexical.results || []) add({ id: item.file, source: 'lexical', date: item.date, title: item.file, content: item.matches.map(match => match.text).join(' | ') });
+    for (const item of lexical.structured || []) add({ ...item, source: item.source || 'structured' });
+  } catch (_) {}
+  try {
+    const profile = readProfile();
+    if (profile.status === 'ok' && /\b(profile|preference|prefer|men haqimda|yoqtir|odat)\b/i.test(cleanQuery)) {
+      add({ id: 'profile', source: 'profile', title: 'User profile', content: profile.content.slice(0, 2500) });
+    }
+  } catch (_) {}
+  try {
+    const context = readSessionContext();
+    const tokens = cleanQuery.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(token => token.length > 3);
+    if (tokens.some(token => context.toLowerCase().includes(token))) add({ id: 'session-context', source: 'recent-turns', title: 'Recent turns', content: context.slice(-2500) });
+  } catch (_) {}
+  return { status: 'ok', query: cleanQuery, results: merged.slice(0, Math.max(1, limit)) };
 }
 
 // ── 4. Profil ────────────────────────────────────────────────────────
@@ -437,6 +559,7 @@ if (require.main === module) main();
 
 module.exports = {
   writeMemory, searchMemory, semanticSearch, updateEmbedIndex,
+  upsertTurnMemory, updateSessionContext, recallMemory,
   rememberStructured, retrieveStructured, memoryOS,
   readSessionContext, writeSessionContext, appendSessionContext,
   readProfile, updateProfile,
