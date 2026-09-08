@@ -59,6 +59,9 @@ test('English questions and commands are accepted while passive media dialogue s
   assert.equal(classifyUserTurn('Happiness will come to you.', { mediaMode: true }).reason, 'media-background');
   assert.equal(classifyUserTurn('What time is it?', { mediaMode: true }).accept, true);
   assert.equal(classifyUserTurn('Please open Chrome', { mediaMode: true }).accept, true);
+  assert.equal(classifyUserTurn('Analyze why this architecture is better.', { mediaMode: true }).accept, true);
+  assert.equal(classifyUserTurn("Who's first is Agent A. Look for Agent A. Agent B is Agent A. Let's look for Agent B.", { mediaMode: true }).reason, 'media-background');
+  assert.equal(classifyUserTurn("Damn, he looks like he is from a big city. I don't remember what country he is from.", { mediaMode: true }).reason, 'media-background');
 });
 
 test('near duplicate assistant responses are recognized early', () => {

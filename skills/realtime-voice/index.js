@@ -879,6 +879,7 @@ class RealtimeSession extends EventEmitter {
         const confirmedBargeIn = this.assistantSpeaking &&
           Date.now() - this._bargeInEvidenceAt <= 1200;
         if (confirmedBargeIn) {
+          this._responseInterrupted = true;
           try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
           this._flushPlayback();
           this.emit('telemetry', 'barge_in.confirmed', {});
@@ -933,6 +934,7 @@ class RealtimeSession extends EventEmitter {
         break;
       }
       case 'response.created':
+        this._responseInterrupted = false;
         this.emit('telemetry', 'provider.response.created', {
           responseId: msg.response?.id || msg.response_id || null
         });
@@ -972,7 +974,10 @@ class RealtimeSession extends EventEmitter {
         delete this._pendingFnArgs[msg.call_id];
         this._handleFunctionCall(msg);
         break;
-      case 'response.done':
+      case 'response.done': {
+        const responseStatus = msg.response?.status || 'unknown';
+        const responseReason = msg.response?.status_details?.reason || '';
+        const interrupted = this._responseInterrupted === true;
         // Qisqa javob prebuffer chegarasiga yetmagan bo'lsa, server oqimni
         // tugatishi bilan qolgan PCM'ni darhol karnayga chiqaramiz.
         this.playbackBuffer?.finish();
@@ -987,27 +992,33 @@ class RealtimeSession extends EventEmitter {
         // qolgan qismini foydalanuvchi deb qayta eshitmaydi.
         this._speakEndedAt = Math.max(Date.now(), this._playbackUntil);
         this.emit('telemetry', 'response.done', {
-          status: msg.response?.status || 'unknown',
-          reason: msg.response?.status_details?.reason || '',
+          status: responseStatus,
+          reason: responseReason,
           audioQueuedUntilMs: Math.max(0, this._playbackUntil - Date.now())
         });
         this.emit('response_status', {
-          status: msg.response?.status || 'unknown',
-          reason: msg.response?.status_details?.reason || '',
+          status: responseStatus,
+          reason: responseReason,
+          interrupted,
           hasAssistantTranscript: Boolean(this.assistantTranscript.trim())
         });
         if (!this._suppressCurrentResponse && this.assistantTranscript.trim()) {
           this.emit('assistant_transcript', this.assistantTranscript.trim(), {
-            status: msg.response?.status || 'unknown',
-            reason: msg.response?.status_details?.reason || ''
+            status: responseStatus,
+            reason: responseReason
           });
           this._lastAssistantTranscript = this.assistantTranscript.trim();
           this._rememberConversationTurn('Jarvis', this.assistantTranscript.trim());
         }
         this.assistantTranscript = '';
         this._suppressCurrentResponse = false;
-        this.emit('turn_done');
+        // Barge-in paytida cancelled response.done yangi speech turni ochib
+        // bo'lgandan keyin kelishi mumkin. Statussiz event daemon'da o'sha
+        // yangi turnni yolg'on completed qilib qo'yar edi.
+        this.emit('turn_done', { status: responseStatus, reason: responseReason, interrupted });
+        this._responseInterrupted = false;
         break;
+        }
       case 'error': {
         const errMsg = msg.error?.message || JSON.stringify(msg);
         // Bular haqiqiy xatolik emas — javob aynan tugab qolgan payt bekor

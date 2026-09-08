@@ -44,7 +44,7 @@ const ENGLISH_INTENT_MARKERS = new Set([
   'please', 'tell', 'show', 'find', 'open', 'close', 'start', 'stop', 'pause',
   'play', 'continue', 'resume', 'write',
   'read', 'search', 'remember', 'remind', 'create', 'make', 'send', 'check', 'help',
-  'explain', 'compare', 'translate', 'turn', 'set', 'give', 'take', 'look'
+  'explain', 'analyze', 'compare', 'translate', 'turn', 'set', 'give', 'take', 'look'
 ]);
 const ENGLISH_QUESTION_STARTERS = new Set([
   'am', 'is', 'are', 'was', 'were', 'do', 'does', 'did', 'can', 'could',
@@ -59,8 +59,13 @@ function looksLikeUzbekTurn(text) {
 function looksLikeEnglishIntent(text) {
   const tokens = normalize(text).split(' ').filter(Boolean);
   if (!tokens.length) return false;
+  // Media dialogue frequently contains an intent-looking word later in a long
+  // sentence ("Agent B is first. Let's look for him"). Requiring the marker at
+  // the beginning preserves actual questions/imperatives without treating a
+  // movie subtitle as an addressed command. "Please" may precede the verb.
   return ENGLISH_QUESTION_STARTERS.has(tokens[0]) ||
-    tokens.some(token => ENGLISH_INTENT_MARKERS.has(token));
+    ENGLISH_INTENT_MARKERS.has(tokens[0]) ||
+    (tokens[0] === 'please' && ENGLISH_INTENT_MARKERS.has(tokens[1]));
 }
 
 function looksLikeAddressedTurn(text) {

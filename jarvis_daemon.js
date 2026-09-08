@@ -477,7 +477,10 @@ async function mainLoop() {
     if (_activeRealtimeSession || state !== 'listening') return false;
 
     const session = new RealtimeSession({
-      explicitUserTrigger: reason.includes('Fn') || Boolean(trigger.addressedWake),
+      // Only physical push-to-talk bypasses the media-background gate. A wake
+      // detector can itself false-trigger on a film, so addressed wake still
+      // requires the transcript to look like a command/question in media mode.
+      explicitUserTrigger: reason.includes('Fn'),
       addressedWakeTrigger: Boolean(trigger.addressedWake && !trigger.initialTranscript),
       initialTranscript: trigger.initialTranscript || '',
       conversationContext,
@@ -647,8 +650,11 @@ async function mainLoop() {
       lastUserTranscript = '';
       armIdleTimer();
     });
-    session.on('turn_done', () => {
-      flightRecorder.event('turn.completed');
+    session.on('turn_done', ({ status, interrupted } = {}) => {
+      // Cancelled/incomplete response.done barge-in ochgan keyingi speech
+      // turniga kechikib kelishi mumkin. Faqat provider tasdiqlagan successful
+      // response aktiv turnni completed qilsin.
+      if (status === 'completed' && !interrupted) flightRecorder.event('turn.completed');
       armIdleTimer();
     });
     session.on('response_status', ({ status, reason, hasAssistantTranscript }) => {

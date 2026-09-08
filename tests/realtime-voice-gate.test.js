@@ -28,6 +28,12 @@ test('transcript gate routes simple conversation to Realtime and complex turns t
 
   session._onMessage({ data: JSON.stringify({
     type: 'conversation.item.input_audio_transcription.completed',
+    transcript: "Agent B is first. Let's look for Agent B."
+  }) });
+  assert.equal(sent.some(message => message.type === 'response.create'), false);
+
+  session._onMessage({ data: JSON.stringify({
+    type: 'conversation.item.input_audio_transcription.completed',
     transcript: 'What time is it?'
   }) });
   await new Promise(resolve => setImmediate(resolve));
@@ -494,7 +500,9 @@ test('accepted direct command executes without waiting for model tool selection'
 test('response completion exposes truncation reason and queued playback telemetry', () => {
   const session = new RealtimeSession();
   const events = [];
+  const completed = [];
   session.on('telemetry', (type, data) => events.push({ type, data }));
+  session.on('turn_done', data => completed.push(data));
   session.assistantSpeaking = true;
   session._playbackUntil = Date.now() + 250;
 
@@ -503,10 +511,42 @@ test('response completion exposes truncation reason and queued playback telemetr
     response: { status: 'incomplete', status_details: { reason: 'max_output_tokens' } }
   }) });
 
-  const completed = events.find(event => event.type === 'response.done');
-  assert.equal(completed.data.status, 'incomplete');
-  assert.equal(completed.data.reason, 'max_output_tokens');
-  assert.ok(completed.data.audioQueuedUntilMs > 0);
+  const responseDone = events.find(event => event.type === 'response.done');
+  assert.equal(responseDone.data.status, 'incomplete');
+  assert.equal(responseDone.data.reason, 'max_output_tokens');
+  assert.ok(responseDone.data.audioQueuedUntilMs > 0);
+  assert.deepEqual(completed, [{ status: 'incomplete', reason: 'max_output_tokens', interrupted: false }]);
+});
+
+test('response completion reports completed status explicitly', () => {
+  const session = new RealtimeSession();
+  const completed = [];
+  session.on('turn_done', data => completed.push(data));
+
+  session._onMessage({ data: JSON.stringify({
+    type: 'response.done',
+    response: { status: 'completed' }
+  }) });
+
+  assert.deepEqual(completed, [{ status: 'completed', reason: '', interrupted: false }]);
+});
+
+test('completed provider response remains marked interrupted after confirmed barge-in', () => {
+  const session = new RealtimeSession();
+  const completed = [];
+  session.ws = { send() {} };
+  session._flushPlayback = () => {};
+  session.assistantSpeaking = true;
+  session._bargeInEvidenceAt = Date.now();
+  session.on('turn_done', data => completed.push(data));
+
+  session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+  session._onMessage({ data: JSON.stringify({
+    type: 'response.done',
+    response: { status: 'completed' }
+  }) });
+
+  assert.deepEqual(completed, [{ status: 'completed', reason: '', interrupted: true }]);
 });
 
 test('server VAD cannot cancel playback without locally confirmed barge-in', () => {
