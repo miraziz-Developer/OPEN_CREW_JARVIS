@@ -6,7 +6,10 @@ function normalize(text) {
     .replace(/\s+/g, ' ').trim();
 }
 
-const ACKS = new Set(['ha', "xo'p", 'xop', 'hop', "bo'ldi", 'boldi', "to'g'ri", 'togri', 'tushunarli', 'ok', 'okay', 'mm', 'hmm', 'a']);
+const ACKS = new Set([
+  'ha', "xo'p", 'xop', 'hop', "bo'ldi", 'boldi', "to'g'ri", 'togri', 'tushunarli',
+  'ok', 'okay', 'yes', 'yeah', 'yep', 'sure', 'alright', 'all right', 'mm', 'hmm', 'a'
+]);
 
 const NOISE_UTTERANCES = new Set([
   'uh', 'um', 'erm', 'hm', 'mmm', 'ah', 'oh', 'ee', 'eee',
@@ -84,7 +87,15 @@ function similarity(a, b) {
 function classifyUserTurn(text, context = {}) {
   const value = normalize(text);
   if (!value) return { accept: false, reason: 'empty' };
-  if (ACKS.has(value)) return { accept: false, reason: 'acknowledgement' };
+  // A short acknowledgement is usually microphone/crosstalk noise when there
+  // is no active exchange. Once Jarvis has just spoken, however, it is a real
+  // conversational turn (for example "ha", "yes", or "xo'p, davom") and
+  // must reach the Realtime model so the dialogue can naturally continue.
+  if (ACKS.has(value)) {
+    return context.conversationActive
+      ? { accept: true, reason: 'contextual-acknowledgement' }
+      : { accept: false, reason: 'acknowledgement' };
+  }
   if (NOISE_UTTERANCES.has(value)) return { accept: false, reason: 'low-information' };
   const tokens = value.split(' ').filter(Boolean);
   // Bir bo'g'inli shovqin yoki STTning tasodifiy bitta so'zli taxmini Jarvisni

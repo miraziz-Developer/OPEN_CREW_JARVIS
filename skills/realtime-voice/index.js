@@ -93,7 +93,8 @@ function checkSystemAudioPlaying() {
 // tanlandi. .env orqali xohlansa keyin A/B almashtirish mumkin.
 const VOICE = env('AZURE_REALTIME_VOICE', 'cedar');
 const VOICE_STYLE = env('JARVIS_VOICE_STYLE', 'cinematic-robot');
-const TRANSCRIPTION_LANGUAGE = env('REALTIME_TRANSCRIPTION_LANGUAGE', 'en');
+// Empty lets the Realtime provider detect the language for multilingual turns.
+const TRANSCRIPTION_LANGUAGE = env('REALTIME_TRANSCRIPTION_LANGUAGE', '');
 const TRANSCRIPTION_MODEL = env('REALTIME_TRANSCRIPTION_MODEL', 'gpt-4o-transcribe');
 // Jarvis gapirib bo'lgach, mikrofon yana necha ms kutib turadi (xona
 // akustikasi/karnay ovozi pasayishi uchun) — real foydalanishda 500ms
@@ -242,7 +243,7 @@ function loadLegacyInstructions() {
   const voiceStyle = '';
   const pronunciationBlock = '';
   return (
-      "You are Jarvis, the user's English-speaking realtime voice assistant. Interpret all incoming speech as English and always reply in English. " +
+      "You are Jarvis, the user's multilingual realtime voice assistant. Interpret incoming speech in the language the user speaks and reply naturally in that same language unless the user explicitly asks to switch languages. Preserve the user's language across short follow-up turns, including acknowledgements or continuations, rather than reverting to English. " +
       "Be fast, natural, calm, precise, and conversational. Usually answer in one short sentence; use two short sentences only when needed. " +
       "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
       "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
@@ -326,7 +327,7 @@ function loadLegacyInstructions() {
 
 function loadInstructions() {
   return (
-    "You are Jarvis, the user's English-speaking realtime voice assistant. Interpret all incoming speech as English and always reply in English. " +
+    "You are Jarvis, the user's multilingual realtime voice assistant. Interpret incoming speech in the language the user speaks and reply naturally in that same language unless the user explicitly asks to switch languages. Preserve the user's language across short follow-up turns, including acknowledgements or continuations, rather than reverting to English. " +
     "Be fast, natural, calm, precise, and conversational. Usually answer in one short sentence; use two short sentences only when needed. " +
     "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
     "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
@@ -1076,7 +1077,8 @@ class RealtimeSession extends EventEmitter {
     const policy = classifyUserTurn(this.userTranscript, {
       lastAssistant: this._lastAssistantTranscript,
       mediaMode: this._mediaModeActive,
-      explicitUserTrigger: this._explicitUserTurnPending
+      explicitUserTrigger: this._explicitUserTurnPending,
+      conversationActive: this._conversationContext.isActive()
     });
     if (!policy.accept) {
       this.emit('turn_suppressed', policy.reason, this.userTranscript);

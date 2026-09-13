@@ -29,7 +29,10 @@ function extractEntities(text, world = {}) {
 class ConversationContext {
   constructor(options = {}) {
     this.now = options.now || Date.now;
-    this.windowMs = options.windowMs || 20000;
+    // A user commonly pauses after a spoken answer before asking a follow-up.
+    // Keep entity/reference context aligned with the live-session follow-up
+    // window rather than discarding it after the old 20-second idle timeout.
+    this.windowMs = options.windowMs || 60000;
     this.maxTurns = options.maxTurns || 8;
     this.reset();
   }

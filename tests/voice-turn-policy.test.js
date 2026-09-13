@@ -12,6 +12,18 @@ test('short acknowledgements remain silent', () => {
   assert.equal(classifyUserTurn("xo'p").accept, false);
 });
 
+test('short acknowledgements continue an active conversation', () => {
+  assert.deepEqual(classifyUserTurn('Ha', { conversationActive: true }), {
+    accept: true,
+    reason: 'contextual-acknowledgement'
+  });
+  assert.deepEqual(classifyUserTurn('yes', { conversationActive: true }), {
+    accept: true,
+    reason: 'contextual-acknowledgement'
+  });
+  assert.equal(classifyUserTurn('yes').reason, 'acknowledgement');
+});
+
 test('English acknowledgements remain silent while complete English turns pass', () => {
   assert.equal(classifyUserTurn('Okay.').reason, 'acknowledgement');
   assert.equal(classifyUserTurn('Please continue with the deployment.').accept, true);

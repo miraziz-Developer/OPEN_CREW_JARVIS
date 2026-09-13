@@ -4,8 +4,29 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   RealtimeSession, needsGroundedAnswer, needsContextGrounding,
-  needsExpertAnswer, collectGrounding, matchDirectFastAction
+  needsExpertAnswer, collectGrounding, matchDirectFastAction, loadInstructions
 } = require('../skills/realtime-voice');
+
+test('voice instructions preserve the user language and require real task execution', () => {
+  const instructions = loadInstructions();
+  assert.match(instructions, /Reply naturally in that same language/i);
+  assert.match(instructions, /rather than reverting to English/i);
+  assert.doesNotMatch(instructions, /Always reply only in natural English/i);
+  assert.doesNotMatch(instructions, /Never answer in Uzbek/i);
+});
+
+test('an acknowledgement after an assistant reply remains a realtime turn', () => {
+  const session = new RealtimeSession();
+  const sent = [];
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+  session._rememberConversationTurn('Jarvis', 'Deploy tugadi. Davom etaymi?');
+
+  assert.equal(session._acceptTranscript('Ha'), true);
+  const response = sent.find(message => message.type === 'response.create');
+  assert.ok(response);
+  assert.match(response.response.instructions, /same language/i);
+});
 
 test('transcript gate routes simple conversation to Realtime and complex turns to Astra', async () => {
   const questions = [];
