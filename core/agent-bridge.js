@@ -6,6 +6,16 @@ const { spawn, execSync } = require('child_process');
 const { ProviderPool } = require('./skill-platform');
 const { er } = require('./log');
 
+const ENGLISH_ONLY_INSTRUCTION = '[Language policy: Reply to the user only in natural English, regardless of the language of the request or stored context. Never answer in Uzbek or imitate an Uzbek accent. Preserve names, quoted text, and file contents when necessary.]';
+
+function buildOpenClawAgentArgs(message, sessionKey) {
+  const args = ['agent'];
+  const key = String(sessionKey || '').trim();
+  if (key) args.push('--session-key', key);
+  args.push('--message', ENGLISH_ONLY_INSTRUCTION + '\n\n' + String(message || ''), '--agent', 'main');
+  return args;
+}
+
 // Telegram/TTS/agent-provider bridge — jarvis_daemon.js va telegram-bot.js
 // bir xil "asosiy agent" (openclaw CLI, deep-think fallback bilan) va bir
 // xil Telegram/TTS chiqishiga murojaat qiladi; bu shu mantiqning yagona
@@ -49,7 +59,7 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
 
   function askOpenClaw(message, sessionKey) {
     return new Promise((resolve, reject) => {
-      const proc = spawn('openclaw', ['agent', '--message', message, '--agent', 'main'], { cwd: projectDir, env: { ...process.env, AZURE_OPENAI_KEY: azureOpenAiKey }, timeout: 120000 });
+      const proc = spawn('openclaw', buildOpenClawAgentArgs(message, sessionKey), { cwd: projectDir, env: { ...process.env, AZURE_OPENAI_KEY: azureOpenAiKey, JARVIS_PROJECT_DIR: projectDir }, timeout: 120000 });
       let out = '';
       let procErr = '';
       proc.stdout.on('data', d => out += d); proc.stderr.on('data', d => procErr += d);
@@ -91,4 +101,4 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
   return { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders, askAgent };
 }
 
-module.exports = { createAgentBridge };
+module.exports = { createAgentBridge, buildOpenClawAgentArgs, ENGLISH_ONLY_INSTRUCTION };

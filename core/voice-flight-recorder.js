@@ -41,6 +41,8 @@ class VoiceFlightRecorder {
     this.turns = new Map();
     this.recent = [];
     this.maxRecent = finite(options.maxRecent, 120);
+    this._writeChain = Promise.resolve();
+    this._directoryReady = false;
   }
 
   beginSession(meta = {}) {
@@ -162,11 +164,16 @@ class VoiceFlightRecorder {
   }
 
   _append(record) {
-    try {
-      fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-      fs.appendFileSync(this.file, JSON.stringify(record) + '\n', { mode: 0o600 });
-    } catch (_) {}
+    this._writeChain = this._writeChain.then(async () => {
+      if (!this._directoryReady) {
+        await fs.promises.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+        this._directoryReady = true;
+      }
+      await fs.promises.appendFile(this.file, JSON.stringify(record) + '\n', { mode: 0o600 });
+    }).catch(() => {});
   }
+
+  flush() { return this._writeChain; }
 }
 
 module.exports = { VoiceFlightRecorder, redactText, percentile };

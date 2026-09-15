@@ -13,6 +13,9 @@ const https = require('https');
 
 // konstantalar
 const DEFAULT_VOICE = process.env.AZURE_SPEECH_VOICE || 'en-US-GuyNeural';
+const LANGUAGE      = process.env.AZURE_SPEECH_LANGUAGE || 'en-US';
+const RATE_PERCENT  = Number(process.env.AZURE_SPEECH_RATE_PERCENT ?? -12);
+const PITCH_PERCENT = Number(process.env.AZURE_SPEECH_PITCH_PERCENT ?? -12);
 const REGION        = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY           = process.env.AZURE_SPEECH_KEY;
 
@@ -26,10 +29,18 @@ function escapeXml(text) {
 }
 
 // SSML yaratish
-function buildSsml(text, voice) {
+function signedPercent(value, fallback) {
+  const number = Number.isFinite(value) ? value : fallback;
+  return (number >= 0 ? '+' : '') + number + '%';
+}
+
+function buildSsml(text, voice = DEFAULT_VOICE, options = {}) {
+  const language = options.language || LANGUAGE;
+  const rate = signedPercent(Number(options.ratePercent ?? RATE_PERCENT), -12);
+  const pitch = signedPercent(Number(options.pitchPercent ?? PITCH_PERCENT), -12);
   return '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">' +
-    '<voice name="' + voice + '"><prosody rate="-4%" pitch="-8%">' + escapeXml(text) + '</prosody></voice>' +
+    '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="' + language + '">' +
+    '<voice name="' + voice + '"><prosody rate="' + rate + '" pitch="' + pitch + '">' + escapeXml(text) + '</prosody></voice>' +
     '</speak>';
 }
 
@@ -74,7 +85,7 @@ function readStdin() {
 }
 
 // asosiy entry point
-(async function main() {
+async function main() {
   try {
     const raw = await readStdin();
     const input = raw ? JSON.parse(raw) : {};
@@ -90,4 +101,8 @@ function readStdin() {
     console.error(JSON.stringify({ error: err.message || 'TTS xatolik' }));
     process.exit(1);
   }
-})();
+}
+
+if (require.main === module) main();
+
+module.exports = { azureTts, buildSsml, escapeXml, signedPercent };

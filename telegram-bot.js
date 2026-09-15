@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
  * JARVIS Telegram Bot — v8 Final
- * OpenClaw + Kimi K2.6 (Azure) + Azure Speech TTS/STT
- * 100% o'zbek tilida. Universal AI agentga yuboradi,
- * javobdan fayl yo'llarini chiqarib yuboradi.
+ * OpenClaw + Azure Speech TTS/STT.
+ * User-facing output is always natural English.
  */
 
 const TelegramBotModule = require('node-telegram-bot-api');
@@ -13,6 +12,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { writeMemory, searchMemory, readProfile } = require('./skills/memory');
+const { createTelegramPoller } = require('./core/telegram-poller');
+const { analyzeVideoNote, validateVideoNote } = require('./core/video-note-analysis');
 
 const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
@@ -24,16 +25,23 @@ function getEnv(key) {
 }
 
 const TOKEN = getEnv('TELEGRAM_BOT_TOKEN');
-if (!TOKEN) { console.error('TELEGRAM_BOT_TOKEN topilmadi'); process.exit(1); }
+if (!TOKEN) { console.error('TELEGRAM_BOT_TOKEN was not found'); process.exit(1); }
 
 const AZURE_SPEECH_KEY = getEnv('AZURE_SPEECH_KEY');
 const AZURE_SPEECH_REGION = getEnv('AZURE_SPEECH_REGION');
-const AZURE_SPEECH_VOICE = getEnv('AZURE_SPEECH_VOICE') || 'uz-UZ-SardorNeural';
+const AZURE_SPEECH_VOICE = getEnv('AZURE_SPEECH_VOICE') || 'en-US-GuyNeural';
 const AZURE_OPENAI_KEY = getEnv('AZURE_OPENAI_KEY');
+const AZURE_OPENAI_ENDPOINT = getEnv('AZURE_OPENAI_ENDPOINT');
+const AZURE_OPENAI_VISION_DEPLOYMENT = getEnv('AZURE_OPENAI_VISION_DEPLOYMENT') || 'gpt-4.1';
+const TELEGRAM_VIDEO_NOTE_MAX_BYTES = Number(getEnv('TELEGRAM_VIDEO_NOTE_MAX_BYTES')) || 20 * 1024 * 1024;
+const TELEGRAM_VIDEO_NOTE_MAX_SECONDS = Number(getEnv('TELEGRAM_VIDEO_NOTE_MAX_SECONDS')) || 90;
 
 const chatHistory = {};
 const MAX_HISTORY = 10;
 const CONTEXT_TTL_MS = 10 * 60 * 1000;
+const videoNoteQueues = new Map();
+const processedVideoNotes = new Set();
+const MAX_PROCESSED_VIDEO_NOTES = 1000;
 
 // MUHIM: tarmoq vaqtincha uzilib qolsa (DNS/WiFi), node-telegram-bot-api'ning
 // ichki polling xatoligi ILGARI butun jarayonni yiqitib yuborardi (uncaught
@@ -49,7 +57,14 @@ process.on('unhandledRejection', (err) => {
 });
 
 console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
-const bot = new TelegramBot(TOKEN, { polling: true });
+// node-telegram-bot-api@1.2.0 ning fetch asosidagi getUpdates transporti shu
+// hostda muntazam EFATAL bilan uziladi. Handler va media metodlarini libraryda
+// qoldiramiz, incoming update'larni esa barqaror native HTTPS poller olib keladi.
+const bot = new TelegramBot(TOKEN, { polling: false });
+const telegramPoller = createTelegramPoller({
+  token: TOKEN,
+  onUpdate: update => bot.processUpdate(update)
+});
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -96,7 +111,8 @@ async function sttFromFile(wavPath) {
 async function askAgent(message) {
   return new Promise((resolve) => {
     const env = { ...process.env, AZURE_OPENAI_KEY, AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, AZURE_SPEECH_VOICE };
-    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:telegram', '--message', message, '--agent', 'main'], {
+    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
+    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:telegram', '--message', englishOnly + message, '--agent', 'main'], {
       cwd: PROJECT_DIR, env, timeout: 120000
     });
     let out = '';
@@ -152,7 +168,7 @@ async function sendDocument(chatId, filePath, caption) {
     if (!fs.existsSync(filePath)) return false;
     const sizeMB = fs.statSync(filePath).size / (1024 * 1024);
     if (sizeMB > 50) {
-      await bot.sendMessage(chatId, 'Fayl juda katta (' + sizeMB.toFixed(1) + ' MB). 50 MB limit.');
+      await bot.sendMessage(chatId, 'The file is too large (' + sizeMB.toFixed(1) + ' MB). The limit is 50 MB.');
       return false;
     }
     await bot.sendDocument(chatId, filePath, { caption: caption || path.basename(filePath) });
@@ -167,7 +183,10 @@ async function sendVoiceReply(chatId, text) {
   try {
     const safe = text.substring(0, 400);
     const audioPath = await ttsToFile(safe);
-    if (!audioPath || !fs.existsSync(audioPath)) return;
+    if (!audioPath || !fs.existsSync(audioPath)) {
+      console.error('Voice reply skipped: TTS did not produce an audio file for chat ' + chatId + '.');
+      return;
+    }
     const ogg = audioPath.replace('.mp3', '.ogg');
     execSync('ffmpeg -y -i "' + audioPath + '" -c:a libopus "' + ogg + '" 2>/dev/null');
     if (fs.existsSync(ogg)) {
@@ -179,16 +198,77 @@ async function sendVoiceReply(chatId, text) {
   }
 }
 
+async function handleVideoNote(msg) {
+  const chatId = msg.chat.id;
+  const note = msg.video_note;
+  const permitted = validateVideoNote(note, {
+    maxFileBytes: TELEGRAM_VIDEO_NOTE_MAX_BYTES,
+    maxDurationSeconds: TELEGRAM_VIDEO_NOTE_MAX_SECONDS
+  });
+  if (!permitted.ok) {
+    const reason = permitted.reason === 'file-too-large'
+      ? 'This video note is too large. Please send one smaller than ' + Math.floor(TELEGRAM_VIDEO_NOTE_MAX_BYTES / 1024 / 1024) + ' MB.'
+      : 'This video note is too long. Please send one shorter than ' + TELEGRAM_VIDEO_NOTE_MAX_SECONDS + ' seconds.';
+    await bot.sendMessage(chatId, reason);
+    return;
+  }
+
+  await bot.sendChatAction(chatId, 'typing');
+  await bot.sendMessage(chatId, '🎥 Video received. I am listening and analyzing it...');
+  try {
+    const fileUrl = await bot.getFileLink(note.file_id);
+    const result = await analyzeVideoNote({
+      note, fileUrl, caption: msg.caption || '',
+      endpoint: AZURE_OPENAI_ENDPOINT, key: AZURE_OPENAI_KEY, deployment: AZURE_OPENAI_VISION_DEPLOYMENT,
+      maxFileBytes: TELEGRAM_VIDEO_NOTE_MAX_BYTES, maxDurationSeconds: TELEGRAM_VIDEO_NOTE_MAX_SECONDS,
+      transcribe: sttFromFile, log: console
+    });
+    const answer = result.answer.slice(0, 4096);
+    await bot.sendMessage(chatId, answer);
+    try {
+      writeMemory('Telegram video tahlili',
+        'Caption: ' + (msg.caption || '(yo\'q)') + '\nTranskript: ' + (result.transcript || '(aniq eshitilmadi)') + '\nJarvis: ' + answer,
+        ['telegram', 'video', 'vision']);
+    } catch (error) {}
+    if (!chatHistory[chatId]) chatHistory[chatId] = [];
+    const userText = [msg.caption, result.transcript].filter(Boolean).join('\n') || '[Video note]';
+    chatHistory[chatId].push({ user: userText, agent: answer, time: Date.now() });
+    if (chatHistory[chatId].length > MAX_HISTORY) chatHistory[chatId].shift();
+  } catch (error) {
+    console.error('Video-note processing error:', error.message || error);
+    await bot.sendMessage(chatId, 'I could not analyze that video note. Please try a shorter, clearer video and send it again.');
+  }
+}
+
+function enqueueVideoNote(msg) {
+  const chatId = msg.chat.id;
+  const updateKey = String(chatId) + ':' + String(msg.message_id || msg.video_note?.file_unique_id || msg.video_note?.file_id);
+  if (processedVideoNotes.has(updateKey)) {
+    console.log('[' + chatId + '] Duplicate video-note ignored: ' + updateKey);
+    return Promise.resolve();
+  }
+  processedVideoNotes.add(updateKey);
+  if (processedVideoNotes.size > MAX_PROCESSED_VIDEO_NOTES) {
+    processedVideoNotes.delete(processedVideoNotes.values().next().value);
+  }
+  const previous = videoNoteQueues.get(chatId) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => handleVideoNote(msg));
+  videoNoteQueues.set(chatId, current);
+  return current.finally(() => {
+    if (videoNoteQueues.get(chatId) === current) videoNoteQueues.delete(chatId);
+  });
+}
+
 async function takeScreenshot(chatId) {
   const p = os.homedir() + '/Desktop/jarvis_screenshot_' + Date.now() + '.png';
   try {
     execSync('screencapture -x "' + p + '"');
     if (fs.existsSync(p)) {
-      await bot.sendDocument(chatId, p, { caption: 'Jarvis skrinshoti' });
-      return 'Ekran tasviri olindi va sizga yuborildi!';
+      await bot.sendDocument(chatId, p, { caption: 'JARVIS screenshot' });
+      return 'Screenshot captured and sent.';
     }
   } catch (e) {
-    return 'Skrinshot olishda xatolik yuz berdi.';
+    return 'I could not capture the screenshot.';
   }
 }
 
@@ -260,10 +340,10 @@ async function handleMessage(chatId, userText, isVoice) {
     if (url) {
       try {
         execSync('open "https://' + url[1] + '"');
-        await bot.sendMessage(chatId, url[1] + ' brauzerda ochildi!');
-        await sendVoiceReply(chatId, url[1] + ' sayti ochilmoqda.');
+        await bot.sendMessage(chatId, url[1] + ' opened in the browser.');
+        await sendVoiceReply(chatId, 'Opening ' + url[1] + '.');
       } catch (e) {
-        await bot.sendMessage(chatId, 'Sayt ochishda xatolik.');
+        await bot.sendMessage(chatId, 'I could not open that website.');
       }
       return;
     }
@@ -273,7 +353,7 @@ async function handleMessage(chatId, userText, isVoice) {
   if (/eslab qol|esda tut|xotira|memory/i.test(userText) && userText.length > 20) {
     const clean = userText.replace(/eslab qol|esda tut|xotira|memory/gi, '').trim();
     const wr = writeMemory('Telegram eslatma', clean, ['telegram']);
-    await bot.sendMessage(chatId, '✅ Eslab qoldim: ' + clean.substring(0, 100));
+    await bot.sendMessage(chatId, '✅ Remembered: ' + clean.substring(0, 100));
     return;
   }
 
@@ -281,9 +361,9 @@ async function handleMessage(chatId, userText, isVoice) {
   if (/profilim|men haqimda|o'zim haqimda/i.test(userText)) {
     const pr = readProfile();
     if (pr.status === 'ok' && pr.content) {
-      await bot.sendMessage(chatId, '📋 Profilingiz:\n\n' + pr.content.substring(0, 2000));
+      await bot.sendMessage(chatId, '📋 Your profile:\n\n' + pr.content.substring(0, 2000));
     } else {
-      await bot.sendMessage(chatId, 'Profilingiz hali bo\'sh. "Jarvis, ... eslab qol" deb ayting.');
+      await bot.sendMessage(chatId, 'Your profile is empty. Say, “Jarvis, remember ...”');
     }
     return;
   }
@@ -302,7 +382,7 @@ async function handleMessage(chatId, userText, isVoice) {
   }
 
   // 3d. UNIVERSAL: AI agentga yuborish
-  let enrichedMessage = memoryContext + userText;
+  let enrichedMessage = '[Reply only in natural English.]\n' + memoryContext + userText;
   
   // Agar avvalgi suhbat bosa — kontekst bilan
   const history = chatHistory[chatId];
@@ -314,7 +394,7 @@ async function handleMessage(chatId, userText, isVoice) {
   const reply = await askAgent(enrichedMessage);
 
   if (!reply) {
-    await bot.sendMessage(chatId, 'Kechirasiz, hozir javob bera olmayman. Keyinroq urinib koring.');
+    await bot.sendMessage(chatId, 'I cannot respond right now. Please try again shortly.');
     return;
   }
 
@@ -334,7 +414,10 @@ async function handleMessage(chatId, userText, isVoice) {
     displayReply = reply.split('\n').filter(l => !l.includes('/Users/') && !l.startsWith('Desktop/')).join('\n').trim();
   }
   if (displayReply.length > 4096) displayReply = displayReply.substring(0, 4093) + '...';
-  if (displayReply) await bot.sendMessage(chatId, displayReply);
+  if (displayReply) {
+    const sent = await bot.sendMessage(chatId, displayReply);
+    console.log('[' + chatId + '] Text reply sent: message_id=' + (sent?.message_id || 'unknown'));
+  }
 
   // 6. Topilgan fayllarni yuborish
   if (realFiles.length > 0) {
@@ -344,10 +427,10 @@ async function handleMessage(chatId, userText, isVoice) {
       if (await sendDocument(chatId, fp, path.basename(fp))) sentCount++;
     }
     if (sentCount === 0 && realFiles.length > 0) {
-      await bot.sendMessage(chatId, 'Fayllar yo\'li topildi, lekin yuborishda muammo. Qo\'lda olish:\n' +
+      await bot.sendMessage(chatId, 'I found the files but could not send them. You can retrieve them here:\n' +
         realFiles.slice(0, 3).map(f => '• ' + f).join('\n'));
     } else if (sentCount > 0) {
-      await bot.sendMessage(chatId, sentCount + ' ta fayl yuborildi!');
+      await bot.sendMessage(chatId, sentCount + (sentCount === 1 ? ' file sent.' : ' files sent.'));
     }
   }
 
@@ -371,28 +454,30 @@ async function handleMessage(chatId, userText, isVoice) {
 bot.onText(/\/start/, (msg) => {
   chatHistory[msg.chat.id] = [];
   bot.sendMessage(msg.chat.id,
-    'Salom! Men Jarvis, sizning o\'zbek tilidagi AI-yordamchingiz.\n\n' +
-    'Nima qila olaman:\n' +
-    '• Ma\'lumot: "Bugun ob-havo qanday?"\n' +
-    '• Fayllar: "Desktopda offer letterlarni top va yubor"\n' +
-    '• Skrinshot: "Skrinshot ol"\n' +
-    '• Brauzer: "Google.com ni och"\n' +
-    '• Ovoz bilan ham gapirishingiz mumkin!\n\n' +
-    '"Salom" deb boshlang 😊'
+    'Hello. I am JARVIS, your English-speaking AI assistant.\n\n' +
+    'I can answer questions, find and send files, capture screenshots, control the browser, and process voice messages.\n\n' +
+    'Send a request whenever you are ready.'
   );
 });
 
 bot.onText(/\/cancel/, (msg) => {
   chatHistory[msg.chat.id] = [];
-  bot.sendMessage(msg.chat.id, 'Xotira tozalandi. Endi nima qilishim mumkin?');
+  bot.sendMessage(msg.chat.id, 'Conversation history cleared. What shall I do next?');
 });
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
+  console.log('Telegram message received: chat=' + chatId + ', from=' + (msg.from?.id || 'unknown') + ', type=' + (msg.video_note ? 'video_note' : msg.voice ? 'voice' : msg.text ? 'text' : 'other'));
 
   // Matnli xabar
   if (msg.text && !msg.text.startsWith('/')) {
     await handleMessage(chatId, msg.text.trim(), false);
+    return;
+  }
+
+  // Telegram dumaloq video (video_note): audio nutq + video kadrlari birga tahlil qilinadi.
+  if (msg.video_note) {
+    await enqueueVideoNote(msg);
     return;
   }
 
@@ -411,55 +496,25 @@ bot.on('message', async (msg) => {
       const stt = await sttFromFile(wavPath);
       if (stt && stt.status === 'ok' && stt.text) {
         const transcript = stt.text;
-        await bot.sendMessage(chatId, 'Eshitdim: "' + transcript.substring(0, 200) + '"');
+        await bot.sendMessage(chatId, 'I heard: “' + transcript.substring(0, 200) + '”');
         await handleMessage(chatId, transcript, true);
       } else {
-        await bot.sendMessage(chatId, 'Ovozni tushunmadim. Iltimos, aniqroq va sekin gapiring. Siz o\'zbek tilida gapirasizmi?');
+        await bot.sendMessage(chatId, 'I could not understand the voice message. Please speak clearly in English and try again.');
       }
       
       try { fs.unlinkSync(ogaPath); } catch (e) {}
       try { fs.unlinkSync(wavPath); } catch (e) {}
     } catch (e) {
       console.error('Voice processing error:', e.message);
-      await bot.sendMessage(chatId, 'Ovozni qayta ishlashda xatolik yuz berdi.');
+      await bot.sendMessage(chatId, 'An error occurred while processing the voice message.');
     }
     return;
   }
 });
 
-// Tarmoq uzilganda (DNS/WiFi) polling xatosi bir necha soniyada bir marta
-// takrorlanaveradi — avval har birini to'liq log qilib, faylni bir necha
-// ming qatorga to'ldirib yuborardi. Endi: qisqacha, kamdan-kam log qilinadi
-// va uzoq davom etsa (30s+, taxminan 15+ ketma-ket xato) polling'ni
-// o'zi qayta ishga tushiradi — ba'zan library o'zi "qotib qolib" tiklana
-// olmay qoladi, buni majburiy qayta ulash bilan tuzatamiz.
-let _pollErrCount = 0;
-let _pollErrFirstAt = 0;
-let _pollRecovering = false;
-let _pollLastLogAt = 0;
-function logPolling(level, message) {
-  console[level]('[' + new Date().toISOString() + '] ' + message);
-}
-bot.on('polling_error', (err) => {
-  const now = Date.now();
-  if (!_pollErrFirstAt) _pollErrFirstAt = now;
-  _pollErrCount++;
-  if (!_pollLastLogAt || now - _pollLastLogAt >= 60000) {
-    _pollLastLogAt = now;
-    logPolling('error', 'Telegram polling vaqtincha uzildi (' + _pollErrCount + ' urinish): ' + (err.message || err));
-  }
-  if (now - _pollErrFirstAt >= 30000 && !_pollRecovering) {
-    _pollRecovering = true;
-    logPolling('error', 'Telegram polling 30s+ uzildi — qayta ulanmoqda...');
-    bot.stopPolling().then(() => bot.startPolling()).then(() => {
-      logPolling('log', 'Telegram polling qayta ulanish so\'rovi yuborildi.');
-      _pollErrCount = 0; _pollErrFirstAt = 0; _pollLastLogAt = 0; _pollRecovering = false;
-    }).catch((e) => {
-      logPolling('error', 'Qayta ulanishda xatolik: ' + (e.message || e));
-      _pollRecovering = false;
-    });
-  }
-});
+telegramPoller.start();
+process.once('SIGTERM', () => telegramPoller.stop());
+process.once('SIGINT', () => telegramPoller.stop());
 
 console.log('Bot tayyor! v8 (Universal AI + Kontekst)');
 console.log('Ctrl+C bosib toxtatishingiz mumkin');

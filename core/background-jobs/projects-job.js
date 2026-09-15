@@ -61,7 +61,7 @@ function createProjectsJob({ missions, stableId, beginSingleStepMission, recordM
       const finalReport = await askAgent(reportPrompt, sessionKey);
       if (finalReport) {
         ok('📁 Loyiha yakunlandi: ' + active.project);
-        sendTelegram('📁 Loyiha yakunlandi — "' + active.project + '":\n\n' + finalReport);
+        sendTelegram('📁 Project completed — “' + active.project + '”:\n\n' + finalReport);
         try { writeMemory('Loyiha yakunlandi: ' + active.project, finalReport, ['project', 'report', 'autonomous']); } catch (e) {}
       }
     }

@@ -10,6 +10,16 @@ test('prefers a usable authoritative Uzbek transcript', () => {
   assert.equal(result.text, 'Chrome ni ochib ber');
 });
 
+test('wake preference chooses usable authoritative STT over a longer native hallucination', () => {
+  const result = chooseTranscript(
+    { text: 'Chrome ni och', confidence: 0.94 },
+    'open the telegram hey jarvis chrome notch',
+    { preferAuthoritative: true }
+  );
+  assert.equal(result.source, 'authoritative');
+  assert.equal(result.text, 'Chrome ni och');
+});
+
 test('falls back to native when authoritative STT is empty or noise', () => {
   assert.equal(chooseTranscript({ text: '' }, 'Chrome och').source, 'native-fallback');
   assert.equal(chooseTranscript({ text: 'um', confidence: 0.2 }, 'Bugun ob havo qanday').source, 'native-fallback');

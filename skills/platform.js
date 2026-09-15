@@ -62,6 +62,61 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
     };
   });
   platform.register({
+    id: 'communications', version: '1.0.0', capabilities: ['contacts.read', 'web.open', 'communications.call'],
+    actions: {
+      searchYouTube: { permissions: ['web.open'], input: { required: ['query'] } },
+      lookupContact: { permissions: ['contacts.read'], input: { required: ['query'] } },
+      openWhatsAppDraft: { permissions: ['web.open'], input: { required: ['phone', 'message'] } },
+      startFaceTimeCall: { permissions: ['communications.call'], input: { required: ['phone', 'confirmed'] } }
+    }
+  }, async () => {
+    const communications = require('./communications');
+    return {
+      searchYouTube: input => communications.searchYouTube(input.query),
+      lookupContact: input => communications.lookupContact(input.query),
+      openWhatsAppDraft: input => communications.openWhatsAppDraft(input),
+      startFaceTimeCall: input => communications.startFaceTimeCall(input)
+    };
+  });
+  platform.register({
+    id: 'desktop-control', version: '2.0.0', capabilities: ['desktop.read', 'desktop.write'],
+    actions: {
+      inspectUi: { permissions: ['desktop.read'] },
+      findElement: { permissions: ['desktop.read'], input: { required: ['query'] } },
+      waitForElement: { permissions: ['desktop.read'], input: { required: ['query'] } },
+      clickElement: { permissions: ['desktop.write'], input: { required: ['query'] } },
+      focusElement: { permissions: ['desktop.write'], input: { required: ['query'] } },
+      setText: { permissions: ['desktop.write'], input: { required: ['query', 'value'] } },
+      toggleElement: { permissions: ['desktop.write'], input: { required: ['query'] } },
+      scroll: { permissions: ['desktop.write'], input: { required: ['direction'] } },
+      selectMenu: { permissions: ['desktop.write'], input: { required: ['menu', 'item'] } }
+    }
+  }, async () => {
+    const desktop = require('./desktop-control');
+    return {
+      inspectUi: input => desktop.inspectUi(input), findElement: input => desktop.findElement(input),
+      waitForElement: input => desktop.waitForElement(input), clickElement: input => desktop.actOnElement(input, 'press'),
+      focusElement: input => desktop.actOnElement(input, 'focus'), setText: input => desktop.actOnElement(input, 'set_value'),
+      toggleElement: input => desktop.actOnElement(input, 'press'), scroll: input => desktop.scroll(input),
+      selectMenu: input => desktop.selectMenu(input)
+    };
+  });
+  platform.register({
+    id: 'screen-vision', version: '2.0.0', capabilities: ['screen.read'],
+    actions: { normalizeElements: { permissions: ['screen.read'], input: { required: ['result'] } } }
+  }, async () => {
+    const vision = require('./screen-vision');
+    return { normalizeElements: input => vision.normalizeVisionResult(input.result) };
+  });
+  platform.register({
+    id: 'gods-eye-view', version: '1.0.0', capabilities: ['web.open', 'geospatial.visualization'],
+    actions: {
+      show: { permissions: ['web.open'], input: { required: ['place'], properties: { place: 'string', altitude: 'number', layers: 'array' } }, timeoutMs: 45000 },
+      status: { timeoutMs: 5000 },
+      availableLayers: { timeoutMs: 5000 }
+    }
+  }, async () => require('./gods-eye-view'));
+  platform.register({
     id: 'azure-tts', version: '1.0.0', capabilities: ['tts'],
     actions: { synthesize: { input: { required: ['text'] }, timeoutMs: 20000 } }
   }, async () => {
@@ -77,7 +132,10 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
             ...process.env,
             AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'),
             AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'),
-            AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'en-US-GuyNeural'
+            AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'en-US-GuyNeural',
+            AZURE_SPEECH_LANGUAGE: env('AZURE_SPEECH_LANGUAGE') || 'en-US',
+            AZURE_SPEECH_RATE_PERCENT: env('AZURE_SPEECH_RATE_PERCENT') || '-12',
+            AZURE_SPEECH_PITCH_PERCENT: env('AZURE_SPEECH_PITCH_PERCENT') || '-12'
           }
         });
         let out = '';

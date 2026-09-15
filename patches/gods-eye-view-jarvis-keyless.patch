@@ -1,0 +1,20 @@
+diff --git a/src/standalone/startupChrome.js b/src/standalone/startupChrome.js
+index 14e5571..7b32e5a 100644
+--- a/src/standalone/startupChrome.js
++++ b/src/standalone/startupChrome.js
+@@ -1,8 +1,14 @@
+ import { startApplicationChrome } from '../app/startupChrome.js';
+ import { initKeySetup } from '../keySetup.js';
+ export function startStandaloneChrome(options) {
++  // Jarvis resolves the requested place itself and controls voice separately.
++  // Its localhost integration is intentionally keyless, so do not show the
++  // upstream optional-provider onboarding panel.
++  const initializeSettings = import.meta.env.VITE_GODS_EYE_VIEW_EMBEDDED === 'true'
++    ? undefined
++    : initKeySetup;
+   return startApplicationChrome({
+-    initializeSettings: initKeySetup,
++    initializeSettings,
+     ...options,
+   });
+ }

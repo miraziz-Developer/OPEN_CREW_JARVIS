@@ -12,7 +12,7 @@ function createDailySynthesisJob({ sendTelegram }) {
       const r = await synthesize(yesterday());
       if (r && r.learned && r.learned.length) {
         ok('🧠 O\'rganildi (' + r.date + '): ' + r.learned.length + ' ta naqsh profilga qo\'shildi');
-        sendTelegram('🧠 Kecha kuzatilganlardan o\'rgandim:\n' + r.learned.join('\n'));
+        sendTelegram('🧠 Patterns learned from yesterday:\n' + r.learned.join('\n'));
       }
     } catch (e) { er('Kunlik o\'rganish xatolik: ' + (e.message || e)); }
   }

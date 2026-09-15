@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   normalize, looksLikeUzbekTurn, looksLikeEnglishIntent,
-  classifyUserTurn, isRepeatedResponse
+  classifyUserTurn, isRepeatedResponse, conversationIdleDelay
 } = require('../core/voice-turn-policy');
 
 test('short acknowledgements remain silent', () => {
@@ -80,4 +80,15 @@ test('near duplicate assistant responses are recognized early', () => {
   assert.equal(isRepeatedResponse('Chrome brauzeri muvaffaqiyatli ochildi', 'Chrome brauzeri muvaffaqiyatli ochildi.'), true);
   assert.equal(isRepeatedResponse('Bugun havo issiq', 'Chrome brauzeri muvaffaqiyatli ochildi.'), false);
   assert.equal(isRepeatedResponse('Chrome brauzeri orqali', 'Chrome brauzeri orqali GitHub ochildi va loyiha topildi'), false);
+});
+
+test('conversation follow-up window starts after queued assistant playback', () => {
+  assert.equal(conversationIdleDelay({
+    now: 1000, idleMs: 20000, followupMs: 30000,
+    playbackUntil: 5000, awaitingFollowup: true
+  }), 34000);
+  assert.equal(conversationIdleDelay({
+    now: 1000, idleMs: 20000, followupMs: 30000,
+    playbackUntil: 5000, awaitingFollowup: false
+  }), 24000);
 });

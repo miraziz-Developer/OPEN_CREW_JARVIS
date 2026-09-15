@@ -12,6 +12,15 @@ function saveProactiveState(stateFile, s) {
   try { fs.writeFileSync(stateFile, JSON.stringify(s)); } catch (e) {}
 }
 
+// "No action" xulosalari ichki natija bo'lib, foydalanuvchiga yuborilmaydi.
+// Faqat qat'iy kontraktga mos, dalilli takliflar notification bo'la oladi.
+function extractSuggestion(reply) {
+  const match = String(reply || '').trim().match(/^SUGGESTION:\s*(.+)$/s);
+  if (!match) return null;
+  const suggestion = match[1].trim();
+  return suggestion.length > 5 ? suggestion : null;
+}
+
 // PROAKTIV REJIM — davriy ravishda screen-monitor yozgan Obsidian
 // xotirasini ko'rib chiqadi; agent chindan foydali narsa topsa, faqat
 // KUZATIB (mustaqil harakat qilmasdan) taklif beradi.
@@ -62,18 +71,21 @@ function createProactiveCheckJob({ projectDir, intervalMin, localDateStr, proact
       patternsBlock +
       '\n\nYuqoridagi ODATLARGA qarab, hozirgi vaqt/holat bilan solishtiring: foydalanuvchi odatda shu payt/holatda ' +
       'nima qilishi kerak edi, lekin qilmagandek ko\'rinsa (masalan unutgan, chalg\'igan) — yoki hozirgi ekrandan chindan ' +
-      'foydali/muhim bir taklif (xato, unutilgan vazifa, yordam kerak bo\'lgan holat) ko\'rsangiz — qisqa (2-3 gap) taklif ' +
-      'qiling, nega bu taklifni berayotganingizni ham qisqa izohlang (masalan "odatda shu vaqt atrofida..."). Aks holda ' +
-      'faqat "HECH_NARSA" deb javob bering, boshqa hech narsa yozmang.';
+      'foydali/muhim bir taklif (xato, unutilgan vazifa, yordam kerak bo\'lgan holat) ko\'rsangiz, faqat ' +
+      '"SUGGESTION: <qisqa, aniq taklif va uning dalili>" formatida javob bering. Aniq taklif bo\'lmasa, faqat ' +
+      '"NO_ACTION" deb javob bering. Memory search yoki boshqa vosita mavjud emasligini, baholash jarayonini yoki ' +
+      'nega xabar yubormayotganingizni hech qachon izohlamang.';
     const reply = await askAgent(prompt, 'agent:main:jarvis-proactive');
+    const suggestion = extractSuggestion(reply);
+    if (!suggestion) return;
     const decision = proactivePolicy.evaluate({
-      source: 'screen-proactive', summary: reply, confidence: 0.72,
+      source: 'screen-proactive', summary: suggestion, confidence: 0.72,
       urgency: 0.35, benefit: 0.65, reversibility: 1, risk: 0.15, disruption: 0.35
     });
-    if (reply && !reply.includes('HECH_NARSA') && reply.trim().length > 5 && decision.mode === 'suggest') {
-      ok('💡 Proaktiv taklif: ' + reply.substring(0, 80));
-      sendTelegram('💡 ' + reply);
-      const audio = await ttsToFile(reply.substring(0, 300));
+    if (decision.mode === 'suggest') {
+      ok('💡 Proaktiv taklif: ' + suggestion.substring(0, 80));
+      sendTelegram('💡 ' + suggestion);
+      const audio = await ttsToFile(suggestion.substring(0, 300));
       if (audio) { try { execSync('afplay "' + audio + '"'); } catch (e) {} }
     }
   }
@@ -81,4 +93,4 @@ function createProactiveCheckJob({ projectDir, intervalMin, localDateStr, proact
   return { run };
 }
 
-module.exports = { createProactiveCheckJob };
+module.exports = { createProactiveCheckJob, extractSuggestion };

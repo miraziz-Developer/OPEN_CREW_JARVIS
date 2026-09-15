@@ -10,7 +10,15 @@ class STTPool {
     this.size = size;
     this.projectDir = projectDir;
     this.pool = [];
-    this.env = { ...process.env, AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION') };
+    this.env = {
+      ...process.env,
+      AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'),
+      AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'),
+      AZURE_SPEECH_LANGUAGE: env('AZURE_SPEECH_LANGUAGE'),
+      AZURE_TRANSCRIBE_ENDPOINT: env('AZURE_TRANSCRIBE_ENDPOINT'),
+      AZURE_TRANSCRIBE_KEY: env('AZURE_TRANSCRIBE_KEY'),
+      AZURE_TRANSCRIBE_DEPLOYMENT: env('AZURE_TRANSCRIBE_DEPLOYMENT')
+    };
     for (let i = 0; i < size; i++) this._spawn(i);
   }
 

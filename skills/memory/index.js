@@ -27,15 +27,39 @@ const SESSION_CONTEXT_MAX_TURNS = 12;
 const SESSION_CONTEXT_MAX_CHARS = 6000;
 
 const { PROJECT_DIR } = require('../../core/paths');
-const EMBED_INDEX_FILE = path.join(PROJECT_DIR, '.memory-embeddings.json');
+const { readEnvFile } = require('../../core/config');
 const MEMORY_OS_FILE = process.env.JARVIS_MEMORY_OS_FILE || path.join(PROJECT_DIR, '.jarvis-memory-os.json');
 const memoryOS = new MemoryOS({ file: MEMORY_OS_FILE });
-const EMBED_DEPLOYMENT = 'text-embedding-3-small';
 let _azureEnv = null;
+let _pgPool = null;
 function azureEnv(k, def) {
+  if (process.env[k] !== undefined) return process.env[k];
   if (!_azureEnv) { try { _azureEnv = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (e) { _azureEnv = ''; } }
   const m = _azureEnv.match(new RegExp('^' + k + '=(.*)$', 'm'));
   return m ? m[1].trim() : def;
+}
+
+function postgresConfig() {
+  let values = {};
+  try { values = readEnvFile(path.join(PROJECT_DIR, '.env')); } catch (_) {}
+  const config = {};
+  for (const name of ['host', 'port', 'database', 'user', 'password']) {
+    const envName = `PG${name.toUpperCase()}`;
+    const value = process.env[envName] ?? values[envName];
+    if (value !== undefined && value !== '') config[name] = value;
+  }
+  return config;
+}
+
+function getPgPool() {
+  if (_pgPool) return _pgPool;
+  const { Pool } = require('pg');
+  _pgPool = new Pool({ ...postgresConfig(), max: 4, idleTimeoutMillis: 30_000 });
+  return _pgPool;
+}
+
+function vectorLiteral(vector) {
+  return `[${Array.from(vector, Number).join(',')}]`;
 }
 
 function ensureDirs() {
@@ -227,11 +251,12 @@ function searchMemory(query, limit = 5) {
 // yozuvni ham topa oladi, so'zlar mos kelmasa ham.
 function embedText(text) {
   return new Promise((resolve, reject) => {
-    const KEY = azureEnv('AZURE_OPENAI_KEY');
-    const RAW_ENDPOINT = (azureEnv('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '').replace(/\/openai\/v1$/, '');
-    if (!KEY || !RAW_ENDPOINT) return reject(new Error('AZURE_OPENAI_KEY/ENDPOINT yo\'q'));
-    const payload = JSON.stringify({ input: String(text).slice(0, 8000) });
-    const url = new URL(RAW_ENDPOINT + '/openai/deployments/' + EMBED_DEPLOYMENT + '/embeddings?api-version=2024-06-01');
+    const KEY = azureEnv('AZURE_EMBEDDING_KEY', azureEnv('AZURE_OPENAI_KEY'));
+    const RAW_ENDPOINT = (azureEnv('AZURE_EMBEDDING_ENDPOINT', azureEnv('AZURE_OPENAI_ENDPOINT')) || '').replace(/\/$/, '').replace(/\/openai\/v1$/, '');
+    const deployment = azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2');
+    if (!KEY || !RAW_ENDPOINT) return reject(new Error('AZURE_EMBEDDING_KEY/ENDPOINT yo\'q'));
+    const payload = JSON.stringify({ model: deployment, input: String(text).slice(0, 8000) });
+    const url = new URL(RAW_ENDPOINT + '/openai/v1/embeddings');
     const req = https.request(url, { method: 'POST', headers: { 'api-key': KEY, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => {
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => {
@@ -248,51 +273,59 @@ function embedText(text) {
   });
 }
 
-// Embedding'lar (har biri 1536 ta kasr son) JSON massiv sifatida son
-// boshiga ~20 baytgacha sarflardi (matn ko'rinishida). Float32 ikkilik +
-// base64 sifatida saqlash hajmni ~4 baravar kamaytiradi (552 yozuvda
-// 16.5MB -> ~4MB atrofida).
-function encodeEmbedding(arr) {
-  return Buffer.from(Float32Array.from(arr).buffer).toString('base64');
-}
-function decodeEmbedding(b64) {
-  const buf = Buffer.from(b64, 'base64');
-  return new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4);
-}
-
-function loadEmbedIndex() {
-  let idx;
-  try { idx = JSON.parse(fs.readFileSync(EMBED_INDEX_FILE, 'utf8')); } catch (e) { return { entries: [] }; }
-  // Eski (JSON-massiv) formatdagi yozuvlarni yangi ixcham formatga
-  // bir martalik ko'chirish — qayta embedding hisoblash shart emas,
-  // faqat qayta kodlanadi.
-  let migrated = false;
-  for (const e of idx.entries) {
-    if (Array.isArray(e.embedding)) { e.embedding = encodeEmbedding(e.embedding); migrated = true; }
-  }
-  if (migrated) saveEmbedIndex(idx);
-  return idx;
-}
-function saveEmbedIndex(idx) {
-  try { fs.writeFileSync(EMBED_INDEX_FILE, JSON.stringify(idx)); } catch (e) {}
+function rerank(query, documents, limit) {
+  const endpoint = azureEnv('AZURE_RERANK_ENDPOINT');
+  const key = azureEnv('AZURE_RERANK_KEY');
+  if (!endpoint || !key || !documents.length) return Promise.resolve(null);
+  const payload = JSON.stringify({
+    model: azureEnv('AZURE_RERANK_DEPLOYMENT', 'Cohere-rerank-v4.0-pro'),
+    query: String(query).slice(0, 4000), documents,
+    top_n: Math.max(1, Math.min(limit, documents.length))
+  });
+  return new Promise((resolve, reject) => {
+    const req = https.request(new URL(endpoint), {
+      method: 'POST',
+      headers: { 'api-key': key, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+    }, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(parsed.error?.message || `rerank HTTP ${res.statusCode}`));
+          resolve(Array.isArray(parsed.results) ? parsed.results : null);
+        } catch (error) { reject(error); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('rerank timeout')); });
+    req.write(payload); req.end();
+  });
 }
 
 function blockId(file, block) {
   return require('crypto').createHash('sha1').update(file + '|' + block).digest('hex');
 }
 
-// Barcha Memory/*.md fayllarini ko'rib, hali indekslanmagan (yangi)
-// bloklarni topib, ular uchun embedding hisoblab, indeksga qo'shadi.
+// Obsidian Markdown is canonical. PostgreSQL stores only its derived vectors.
 async function updateEmbedIndex() {
   ensureDirs();
   if (!fs.existsSync(MEMORY_DIR)) return { status: 'ok', added: 0 };
-  const idx = loadEmbedIndex();
-  const known = new Set(idx.entries.map(e => e.id));
-  const files = fs.readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'));
+  const embeddingModel = azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2');
+  const pool = getPgPool();
+  const knownRows = await pool.query('SELECT id FROM jarvis.memory_embeddings WHERE embedding_model = $1', [embeddingModel]);
+  const known = new Set(knownRows.rows.map(row => row.id));
+  const upsert = `INSERT INTO jarvis.memory_embeddings
+    (id, source_file, memory_date, memory_time, topic, snippet, embedding, embedding_model, source_hash, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7::halfvec,$8,$9,now())
+    ON CONFLICT (id) DO UPDATE SET source_file=EXCLUDED.source_file, memory_date=EXCLUDED.memory_date,
+    memory_time=EXCLUDED.memory_time, topic=EXCLUDED.topic, snippet=EXCLUDED.snippet, embedding=EXCLUDED.embedding,
+    embedding_model=EXCLUDED.embedding_model, source_hash=EXCLUDED.source_hash, updated_at=now()`;
+  const files = (await fs.promises.readdir(MEMORY_DIR)).filter(f => f.endsWith('.md'));
   let added = 0;
   for (const file of files) {
     const date = file.replace('.md', '');
-    const content = fs.readFileSync(path.join(MEMORY_DIR, file), 'utf8');
+    const content = await fs.promises.readFile(path.join(MEMORY_DIR, file), 'utf8');
     const blocks = content.split(/^---$/m).map(b => b.trim()).filter(Boolean);
     for (const block of blocks) {
       const m = block.match(/^## (\d{2}:\d{2}) — (.+)$/m);
@@ -301,32 +334,35 @@ async function updateEmbedIndex() {
       if (known.has(id)) continue;
       try {
         const embedding = await embedText(block.slice(0, 2000));
-        idx.entries.push({ id, file, date, time: m[1], topic: m[2].trim(), snippet: block.slice(0, 500), embedding: encodeEmbedding(embedding) });
+        await pool.query(upsert, [id, file, date, m[1], m[2].trim(), block.slice(0, 500), vectorLiteral(embedding), embeddingModel, id]);
         known.add(id);
         added++;
       } catch (e) { /* bitta bloqda xato bo'lsa, qolganlarini davom ettiramiz */ }
     }
   }
-  if (added > 0) saveEmbedIndex(idx);
-  return { status: 'ok', added, total: idx.entries.length };
-}
-
-function cosineSim(a, b) {
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
-  return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+  const count = await pool.query('SELECT count(*)::int AS total FROM jarvis.memory_embeddings WHERE embedding_model = $1', [embeddingModel]);
+  return { status: 'ok', added, total: count.rows[0].total };
 }
 
 async function semanticSearch(query, limit = 5, options = {}) {
   if (!options.skipIndexUpdate) await updateEmbedIndex();
-  const idx = loadEmbedIndex();
-  if (!idx.entries.length) return { status: 'empty', results: [] };
   let qEmbedding;
   try { qEmbedding = await embedText(query); } catch (e) { return { status: 'error', message: e.message }; }
-  const scored = idx.entries.map(e => ({ ...e, score: cosineSim(qEmbedding, decodeEmbedding(e.embedding)) }));
-  scored.sort((a, b) => b.score - a.score);
-  const results = scored.slice(0, limit).map(({ embedding, ...rest }) => rest);
-  return { status: 'ok', query, results };
+  let results;
+  try {
+    const candidateLimit = Math.max(limit, 20);
+    const rows = await getPgPool().query(`SELECT id, source_file AS file, memory_date::text AS date,
+      memory_time::text AS time, topic, snippet, 1 - (embedding <=> $1::halfvec) AS score
+      FROM jarvis.memory_embeddings WHERE embedding_model = $2
+      ORDER BY embedding <=> $1::halfvec LIMIT $3`, [vectorLiteral(qEmbedding), azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2'), candidateLimit]);
+    results = rows.rows;
+  } catch (e) { return { status: 'error', message: e.message, results: [] }; }
+  if (!results.length) return { status: 'empty', results: [] };
+  try {
+    const ranked = await rerank(query, results.map(item => `${item.topic}\n${item.snippet}`), limit);
+    if (ranked) results = ranked.map(item => ({ ...results[item.index], rerankScore: item.relevance_score })).filter(Boolean);
+  } catch (_) {}
+  return { status: 'ok', query, results: results.slice(0, limit) };
 }
 
 // ── 3. Sessiya konteksti ─────────────────────────────────────────────
@@ -564,5 +600,6 @@ module.exports = {
   readSessionContext, writeSessionContext, appendSessionContext,
   readProfile, updateProfile,
   addPronunciationNote, getPronunciationNotes,
-  MEMORY_DIR, PROFILE_FILE, CONTEXT_FILE, PRONUNCIATION_FILE, MEMORY_OS_FILE
+  MEMORY_DIR, PROFILE_FILE, CONTEXT_FILE, PRONUNCIATION_FILE, MEMORY_OS_FILE,
+  postgresConfig, getPgPool
 };

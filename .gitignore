@@ -16,6 +16,10 @@ logs/
 # ─── Node / build ───
 node_modules/
 .venv-openwakeword/
+# Personal wake models are local biometric voice assets.
+/models/wake-word/
+# Local whisper.cpp GGML models are downloaded runtime assets.
+/models/whisper/
 __pycache__/
 *.py[cod]
 dist/
@@ -53,9 +57,10 @@ test_out.wav
 .mission-control.json
 .mission-control.jsonl
 reports/
-.memory-embeddings.json
 .jarvis-memory-os.json
+.jarvis-memory-os.json.*.tmp
 .jarvis-memory-os.json.lock/
+.memory-embeddings.json
 .google-tokens.json
 .media-playing-state.json
 .daily-report-state.json
@@ -63,3 +68,13 @@ reports/
 .fast-action-learn-state.json
 .urgent-check-state.json
 /plugin-skills/
+/browser/
+/media/
+
+# ─── Vendored God's Eye View local runtime ───
+/vendor/gods-eye-view/
+/vendor/gods-eye-view/node_modules/
+/vendor/gods-eye-view/.env
+/vendor/gods-eye-view/dist/
+/vendor/gods-eye-view/.gev-logs/
+/vendor/gods-eye-view/.gev-cache/

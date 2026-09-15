@@ -46,7 +46,8 @@ function yesterday() {
 
 function askAgent(message) {
   return new Promise((resolve) => {
-    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:jarvis-background', '--message', message, '--agent', 'main'], {
+    const englishOnly = '[Language policy: Produce all newly written prose only in natural English. Never answer in Uzbek.]\n\n';
+    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:jarvis-background', '--message', englishOnly + message, '--agent', 'main'], {
       cwd: PROJECT_DIR,
       env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY') },
       timeout: 120000

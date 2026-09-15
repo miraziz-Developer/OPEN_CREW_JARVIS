@@ -14,7 +14,7 @@
  *   Total cmd:   ~1.0 s       (silence-based, adaptive threshold)
  */
 
-const { spawn, execSync } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -30,13 +30,13 @@ const { VoiceFlightRecorder } = require('./core/voice-flight-recorder');
 const { MissionControl, stableId } = require('./core/mission-control');
 const { ProactivePolicy } = require('./core/proactive-policy');
 const { createSkillPlatform } = require('./skills/platform');
-const { loadCalibration, resolveCalibratedNumber } = require('./core/audio-calibration');
 const { ok, er, inf, wrn } = require('./core/log');
 const { makeWavHeader, pcmToWavBuffer, getEnergy, getPeakAmplitude } = require('./core/audio-utils');
 const { buildSoxCaptureArgs } = require('./core/mic-capture');
 const { RollingBuffer } = require('./core/rolling-buffer');
 const { HotwordDetector } = require('./core/hotword-detector');
 const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
+const { WhisperWakeDetector } = require('./core/whisper-wake-detector');
 const { findWakeRecognition, extractAddressedCommand } = require('./core/wake-word-policy');
 const { TurnJournal } = require('./core/turn-journal');
 const { ConversationContext } = require('./core/conversation-context');
@@ -44,11 +44,30 @@ const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
 const { detectWakeSoundMs, playWakeSound, playSystemSound, playTaskDoneSound } = require('./core/voice-sounds');
 const { createAgentBridge } = require('./core/agent-bridge');
+const { conversationIdleDelay } = require('./core/voice-turn-policy');
+const { createWakeAudioHandoff } = require('./core/wake-audio-handoff');
+const { VoiceTelemetry, VOICE_MILESTONES } = require('./utils/telemetry');
+
+function execFileAsync(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); return; }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function runNodeWithInput(script, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [script], { cwd: PROJECT_DIR, stdio: ['pipe', 'ignore', 'ignore'] });
+    child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve() : reject(new Error(`${script} exited with ${code}`)));
+    child.stdin.end(input);
+  });
+}
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
-const ENV_VALUES = Object.fromEntries(ENV.split(/\r?\n/).map(line => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(match => [match[1], match[2].trim()]));
-const AUDIO_CALIBRATION = loadCalibration(path.join(PROJECT_DIR, '.run', 'audio-calibration.json'));
 
 // Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
 // uchun UTC+8'da mahalliy soat 08:00gacha Obsidian yozuvlari "kechagi kun"
@@ -65,6 +84,20 @@ const AZURE_OPENAI_KEY = env('AZURE_OPENAI_KEY');
 const PICOVOICE_ACCESS_KEY = env('PICOVOICE_ACCESS_KEY');
 const OPENWAKEWORD_ENABLED = (env('OPENWAKEWORD_ENABLED') || 'true') !== 'false';
 const OPENWAKEWORD_PYTHON = path.join(PROJECT_DIR, '.venv-openwakeword', 'bin', 'python');
+const STARTUP_NOTICE_FILE = path.join(PROJECT_DIR, '.run', 'telegram-startup-notice.json');
+const STARTUP_NOTICE_COOLDOWN_MS = 30 * 60 * 1000;
+
+function shouldSendStartupNotice(now = Date.now()) {
+  try {
+    const previous = JSON.parse(fs.readFileSync(STARTUP_NOTICE_FILE, 'utf8'));
+    if (Number.isFinite(previous.sentAt) && now - previous.sentAt < STARTUP_NOTICE_COOLDOWN_MS) return false;
+  } catch (e) {}
+  try {
+    fs.mkdirSync(path.dirname(STARTUP_NOTICE_FILE), { recursive: true });
+    fs.writeFileSync(STARTUP_NOTICE_FILE, JSON.stringify({ sentAt: now }));
+  } catch (e) {}
+  return true;
+}
 
 // ── Config ──────────────────────────────────────────────
 const SAMPLE_RATE = 16000;
@@ -80,8 +113,15 @@ const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 
 const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
 const HOTWORD_COOLDOWN_MS = parseInt(env('HOTWORD_COOLDOWN_MS'), 10) || 3000;
-const REALTIME_INPUT_GAIN = Math.max(1, Math.min(8, resolveCalibratedNumber('REALTIME_INPUT_GAIN', ENV_VALUES, AUDIO_CALIBRATION, 3)));
 const OPENWAKEWORD_INPUT_GAIN = Math.max(1, Math.min(6, parseFloat(env('OPENWAKEWORD_INPUT_GAIN')) || 3));
+const WHISPER_WAKE_ENABLED = (env('WHISPER_WAKE_ENABLED') || 'false') === 'true';
+const WHISPER_WAKE_BINARY = env('WHISPER_WAKE_BINARY');
+const WHISPER_WAKE_MODEL = env('WHISPER_WAKE_MODEL');
+const WHISPER_WAKE_LANGUAGE = env('WHISPER_WAKE_LANGUAGE') || 'en';
+const WHISPER_WAKE_WINDOW_MS = parseInt(env('WHISPER_WAKE_WINDOW_MS'), 10) || 3000;
+const WHISPER_WAKE_INTERVAL_MS = parseInt(env('WHISPER_WAKE_INTERVAL_MS'), 10) || 1500;
+const WHISPER_WAKE_COOLDOWN_MS = parseInt(env('WHISPER_WAKE_COOLDOWN_MS'), 10) || 5000;
+const WHISPER_WAKE_TIMEOUT_MS = parseInt(env('WHISPER_WAKE_TIMEOUT_MS'), 10) || 15000;
 const WAKE_STT_SILENCE_MS = 420;
 const WAKE_STT_MAX_MS = 2200;
 const WAKE_STT_PREROLL_MS = 450;
@@ -89,8 +129,13 @@ const WAKE_STT_MIN_SPEECH_MS = 480;
 
 const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
+// Provider VAD `speech_stopped` hodisasini yo'qotsa idle timer qayta
+// qurollanmay qolishi mumkin. Bu mustaqil watchdog stuck realtime sessiyani
+// tiklaydi; oddiy 20s follow-up oynasidan ancha uzun, shuning uchun tabiiy
+// suhbatni uzmaydi.
+const REALTIME_STALE_SESSION_MS = Math.max(75000, parseInt(env('REALTIME_STALE_SESSION_MS'), 10) || 75000);
 const REALTIME_WAKE_PREROLL_MS = parseInt(env('REALTIME_WAKE_PREROLL_MS'), 10) || 1800;
-const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 20000;
+const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 60000;
 const ACTION_CONFIRMATION_TTL_MS = parseInt(env('ACTION_CONFIRMATION_TTL_MS'), 10) || 30000;
 const TURN_STALE_TIMEOUT_MS = Math.max(30000, parseInt(env('TURN_STALE_TIMEOUT_MS'), 10) || 600000);
 
@@ -157,7 +202,7 @@ function recordMissionResult(missionId, stepId, result, evidence = {}) {
   return missions.verifyStep(missionId, stepId, { ok: true, method: evidence.type || 'agent-result' });
 }
 function saveRealtimeTasksState() {
-  try { fs.writeFileSync(REALTIME_TASKS_STATE_FILE, JSON.stringify(_realtimeTasks.slice(-REALTIME_TASKS_MAX))); } catch (e) {}
+  fs.promises.writeFile(REALTIME_TASKS_STATE_FILE, JSON.stringify(_realtimeTasks.slice(-REALTIME_TASKS_MAX))).catch(() => {});
 }
 function rtTaskStarted(callId, description) {
   _realtimeTasks.push({ callId, description, status: 'in_progress', result: null, startedAt: Date.now(), completedAt: null });
@@ -183,20 +228,17 @@ let _gain = 2.0;  // START LOW — adapt, don't clip
 
 inf('JARVIS v5.1 BLAZING — 16 kHz stream | local wake-word | STT fallback');
 
-// ── UYG'ONISH OVOZI ── Trigger (Fn/hotword/qarsak) ishlagan zahoti, jonli
-// suhbat ulanishini kutmasdan, DARHOL eshitilgan tayyor ovoz ("Labbay,
-// eshityapman.") — foydalanuvchi trigger chindan ishlaganini, Jarvis
-// tinglashga tayyor ekanini bir zumda bilib olishi uchun (avval hech qanday
-// tovush chiqmasdan, foydalanuvchi eshityaptimi-yo'qmi bilmay qolardi).
-const WAKE_SOUND_PATH = path.join(PROJECT_DIR, 'assets', 'wake-sound.mp3');
+// ── UYG'ONISH OVOZI ── Trigger ishlagan zahoti Realtime ulanishini kutmasdan
+// qisqa original synthetic acknowledgement chime eshitiladi. Oldindan yozilgan
+// odam ovozi Cedar bilan tembr jihatdan mos kelmasdi va mikrofonni 0.94s band
+// qilardi; 180ms chime barcha og'zaki javoblarni canonical voice'da qoldiradi.
+const WAKE_SOUND_PATH = path.join(PROJECT_DIR, 'assets', 'wake-chime.wav');
 
 // Bu ovoz ijro etilayotgan vaqtda mikrofon jonli sessiyaga UMUMAN
 // yuborilmaydi (Jarvis o'z ovozini "foydalanuvchi gapirdi" deb qabul
 // qilmasligi uchun) — ya'ni bu butunlay O'LIK vaqt: foydalanuvchi
 // gapirsa ham eshitilmaydi. Shuning uchun ovoz imkon qadar QISQA
-// bo'lishi kerak (avval "Labbay, eshityapman." 2.18s edi — trigger'dan
-// keyin 2.4 soniya davomida gapirib bo'lmasdi, real o'lchov bo'yicha bu
-// butun oqimdagi eng katta kechikish edi; hozir "Labbay boss" 0.72s).
+// bo'lishi kerak (avvalgi spoken acknowledgement 0.84s edi; yangi chime 0.18s).
 // Davomiylik fayldan O'QIB olinadi — fayl almashtirilsa, qo'lda raqam
 // yangilash esdan chiqib, mos kelmay qolmasin.
 const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
@@ -368,6 +410,7 @@ function applyGain(pcm16, gain) {
 // ════════════════════════════════════════════
 let _sttPool = null;
 let _detector = null;
+let _whisperWakeDetector = null;
 let _clap = null;
 let _sox = null;
 let _soxStream = null;
@@ -410,6 +453,28 @@ async function mainLoop() {
   } else {
     wrn('openWakeWord o\'rnatilmagan — STT backup faol. scripts/setup-openwakeword.sh ni ishga tushiring');
   }
+  if (WHISPER_WAKE_ENABLED) {
+    _whisperWakeDetector = new WhisperWakeDetector({
+      binaryPath: WHISPER_WAKE_BINARY,
+      modelPath: WHISPER_WAKE_MODEL,
+      language: WHISPER_WAKE_LANGUAGE,
+      sampleRate: SAMPLE_RATE,
+      windowMs: WHISPER_WAKE_WINDOW_MS,
+      intervalMs: WHISPER_WAKE_INTERVAL_MS,
+      cooldownMs: WHISPER_WAKE_COOLDOWN_MS,
+      timeoutMs: WHISPER_WAKE_TIMEOUT_MS,
+      onReady: () => ok('whisper.cpp lokal wake transcript detector tayyor'),
+      onError: error => wrn('whisper.cpp wake detector: ' + error.message),
+      onWake: ({ transcript }) => {
+        if (state !== 'listening' || Date.now() - lastHotwordTime <= HOTWORD_COOLDOWN_MS) return;
+        triggerVoice('🔥 HOTWORD (whisper.cpp): "' + transcript.slice(0, 120) + '"', {
+          addressedWake: true,
+          playAck: true
+        });
+      }
+    });
+    _whisperWakeDetector.start();
+  }
 
   // Start sox for continuous raw PCM
   _sox = startMicProcess();
@@ -429,7 +494,9 @@ async function mainLoop() {
   let cmdBuffers = [];
   let lastVoiceTime = 0;
   let cmdStartTime = 0;
-  let pttActive = false; // Fn tugmasi bosib turilganda true — avto-sukunat kesish o'chadi
+  // Fn push-to-talk emas: u hands-free realtime suhbatini ochadigan trigger.
+  // Sessiya ochilgach server VAD tabiiy pauzalarda turnlarni o'zi ajratadi.
+  let fnPressed = false;
   let lastFnDownAt = 0;
   // Mac mikrofonining real tinch RMS'i sinovda 100–200 oralig'ida chiqdi.
   // 40 dan boshlash shovqinni nutq deb olib, uzluksiz STT segment yuborardi.
@@ -442,19 +509,25 @@ async function mainLoop() {
     const gain = Math.max(1, Math.min(5, ENERGY_TARGET / Math.max(measuredEnergy, 1)));
     const wavBuf = pcmToWavBuffer(applyGain(Buffer.from(pcm), gain));
     inf('STT wake segment (' + Math.round(pcm.length / (SAMPLE_RATE * 2) * 1000) + 'ms, energy=' + Math.round(measuredEnergy) + ')...');
-    // Local openWakeWord is primary. The cloud fallback is English-only and
-    // uses one request, avoiding the former parallel Uzbek decoder wait/cost.
-    Promise.all([_sttPool.recognize(wavBuf, 'en-US')]).then(results => {
+    // Local openWakeWord is primary. Two independent locale decoders run in
+    // parallel as a fallback: this catches both plain/accented "Jarvis" and
+    // the known cross-locale phonetic fingerprint without adding serial wait.
+    Promise.all([
+      _sttPool.recognize(wavBuf, 'en-US'),
+      _sttPool.recognize(wavBuf, 'uz-UZ')
+    ]).then(results => {
       const heard = results.filter(r => r && r.status === 'ok' && r.text);
       if (heard.length) {
         inf('STT wake heard: ' + heard.map(r => '"' + r.text + '"').join(' / '));
         const wake = findWakeRecognition(heard);
         if (wake && state === 'listening' && Date.now() - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
-          const addressed = extractAddressedCommand(wake.text);
           triggerVoice('🔥 HOTWORD (hybrid STT): "' + wake.text + '"', {
             addressedWake: true,
-            initialTranscript: addressed?.command || '',
-            playAck: !addressed?.command
+            // Wake fallback aynan chaqiruv segmentini taniydi. STT qo'shib
+            // yuborgan tasodifiy trailing so'zni buyruq deb bajarmaymiz;
+            // chime'dan keyingi alohida turn haqiqiy buyruq hisoblanadi.
+            initialTranscript: '',
+            playAck: true
           });
         }
       } else {
@@ -471,23 +544,28 @@ async function mainLoop() {
     }).finally(() => { sttBackupInFlight = false; });
   }
 
-  // English Realtime owns STT, VAD, conversation and speech. Astra remains
-  // available for complex reasoning and the full agent for executable tasks.
+  // English Realtime owns STT, VAD, conversation and speech. Grok Fast handles
+  // normal reasoning, GPT-5.6 Sol handles complex reasoning and executable tasks.
   function startRealtimeSession(reason, trigger = {}) {
     if (_activeRealtimeSession || state !== 'listening') return false;
 
     const session = new RealtimeSession({
-      // Only physical push-to-talk bypasses the media-background gate. A wake
-      // detector can itself false-trigger on a film, so addressed wake still
-      // requires the transcript to look like a command/question in media mode.
-      explicitUserTrigger: reason.includes('Fn'),
+      // Fn hands-free trigger butun ochiq sessiya davomida foydalanuvchi
+      // Jarvisga murojaat qilayotganini tasdiqlaydi. Shuning uchun media
+      // background gate follow-up gaplarni bloklamaydi. Wake-word trigger
+      // esa faqat birinchi mazmunli turn uchun bir martalik bypass oladi.
+      explicitUserSession: reason.includes('Fn'),
+      explicitUserTrigger: Boolean(trigger.addressedWake),
       addressedWakeTrigger: Boolean(trigger.addressedWake && !trigger.initialTranscript),
       initialTranscript: trigger.initialTranscript || '',
+      // English Realtime STT is the single source of truth for both wake-word
+      // and push-to-talk sessions. Do not add a second language decoder here:
+      // competing transcripts increase latency and can route the wrong action.
       conversationContext,
       actionConfirmationTtlMs: ACTION_CONFIRMATION_TTL_MS,
       // Default RealtimeSession'ning o'z ichki askExpert()'i `openclaw agent`
       // CLI'ni (run_task bilan bir xil primary model) spawn qiladi — haqiqiy
-      // kuchli `deep-think` (gpt-6-astra, to'g'ridan-to'g'ri Azure Responses
+      // kuchli `deep-think` (Grok Fast yoki GPT-5.6 Sol, to'g'ridan-to'g'ri Azure Responses
       // API, tool-loop'siz — shu sabab tezroq)
       // hech qachon ishlatilmasdi. Shu yerga ulash orqali `ask_expert` va
       // deterministik expert/grounding yo'li ham haqiqiy kuchli modelga boradi.
@@ -505,16 +583,19 @@ async function mainLoop() {
       fastActionRunner: (id) => skillPlatform.invoke('fast-actions', 'runFastAction', { id })
     });
     const flightRecorder = new VoiceFlightRecorder({ file: VOICE_FLIGHT_RECORDER_FILE });
-    flightRecorder.beginSession({ trigger: reason, mode: reason.includes('Fn') ? 'push-to-talk' : 'wake-word' });
-    runtime.beginConversation(reason.includes('Fn') ? 'push-to-talk' : 'wake-word');
+    const voiceTelemetry = new VoiceTelemetry({
+      file: path.join(PROJECT_DIR, '.run', 'voice-latency.jsonl'),
+      sessionId: flightRecorder.beginSession({ trigger: reason, mode: reason.includes('Fn') ? 'fn-hands-free' : 'wake-word' })
+    });
+    voiceTelemetry.event(VOICE_MILESTONES.WAKE_DETECTED, { trigger: reason.includes('Fn') ? 'fn' : 'wake-word' });
+    runtime.beginConversation(reason.includes('Fn') ? 'fn-hands-free' : 'wake-word');
     const connectStartedAt = Date.now();
     _activeRealtimeSession = session;
     state = 'realtime';
     lastHotwordTime = Date.now();
-    // Hotword ham, Fn ham foydalanuvchiga darhol bir xil qisqa ovozli tasdiq
-    // beradi: assets/wake-sound.mp3 ("Labbay, boss").
-    // Ack davomida mikrofon oqimini tashlaymiz: aks holda karnaydagi "Labbay,
-    // boss" preroll'ga kirib, server uni foydalanuvchi nutqi deb qabul qiladi.
+    // Hotword ham, Fn ham foydalanuvchiga darhol bir xil qisqa synthetic chime
+    // beradi. Ack davomida mikrofon oqimini tashlaymiz: aks holda karnaydagi
+    // chime preroll'ga kirib, server uni foydalanuvchi nutqi deb qabul qiladi.
     // Ack tugagach, ulanish hali tayyor bo'lmasa haqiqiy buyruq bounded
     // preroll'ga yig'iladi va ready bo'lgan zahoti yuboriladi.
     // WAKE_SOUND_MS ichida audio-driver uchun 100ms guard allaqachon bor.
@@ -524,31 +605,66 @@ async function mainLoop() {
     const wakeMuteUntil = shouldPlayAck ? Date.now() + WAKE_SOUND_MS : 0;
     if (shouldPlayAck) playWakeSound(WAKE_SOUND_PATH);
     let idleTimer = null;
+    let staleSessionTimer = null;
+    let lastRealtimeActivityAt = Date.now();
     let finished = false;
     let sessionWasReady = false;
     let lastUserTranscript = '';
     let currentTurnId = '';
     const pendingTurnIds = [];
     let activeToolCount = 0;
+    let awaitingFollowup = false;
+    // Provider VAD session.updated/ready'dan oldin speech_started yuborishi
+    // mumkin. Bu holatda ready handler idle timer o'rnatib, hali davom
+    // etayotgan gapni REALTIME_IDLE_MS o'tgach noto'g'ri yopmasligi kerak.
+    let userSpeaking = false;
     const toolTurns = new Map();
-    let wakeAudioPending = true;
-    const wakePreroll = trigger.seedAudio?.length
-      ? [applyGain(Buffer.from(trigger.seedAudio), REALTIME_INPUT_GAIN)] : [];
-    let wakePrerollBytes = wakePreroll.reduce((total, chunk) => total + chunk.length, 0);
     let speechStoppedAt = 0;
     let transcriptAcceptedAt = 0;
     let firstAudioObserved = false;
     const maxWakePrerollBytes = Math.ceil(SAMPLE_RATE * 2 * REALTIME_WAKE_PREROLL_MS / 1000);
+    const wakeAudioHandoff = createWakeAudioHandoff({
+      muteUntil: wakeMuteUntil,
+      maxBytes: maxWakePrerollBytes,
+      initialChunks: trigger.seedAudio?.length
+        ? [Buffer.from(trigger.seedAudio)] : []
+    });
+
+    // The microphone loop calls these hooks for every live chunk. Audio emitted
+    // while the acknowledgement chime is playing must be discarded, not sent
+    // to provider VAD. Genuine post-chime speech is retained in a bounded
+    // preroll until the websocket is ready, then normal streaming takes over.
+    session._jarvisWakeMuteUntil = wakeMuteUntil;
+    session._jarvisQueueWakeAudio = chunk => wakeAudioHandoff.queue(chunk);
 
     const armIdleTimer = () => {
       clearTimeout(idleTimer);
+      // Faol VAD turni uchun jimlik timeri bo'lmaydi. speech_stopped
+      // transcription oynasini yakunlagach ushbu timer yana qurollanadi.
+      if (userSpeaking) return;
+      const delay = conversationIdleDelay({
+        now: Date.now(),
+        idleMs: REALTIME_IDLE_MS,
+        followupMs: CONVERSATION_FOLLOWUP_MS,
+        playbackUntil: session._playbackUntil,
+        awaitingFollowup
+      });
       idleTimer = setTimeout(() => {
         // Sessiyani yopish running run_task jarayonlarini cancel qiladi.
         // Natija kelguncha timeout'ni uzaytirib turamiz.
         if (activeToolCount > 0) return armIdleTimer();
         finishRealtimeSession('jimlik timeout');
-      }, REALTIME_IDLE_MS);
+      }, delay);
     };
+    const markRealtimeActivity = () => { lastRealtimeActivityAt = Date.now(); };
+    staleSessionTimer = setInterval(() => {
+      if (finished || activeToolCount > 0) return;
+      const inactiveMs = Date.now() - lastRealtimeActivityAt;
+      if (inactiveMs < REALTIME_STALE_SESSION_MS) return;
+      wrn('Realtime sessiya faolliksiz qolgan (' + Math.round(inactiveMs / 1000) + 's) — tiklanish uchun yopilyapti');
+      finishRealtimeSession('faolliksiz realtime watchdog');
+    }, 5000);
+    staleSessionTimer.unref?.();
     const finishRealtimeSession = (why) => {
       if (finished) return;
       finished = true;
@@ -561,6 +677,7 @@ async function mainLoop() {
       }
       flightRecorder.endSession(why);
       clearTimeout(idleTimer);
+      clearInterval(staleSessionTimer);
       if (_activeRealtimeSession === session) _activeRealtimeSession = null;
       try { session.close(); } catch (e) {}
       state = 'listening';
@@ -571,6 +688,7 @@ async function mainLoop() {
     };
 
     session.on('ready', () => {
+      markRealtimeActivity();
       sessionWasReady = true;
       _realtimeFailureCount = 0;
       _realtimeDisabledUntil = 0;
@@ -580,27 +698,35 @@ async function mainLoop() {
       ok('Realtime ovoz sessiyasi ulandi');
       // Wake chime/handshake vaqtida aytilgan "Hey Jarvis, ..." buyrug'ini
       // yo'qotmasdan sessiya tayyor bo'lgach uzatamiz.
-      if (wakePreroll.length) {
-        for (const chunk of wakePreroll) session.feedAudio(chunk);
-        wakePreroll.length = 0;
-        wakePrerollBytes = 0;
-      }
-      wakeAudioPending = false;
+      for (const chunk of wakeAudioHandoff.drain()) session.feedAudio(chunk);
+      wakeAudioHandoff.markReady();
       armIdleTimer();
     });
-    session.on('audio_activity', armIdleTimer);
+    session.on('provider', ({ id }) => {
+      markRealtimeActivity();
+      runtime.heartbeat('realtime-api', { status: 'ready', provider: id });
+      inf('Voice provider: ' + id);
+    });
+    session.on('audio_activity', () => { markRealtimeActivity(); armIdleTimer(); });
     session.on('user_speaking', () => {
-      flightRecorder.beginTurn({ source: 'realtime', trigger: reason });
+      userSpeaking = true;
+      markRealtimeActivity();
+      awaitingFollowup = false;
+      const turnId = flightRecorder.beginTurn({ source: 'realtime', trigger: reason });
+      voiceTelemetry.event(VOICE_MILESTONES.WAKE_DETECTED, { trigger: 'provider-vad' }, { turnId });
       runtime.setConversationMode('user-speaking');
       clearTimeout(idleTimer);
     });
     session.on('user_speech_stopped', () => {
+      userSpeaking = false;
+      markRealtimeActivity();
       speechStoppedAt = Date.now();
       transcriptAcceptedAt = 0;
       firstAudioObserved = false;
       armIdleTimer();
     });
     session.on('turn_suppressed', (reason, text) => {
+      markRealtimeActivity();
       flightRecorder.textEvent('turn.suppressed', text, { reason });
       inf('🔇 Realtime turn bloklandi (' + reason + '): ' + String(text || '').slice(0, 100));
       runtime.setConversationMode('listening');
@@ -608,6 +734,7 @@ async function mainLoop() {
       armIdleTimer();
     });
     session.on('user_transcript', (text) => {
+      markRealtimeActivity();
       const clean = String(text || '').trim();
       if (!clean) return;
       const accepted = runtime.acceptCommand(clean, { source: 'realtime-transcript' });
@@ -622,12 +749,14 @@ async function mainLoop() {
       transcriptAcceptedAt = Date.now();
       if (speechStoppedAt) runtime.observeLatency('speech-to-transcript', transcriptAcceptedAt - speechStoppedAt);
       flightRecorder.textEvent('command.accepted', clean, { source: 'realtime-transcript' });
+      voiceTelemetry.event(VOICE_MILESTONES.STT_FINISHED, { source: 'realtime-transcript' }, { turnId: flightRecorder.activeTurnId });
       runtime.setConversationMode('thinking');
       inf('🎙 Realtime: ' + clean);
       sendTelegram('🎙 ' + clean);
       armIdleTimer();
     });
     session.on('assistant_transcript', (text, response = {}) => {
+      markRealtimeActivity();
       const clean = String(text || '').trim();
       if (!clean) return;
       const accepted = runtime.acceptResponse(clean);
@@ -648,13 +777,16 @@ async function mainLoop() {
         } else turnJournal.append(assistantTurnId, 'assistant.completed', { text: clean });
       }
       lastUserTranscript = '';
+      awaitingFollowup = true;
       armIdleTimer();
     });
     session.on('turn_done', ({ status, interrupted } = {}) => {
+      markRealtimeActivity();
       // Cancelled/incomplete response.done barge-in ochgan keyingi speech
       // turniga kechikib kelishi mumkin. Faqat provider tasdiqlagan successful
       // response aktiv turnni completed qilsin.
       if (status === 'completed' && !interrupted) flightRecorder.event('turn.completed');
+      if (status === 'completed' && !interrupted) awaitingFollowup = true;
       armIdleTimer();
     });
     session.on('response_status', ({ status, reason, hasAssistantTranscript }) => {
@@ -666,6 +798,12 @@ async function mainLoop() {
     });
     session.on('telemetry', (type, data) => {
       flightRecorder.event(type, data);
+      const milestone = {
+        'provider.request.sent': VOICE_MILESTONES.PROVIDER_REQUEST_SENT,
+        'assistant.audio.first': VOICE_MILESTONES.FIRST_AUDIO_BYTE_RECEIVED,
+        'playback.started': VOICE_MILESTONES.PLAYBACK_STARTED
+      }[type];
+      if (milestone) voiceTelemetry.event(milestone, { provider: session.provider?.id }, { turnId: flightRecorder.activeTurnId });
       if (type === 'stt.authoritative.completed' && Number.isFinite(data?.durationMs)) {
         runtime.observeLatency('authoritative-stt', data.durationMs);
       }
@@ -691,6 +829,7 @@ async function mainLoop() {
       if (speechStoppedAt) runtime.observeLatency('first-audio', now - speechStoppedAt);
     });
     session.on('tool_call', (description, callId) => {
+      markRealtimeActivity();
       activeToolCount += 1;
       flightRecorder.event('tool.started', { description, callId });
       runtime.requestTask(description, { id: callId, source: 'realtime' });
@@ -707,6 +846,7 @@ async function mainLoop() {
       armIdleTimer();
     });
     session.on('tool_result', (result, callId) => {
+      markRealtimeActivity();
       activeToolCount = Math.max(0, activeToolCount - 1);
       flightRecorder.event('tool.completed', { result, callId });
       try { runtime.completeTask(callId, result); } catch (e) { wrn('Task ledger: ' + e.message); }
@@ -762,7 +902,7 @@ async function mainLoop() {
         });
         if (sessionWasReady) {
           playSystemSound('Basso');
-          sendTelegram('⚠️ Ovozli suhbat kutilmaganda uzildi — keyingi chaqiruvda qayta ulanadi.');
+          sendTelegram('⚠️ The voice session disconnected unexpectedly. It will reconnect on the next invocation.');
         }
       }
       finishRealtimeSession('ulanish yopildi');
@@ -771,30 +911,13 @@ async function mainLoop() {
     inf(reason + ' — realtime suhbat ulanmoqda');
     session.connect();
     armIdleTimer();
-
-    // Marker saqlanadi, lekin shu oraliqdagi audio endi tashlanmaydi — bounded
-    // preroll'ga yig'iladi va ready eventida ketma-ket yuboriladi.
-    session._jarvisWakeMuteUntil = wakeMuteUntil;
-    session._jarvisQueueWakeAudio = (chunk) => {
-      if (!wakeAudioPending || !chunk?.length) return false;
-      // Ack faqat wake-only/Fn yo'lida ijro etiladi. Inline addressed speech
-      // uchun mute yo'q: triggerdan keyingi har bir chunk bounded preroll'ga
-      // tushadi va ulanish tayyor bo'lishi bilan ketma-ket forward qilinadi.
-      if (Date.now() < wakeMuteUntil) return true;
-      wakePreroll.push(Buffer.from(chunk));
-      wakePrerollBytes += chunk.length;
-      while (wakePrerollBytes > maxWakePrerollBytes && wakePreroll.length > 1) {
-        wakePrerollBytes -= wakePreroll.shift().length;
-      }
-      return true;
-    };
     return true;
   }
 
   // Barcha triggerlar bitta state transition'dan o'tadi. Rekonstruksiya
   // qilingan snapshotda triggerVoice chaqiriqlari qolib, funksiyaning o'zi
   // yo'qolgan edi — Porcupine/qarsak topilganda ReferenceError bo'lib daemon
-  // qular edi. Fn DOWN/UP ham pause-sentinel brokeridan shu yerga keladi.
+  // qular edi. Fn DOWN hands-free suhbatni shu yer orqali ochadi.
   function triggerVoice(reason, trigger = {}) {
     if (state !== 'listening') return false;
     // Lokal model va STT fallback parallel tinglaydi. Ulardan biri trigger
@@ -831,7 +954,7 @@ async function mainLoop() {
     fnClient = net.createConnection(fnSocketPath);
     let fnBuf = '';
     fnClient.on('connect', () => {
-      pttActive = false;
+      fnPressed = false;
       inf('Fn-key broker ulandi');
     });
     fnClient.on('data', (data) => {
@@ -842,23 +965,23 @@ async function mainLoop() {
         const event = raw.trim();
         if (event === 'DOWN') {
           // flagsChanged dublikat hodisasi ikkinchi realtime sessiya ochmasin.
-          if (pttActive || Date.now() - lastFnDownAt < 250) continue;
-          pttActive = true;
+          if (fnPressed || Date.now() - lastFnDownAt < 250) continue;
+          fnPressed = true;
           lastFnDownAt = Date.now();
-          triggerVoice('⌨️ Fn push-to-talk');
+          triggerVoice('⌨️ Fn hands-free conversation');
         } else if (event === 'UP') {
-          pttActive = false;
-          // Tugma qo'yib yuborilganda yozuv tabiiy silence chegarasidan tez
-          // yakunlansin; data loop STT'ni xavfsiz ravishda boshlaydi.
-          lastVoiceTime = Date.now() - SILENCE_MS - 1;
+          fnPressed = false;
+          // Fn qo'yib yuborilishi suhbat turnini yopmaydi. Mikrofon realtime
+          // sessiya davomida oqishda qoladi; provider VAD tabiiy pauzada
+          // speech_stopped/transkript chiqaradi. Keyingi gaplar uchun Fn kerak emas.
         } else if (event === 'RESET') {
-          pttActive = false;
+          fnPressed = false;
           lastFnDownAt = 0;
         }
       }
     });
     const reconnect = () => {
-      pttActive = false;
+      fnPressed = false;
       if (fnRetry) return;
       fnRetry = setTimeout(() => { fnRetry = null; connectFnBroker(); }, 3000);
     };
@@ -875,7 +998,7 @@ async function mainLoop() {
     runtime.heartbeat('microphone', { status: _sox && !_sox.killed ? 'streaming' : 'stopped' });
   }, 5000);
   runtimeHeartbeat.unref();
-  sendTelegram('🚀 Jarvis v5.0 BLAZING faol');
+  if (shouldSendStartupNotice()) sendTelegram('🚀 JARVIS v5.0 is online.');
 
   return new Promise((resolve, reject) => {
     _soxStream.on('data', (rawChunk) => {
@@ -890,7 +1013,11 @@ async function mainLoop() {
         rolling.push(stepData);
         if (state === 'command_record') cmdBuffers.push(stepData);
         if (state === 'realtime' && _activeRealtimeSession) {
-          const realtimeChunk = applyGain(Buffer.from(stepData), REALTIME_INPUT_GAIN);
+          // RealtimeSession ichidagi DuplexVoiceEngine calibration thresholdlarini
+          // xom mikrofon RMS birliklarida qo'llaydi va yuboriladigan nutqni o'zi
+          // target RMS'ga kuchaytiradi. Bu yerda oldindan gain berish xona fonini
+          // ham "speech" qilib, server VAD'ni speech_started holatida qoldirardi.
+          const realtimeChunk = Buffer.from(stepData);
           const queued = typeof _activeRealtimeSession._jarvisQueueWakeAudio === 'function'
             && _activeRealtimeSession._jarvisQueueWakeAudio(realtimeChunk);
           if (!queued && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
@@ -923,15 +1050,23 @@ async function mainLoop() {
 
           // Lokal detektorga faqat yangi PCM step yuboriladi; rolling overlap
           // yuborilsa bir audio qayta-qayta inference qilinardi.
-          let detected = false;
+          let detected = null;
           if (_detector) {
             detected = _detector.processChunk(applyGain(Buffer.from(stepData), OPENWAKEWORD_INPUT_GAIN));
           }
 
+          // Whisper is an opt-in local transcript fallback, never a parallel
+          // command STT. Feed it only while idle/listening; once a realtime
+          // conversation begins Azure Realtime owns STT, VAD and barge-in.
+          _whisperWakeDetector?.feedChunk(stepData);
+
           if (detected && (now - lastHotwordTime > HOTWORD_COOLDOWN_MS)) {
-              triggerVoice('🔥 HOTWORD: "Hey Jarvis" (openWakeWord)', {
+              const wakeModel = detected.model || 'hey_jarvis';
+              triggerVoice('🔥 HOTWORD: "' + wakeModel.replace(/_/g, ' ') + '" (openWakeWord)', {
                 addressedWake: true,
-                playAck: false,
+                // Foydalanuvchi wake qabul qilinganini ko'rmasdan bilishi kerak.
+                // 180ms chime tugagach bounded preroll buyruqni saqlab qoladi.
+                playAck: true,
                 seedAudio: rolling.sliceLast(REALTIME_WAKE_PREROLL_MS)
               });
             return;
@@ -980,7 +1115,7 @@ async function mainLoop() {
         }
 
         const silence = now - lastVoiceTime;
-        if ((!pttActive && elapsed > 800 && silence > SILENCE_MS) || elapsed > CMD_MAX * 1000) {
+        if ((!fnPressed && elapsed > 800 && silence > SILENCE_MS) || elapsed > CMD_MAX * 1000) {
           state = 'processing';
           const totalPCM = Buffer.concat(cmdBuffers);
           const wavBuf = pcmToWavBuffer(totalPCM);
@@ -1030,28 +1165,28 @@ async function processCommand(command) {
   const commandStartedAt = Date.now();
   inf('>>> ' + command); sendTelegram('🎙 ' + command);
   if (!fs.existsSync(path.join(PROJECT_DIR, '.jarvis-onboarded'))) {
-    fs.writeFileSync(path.join(PROJECT_DIR, '.jarvis-onboarded'), 'true'); writeMemory('Onboard', 'start');
-    const ap = await ttsToFile('Hello. I am Jarvis.'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
+    await fs.promises.writeFile(path.join(PROJECT_DIR, '.jarvis-onboarded'), 'true'); writeMemory('Onboard', 'start');
+    const ap = await ttsToFile('Hello. I am Jarvis.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
   }
 
   // Quick commands
   if (/eslab qol|esda tut/i.test(command) && command.length > 15) {
     const cl = command.replace(/eslab qol|esda tut/gi, '').trim();
-    writeMemory('Voice', cl, ['voice']); sendTelegram('✅ Eslab qoldim');
-    const ap = await ttsToFile('Eslab qoldim'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
-    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Eslab qoldim' });
+    writeMemory('Voice', cl, ['voice']); sendTelegram('✅ Remembered.');
+    const ap = await ttsToFile('Remembered.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Remembered.' });
     return;
   }
   if (/kuzatishni (boshla|yo?qish)/i.test(command)) {
-    try { execSync('echo \'{"action":"start"}\' | node skills/screen-monitor/index.js', { cwd: PROJECT_DIR }); } catch(e){}
-    const ap = await ttsToFile('Kuzatuv yoqildi'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
-    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Kuzatuv yoqildi' });
+    await runNodeWithInput('skills/screen-monitor/index.js', '{"action":"start"}\n').catch(() => {});
+    const ap = await ttsToFile('Monitoring enabled.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Monitoring enabled.' });
     return;
   }
   if (/kuzatishni (to.xtat|o.chir)/i.test(command)) {
-    try { execSync('echo \'{"action":"stop"}\' | node skills/screen-monitor/index.js', { cwd: PROJECT_DIR }); } catch(e){}
-    const ap = await ttsToFile('Kuzatuv o.chirildi'); if (ap) try { execSync('afplay "' + ap + '"'); } catch(e){}
-    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Kuzatuv o\'chirildi' });
+    await runNodeWithInput('skills/screen-monitor/index.js', '{"action":"stop"}\n').catch(() => {});
+    const ap = await ttsToFile('Monitoring disabled.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Monitoring disabled.' });
     return;
   }
 
@@ -1075,19 +1210,19 @@ async function processCommand(command) {
     turnJournal.append(batchTurnId, 'assistant.completed', { text: reply.substring(0, 4000) });
     const audio = await ttsToFile(reply.substring(0, 400));
     if (audio) {
-      try { execSync('afplay "' + audio + '"'); ok('🔊 Ovoz'); } catch(e){}
+      await execFileAsync('afplay', [audio]).then(() => ok('🔊 Ovoz')).catch(() => {});
       const ogg = audio.replace(/\.[^.\/]+$/, '') + '.ogg';
-      try { execSync('ffmpeg -y -i "' + audio + '" -c:a libopus "' + ogg + '" 2>/dev/null'); sendTelegramVoice(ogg); } catch(e){}
+      await execFileAsync('ffmpeg', ['-y', '-i', audio, '-c:a', 'libopus', ogg]).then(() => sendTelegramVoice(ogg)).catch(() => {});
       [ogg, audio].forEach(p => { try { fs.unlinkSync(p); } catch(e){} });
     }
   } else {
-    const fallback = 'Hozir javobni tayyorlay olmadim. Iltimos, yana bir marta ayting.';
+    const fallback = 'I could not prepare a response. Please say that again.';
     wrn('Agent bo\'sh javob qaytardi');
     turnJournal.append(batchTurnId, 'turn.failed', { reason: 'agent-empty-response' });
     sendTelegram('⚠️ ' + fallback);
     const audio = await ttsToFile(fallback);
     if (audio) {
-      try { execSync('afplay "' + audio + '"', { stdio: 'ignore' }); } catch(e) {}
+      await execFileAsync('afplay', [audio], { stdio: 'ignore' }).catch(() => {});
       try { fs.unlinkSync(audio); } catch(e) {}
     }
   }
@@ -1101,6 +1236,7 @@ function cleanup() {
   if (_activeRealtimeSession) { try { _activeRealtimeSession.close(); } catch(e){} }
   if (_sox) { try { _sox.kill(); } catch(e){} }
   if (_detector) { try { _detector.release(); } catch(e){} }
+  if (_whisperWakeDetector) { try { _whisperWakeDetector.release(); } catch(e){} }
   if (_sttPool) { _sttPool.killAll(); }
   try { runtime.close(); } catch(e) {}
   process.exit(0);

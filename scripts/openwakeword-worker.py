@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""stdin PCM16/16kHz -> stdout READY or DETECT score."""
+"""stdin PCM16/16kHz -> stdout READY or DETECT <model> <score>."""
 import os
+from pathlib import Path
 import signal
 import sys
 import threading
@@ -24,9 +25,28 @@ FRAME_BYTES = 1280 * 2
 THRESHOLD = float(os.environ.get("OPENWAKEWORD_THRESHOLD", "0.18"))
 STRONG_THRESHOLD = float(os.environ.get("OPENWAKEWORD_STRONG_THRESHOLD", "0.55"))
 CONFIRM_THRESHOLD = float(os.environ.get("OPENWAKEWORD_CONFIRM_THRESHOLD", "0.06"))
-CONFIRM_WINDOW_FRAMES = int(os.environ.get("OPENWAKEWORD_CONFIRM_WINDOW_FRAMES", "4"))
+CONFIRM_COUNT = max(2, int(os.environ.get("OPENWAKEWORD_CONFIRM_COUNT", "2")))
+CONFIRM_WINDOW_FRAMES = max(CONFIRM_COUNT, int(os.environ.get("OPENWAKEWORD_CONFIRM_WINDOW_FRAMES", "4")))
 DIAGNOSTIC_FLOOR = float(os.environ.get("OPENWAKEWORD_DIAGNOSTIC_FLOOR", "0.03"))
 OWNER_PID = int(os.environ.get("JARVIS_OWNER_PID", "0") or "0")
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+def configured_models():
+    """Resolve built-in names and optional project-relative personal models."""
+    requested = [item.strip() for item in os.environ.get("OPENWAKEWORD_MODELS", "hey_jarvis").split(",") if item.strip()]
+    loaded = []
+    for item in requested or ["hey_jarvis"]:
+        if item in {"alexa", "hey_mycroft", "hey_jarvis", "hey_rhasspy", "timer", "weather"}:
+            loaded.append(item)
+            continue
+        model_path = Path(item).expanduser()
+        if not model_path.is_absolute():
+            model_path = PROJECT_DIR / model_path
+        if model_path.is_file():
+            loaded.append(str(model_path.resolve()))
+        else:
+            print(f"ERROR configured wake model not found: {model_path}", flush=True)
+    return loaded or ["hey_jarvis"]
 
 def owner_is_alive():
     if OWNER_PID <= 1:
@@ -48,10 +68,12 @@ def watch_owner():
 def main():
     if OWNER_PID > 1:
         threading.Thread(target=watch_owner, name="jarvis-owner-watchdog", daemon=True).start()
-    model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+    model = Model(wakeword_models=configured_models(), inference_framework="onnx")
+    model_names = list(model.models.keys())
+    print("MODELS " + ",".join(model_names), flush=True)
     print("READY", flush=True)
     pending = bytearray()
-    recent_scores = deque(maxlen=max(2, CONFIRM_WINDOW_FRAMES))
+    recent_scores = {name: deque(maxlen=max(2, CONFIRM_WINDOW_FRAMES)) for name in model_names}
     frames_since_diagnostic = 0
     diagnostic_peak = 0.0
     while True:
@@ -62,18 +84,26 @@ def main():
         while len(pending) >= FRAME_BYTES:
             frame = bytes(pending[:FRAME_BYTES])
             del pending[:FRAME_BYTES]
-            score = float(model.predict(np.frombuffer(frame, dtype="<i2")).get("hey_jarvis", 0))
-            recent_scores.append(score)
-            diagnostic_peak = max(diagnostic_peak, score)
+            predictions = model.predict(np.frombuffer(frame, dtype="<i2"))
+            detected = None
+            frame_peak = 0.0
+            for name in model_names:
+                score = float(predictions.get(name, 0))
+                recent_scores[name].append(score)
+                frame_peak = max(frame_peak, score)
+                ordered_scores = sorted(recent_scores[name], reverse=True)
+                confirmed = (len(ordered_scores) >= CONFIRM_COUNT
+                             and ordered_scores[0] >= THRESHOLD
+                             and ordered_scores[CONFIRM_COUNT - 1] >= CONFIRM_THRESHOLD)
+                if score >= STRONG_THRESHOLD or confirmed:
+                    if detected is None or score > detected[1]:
+                        detected = (name, score)
+            diagnostic_peak = max(diagnostic_peak, frame_peak)
             frames_since_diagnostic += 1
-
-            ordered_scores = sorted(recent_scores, reverse=True)
-            confirmed = (len(ordered_scores) >= 2
-                         and ordered_scores[0] >= THRESHOLD
-                         and ordered_scores[1] >= CONFIRM_THRESHOLD)
-            if score >= STRONG_THRESHOLD or confirmed:
-                print(f"DETECT {score:.4f}", flush=True)
-                recent_scores.clear()
+            if detected:
+                print(f"DETECT {detected[0]} {detected[1]:.4f}", flush=True)
+                for scores in recent_scores.values():
+                    scores.clear()
                 diagnostic_peak = 0.0
                 frames_since_diagnostic = 0
             elif frames_since_diagnostic >= 12:

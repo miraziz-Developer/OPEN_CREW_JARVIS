@@ -33,8 +33,10 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORKSPACE="${HOME}/.openclaw/workspace"
 EXCLUDE_SKILLS=(wakeword)
+CORE_FILES=(paths.js macos-context.js macos-accessibility.js world-model.js action-safety-policy.js)
 
 mkdir -p "${WORKSPACE}/skills"
+mkdir -p "${WORKSPACE}/core"
 changed=0
 
 is_excluded() {
@@ -53,6 +55,19 @@ for SRC in "${PROJECT_DIR}"/skills/*/; do
     rm -rf "${DST}"
     cp -R "${SRC}" "${DST}"
     echo "[sync-workspace] yangilandi: ${s}"
+    changed=$((changed + 1))
+  fi
+done
+
+# Workspace'dagi skilllar ../../core orqali shu kichik, secretsiz runtime
+# modullarini require qiladi. .env ko'chirilmaydi; state/config uchun agentga
+# JARVIS_PROJECT_DIR beriladi.
+for name in "${CORE_FILES[@]}"; do
+  SRC="${PROJECT_DIR}/core/${name}"
+  DST="${WORKSPACE}/core/${name}"
+  if ! diff -q "${SRC}" "${DST}" >/dev/null 2>&1; then
+    cp "${SRC}" "${DST}"
+    echo "[sync-workspace] yangilandi: core/${name}"
     changed=$((changed + 1))
   fi
 done

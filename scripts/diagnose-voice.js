@@ -39,6 +39,53 @@ function checkBinary(name) {
   add(`binary:${name}`, r.status === 0, r.status === 0 ? r.stdout.trim() : 'topilmadi');
 }
 
+function checkWakeModels(env) {
+  const builtins = new Set(['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', 'weather']);
+  const configured = String(env.OPENWAKEWORD_MODELS || 'hey_jarvis').split(',').map(item => item.trim()).filter(Boolean);
+  const missing = configured.filter(item => {
+    if (builtins.has(item)) return false;
+    const modelPath = path.isAbsolute(item) ? item : path.resolve(ROOT, item);
+    return !fs.existsSync(modelPath);
+  });
+  add('wakeword:models', missing.length === 0,
+    missing.length ? `model topilmadi: ${missing.join(', ')}` : `tayyor: ${configured.join(', ')}`,
+    missing.length ? 'warn' : 'ok');
+}
+
+function envEnabled(value, defaultValue = false) {
+  if (value === undefined || value === '') return defaultValue;
+  return !/^(?:false|0|no|off)$/i.test(value);
+}
+
+function checkWhisperWake(env) {
+  const enabled = envEnabled(env.WHISPER_WAKE_ENABLED);
+  if (!enabled) {
+    add('wakeword:whisper-fallback', true, 'config orqali o‘chirilgan');
+    return;
+  }
+
+  const binary = env.WHISPER_WAKE_BINARY;
+  const model = env.WHISPER_WAKE_MODEL;
+  const binaryReady = Boolean(binary && path.isAbsolute(binary) && fs.existsSync(binary));
+  const modelReady = Boolean(model && path.isAbsolute(model) && fs.existsSync(model));
+  add('wakeword:whisper-binary', binaryReady,
+    binaryReady ? binary : 'absolute WHISPER_WAKE_BINARY topilmadi');
+  add('wakeword:whisper-model', modelReady,
+    modelReady ? `${model} (${Math.round(fs.statSync(model).size / 1024 / 1024)} MiB)` : 'absolute WHISPER_WAKE_MODEL topilmadi');
+
+  let flagsReady = false;
+  if (binaryReady) {
+    const result = spawnSync(binary, ['--help'], { encoding: 'utf8', timeout: 5000 });
+    const help = `${result.stdout || ''}\n${result.stderr || ''}`;
+    // Homebrew's Apple Metal build can return a non-zero code after it has
+    // already printed valid help while initializing a backend. The supported
+    // options themselves are the compatibility contract used by the detector.
+    flagsReady = !result.error && ['-m', '-f', '-l', '-nt', '-otxt', '-of'].every(flag => help.includes(flag));
+  }
+  add('wakeword:whisper-cli-flags', flagsReady,
+    flagsReady ? 'kerakli -m -f -l -nt -otxt -of flaglari mavjud' : 'whisper-cli flaglari mos emas yoki --help ishlamadi');
+}
+
 function checkMic(env) {
   const out = path.join('/tmp', `jarvis-diagnostic-${process.pid}.wav`);
   const filterOptions = {
@@ -105,6 +152,10 @@ function main() {
   ['node', 'sox', 'afplay'].forEach(checkBinary);
   add('config:azure-speech', Boolean(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION), 'key va region ' + (env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION ? 'mavjud' : 'yetishmaydi'));
   add('config:azure-openai', Boolean(env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY), 'realtime/agent key ' + (env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY ? 'mavjud' : 'yetishmaydi'));
+  const voiceLiveReady = Boolean(env.AZURE_VOICELIVE_ENDPOINT && env.AZURE_VOICELIVE_KEY);
+  const realtimeReady = Boolean(env.AZURE_REALTIME_ENDPOINT && env.AZURE_REALTIME_KEY);
+  add('config:voice-live', voiceLiveReady, voiceLiveReady ? 'primary provider tayyor' : 'endpoint/key yetishmaydi', 'warn');
+  add('config:realtime-fallback', realtimeReady, realtimeReady ? 'gpt-realtime-1.5 fallback tayyor' : 'endpoint/key yetishmaydi', 'warn');
   const daemonProcesses = findMatchingProcesses(path.join(ROOT, 'jarvis_daemon.js'));
   const sentinelProcesses = findMatchingProcesses(path.join(ROOT, 'scripts', 'pause-sentinel.js'));
   add('process:voice-daemon', daemonProcesses.length === 1, daemonProcesses.length ? `pid=${daemonProcesses.map(p => p.pid).join(',')}` : 'ishlamayapti', 'warn');
@@ -116,10 +167,12 @@ function main() {
   const ownership = inspectVoiceOwnership({ daemonPids, wakePids, parentPid, runtimeOwner });
   add('process:single-voice-owner', ownership.healthy,
     `daemon=${ownership.daemonPids.length}, wake-worker=${ownership.wakePids.length}, orphan=${ownership.orphanWakePids.length}${ownership.orphanWakePids.length ? ` (pid ${ownership.orphanWakePids.join(',')})` : ''}`);
-  const openWakeEnabled = !/^(?:false|0|no|off)$/i.test(env.OPENWAKEWORD_ENABLED || 'true');
+  const openWakeEnabled = envEnabled(env.OPENWAKEWORD_ENABLED, true);
+  if (openWakeEnabled) checkWakeModels(env);
   add('wakeword:local-worker', !openWakeEnabled || wakePids.length === 1,
     openWakeEnabled ? (wakePids.length === 1 ? `openWakeWord pid=${wakePids[0]}` : `kutilgan 1 ta worker, topildi ${wakePids.length}`) : 'config orqali o‘chirilgan',
     openWakeEnabled ? 'error' : 'ok');
+  checkWhisperWake(env);
   checkMic(env);
   checkRuntime(runtime, runtimeOwner);
 

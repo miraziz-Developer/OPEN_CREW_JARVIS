@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * DEEP THINK — jiddiy savollarni primary reasoning modelga yo'naltiradi.
+ * DEEP THINK — reasoning so'rovlarini latency/complexity tieriga yo'naltiradi.
  *
- * Nega kerak: jonli suhbatda barcha savol-javobga `gpt-realtime-2.1`
+ * Nega kerak: jonli suhbatda barcha savol-javobga realtime voice modeli
  * javob berardi. U ovoz uchun optimallashtirilgan — fikrlash uchun emas.
- * Kuchli Responses API modeli rejalashtirish, coding va murakkab savollarga
- * javob beradi. Oddiy suhbat realtime modelda qoladi: u qisqa gaplarda
- * past latency va tabiiy audio uchun optimallashtirilgan.
+ * Grok fast oddiy expert javoblarini past latency bilan beradi; GPT-5.6 Sol
+ * architecture, strategiya va ko'p bosqichli rejalashni bajaradi. Oddiy
+ * suhbat realtime modelda qoladi.
  *
  * MUHIM: bu `run_task` EMAS. run_task to'liq agentni (barcha skilllar,
  * brauzer, fayl tizimi) ishga tushiradi va 15-25 soniya oladi. Bu esa
@@ -21,12 +21,14 @@ const https = require('https');
 const { PROJECT_DIR } = require('../../core/paths');
 let _env = null;
 function env(k, def) {
+  if (process.env[k] !== undefined) return process.env[k];
   if (_env === null) { try { _env = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (e) { _env = ''; } }
   const m = _env.match(new RegExp('^' + k + '=(.*)$', 'm'));
   return m ? m[1].trim() : def;
 }
 
-const MODEL = env('DEEP_THINK_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-6-astra'));
+const FAST_MODEL = env('DEEP_THINK_FAST_MODEL', 'grok-4-1-fast-reasoning');
+const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL', 'gpt-5.6-sol');
 const TIMEOUT_MS = parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 90000;
 const MAX_TOKENS = parseInt(env('DEEP_THINK_MAX_TOKENS'), 10) || 1200;
 
@@ -43,17 +45,32 @@ const SYSTEM_PROMPT =
   "- Start with the answer, not a preamble such as 'good question' or 'let's examine it'.\n" +
   "- Reply only in English.";
 
-function askExpert(question, context) {
+function isComplexReasoningRequest(question) {
+  const text = String(question || '').toLowerCase();
+  return text.length > 700 || /\b(architecture|architect|strategy|tradeoffs?|design (?:a|an|the)?|multi[ -]?step|roadmap|migration|root cause|debug(?:ging)?|security review|implementation plan|system design|comprehensive|in[- ]depth|chuqur|arxitektura|strategiya|taqqosla|reja(?:si|lashtir)?|ko'p bosqich|muammoni tahlil)\b/i.test(text);
+}
+
+function reasoningProviders(question) {
+  const fast = {
+    name: 'grok-fast', endpoint: env('AZURE_OPENAI_ENDPOINT'), key: env('AZURE_OPENAI_KEY'), model: FAST_MODEL
+  };
+  const complex = {
+    name: 'gpt-sol', endpoint: env('AZURE_OPENAI_ENDPOINT'), key: env('AZURE_OPENAI_KEY'), model: COMPLEX_MODEL
+  };
+  return isComplexReasoningRequest(question) ? [complex, fast] : [fast, complex];
+}
+
+function requestExpert(question, context, provider) {
   return new Promise((resolve, reject) => {
-    const KEY = env('AZURE_OPENAI_KEY');
-    const BASE = (env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '').replace(/\/openai\/v1$/, '');
-    if (!KEY || !BASE) return reject(new Error('AZURE_OPENAI_KEY/ENDPOINT yo\'q'));
+    const KEY = provider.key;
+    const BASE = String(provider.endpoint || '').replace(/\/$/, '').replace(/\/api\/projects\/[^/]+$/, '').replace(/\/openai\/v1$/, '');
+    if (!KEY || !BASE) return reject(new Error(provider.name + ' endpoint/key yo\'q'));
 
     const instructions = context
       ? SYSTEM_PROMPT + '\n\nSuhbat konteksti (foydalanuvchi haqida ma\'lum bo\'lgan narsalar):\n' + String(context).slice(0, 4000)
       : SYSTEM_PROMPT;
     const payload = JSON.stringify({
-      model: MODEL,
+      model: provider.model,
       instructions,
       input: String(question).slice(0, 8000),
       max_output_tokens: MAX_TOKENS
@@ -78,6 +95,15 @@ function askExpert(question, context) {
     req.setTimeout(TIMEOUT_MS, () => { req.destroy(); reject(new Error('deep-think timeout')); });
     req.write(payload); req.end();
   });
+}
+
+async function askExpert(question, context) {
+  let lastError;
+  for (const provider of reasoningProviders(question)) {
+    try { return await requestExpert(question, context, provider); }
+    catch (error) { lastError = error; }
+  }
+  throw lastError || new Error('reasoning provider sozlanmagan');
 }
 
 function extractOutputText(response) {
@@ -109,11 +135,15 @@ function main() {
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8').trim() || '{}'); } catch (e) {}
   if (!input.question) { console.log(JSON.stringify({ status: 'error', message: 'question kerak' })); return; }
+  const provider = reasoningProviders(input.question)[0];
   askExpert(input.question, input.context)
-    .then(answer => console.log(JSON.stringify({ status: 'ok', model: MODEL, answer })))
+    .then(answer => console.log(JSON.stringify({ status: 'ok', model: provider.model, answer })))
     .catch(e => console.log(JSON.stringify({ status: 'error', message: e.message })));
 }
 
 if (require.main === module) main();
 
-module.exports = { askExpert, extractOutputText, stripMarkdown, MODEL };
+module.exports = {
+  askExpert, extractOutputText, stripMarkdown, isComplexReasoningRequest,
+  reasoningProviders, FAST_MODEL, COMPLEX_MODEL
+};

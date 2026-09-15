@@ -21,6 +21,9 @@ test('addressed command extraction distinguishes inline speech from wake-only sp
   assert.deepEqual(extractAddressedCommand('Hey Jervis!'), {
     addressed: true, wake: 'hey jervis', command: ''
   });
+  assert.deepEqual(extractAddressedCommand('What the heck, Jarvis?'), {
+    addressed: true, wake: 'jarvis', command: 'what the heck'
+  });
   assert.equal(extractAddressedCommand('Open Safari please'), null);
 });
 

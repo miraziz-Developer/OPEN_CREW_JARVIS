@@ -330,7 +330,7 @@ greeting() {
     tmp_out="/tmp/jarvis_greet_$$.out"
     log "[GREETING] TTS salom yuborilmoqda..."
 
-    printf '{"text":"Salom, men tayyorman."}\n' >"${tmp_json}"
+    printf '{"text":"Hello. Systems are ready."}\n' >"${tmp_json}"
     if node "${PROJECT_DIR}/skills/azure-tts/index.js" <"${tmp_json}" >"${tmp_out}" 2>/dev/null; then
       local audio_file
       audio_file=$(grep -o '"audioFile":"[^"]*"' "${tmp_out}" | sed 's/.*:"\(.*\)".*/\1/' || true)

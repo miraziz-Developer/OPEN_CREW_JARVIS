@@ -46,7 +46,8 @@ test('exact process matching ignores diagnostic command text', () => {
   const found = findMatchingProcesses(script, { listProcesses: () => [
     '42 /opt/homebrew/bin/node /repo/jarvis_daemon.js',
     '43 grep jarvis_daemon.js',
-    '44 node -e console.log("/repo/jarvis_daemon.js")'
+    '44 node -e console.log("/repo/jarvis_daemon.js")',
+    '45 /bin/sh -c node /repo/jarvis_daemon.js'
   ].join('\n') });
   assert.deepEqual(found.map(item => item.pid), [42]);
   assert.equal(commandOwnsScript('/bin/bash /repo/scripts/jarvis.sh', '/repo/scripts/jarvis.sh'), true);

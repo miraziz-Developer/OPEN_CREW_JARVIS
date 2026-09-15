@@ -76,7 +76,12 @@ function buildCalibration({ silence, speech, echo = null, sampleRate = 16000, no
   const noiseFloor = Math.round(clamp(noiseP95 * 1.15, 20, 1200));
   const desiredThreshold = Math.sqrt(Math.max(noiseFloor, 1) * speechP20);
   const noiseMultiplier = Math.round(clamp(desiredThreshold / Math.max(noiseP50, 1), 1.35, 4.5) * 100) / 100;
-  const bargeInResidual = Math.round(clamp(speechP20 * 0.42, 180, 2400));
+  // Playback paytida AEC'dan qolgan karnay reverberatsiyasi oddiy xona
+  // shovqinidan ancha baland bo'lishi mumkin. Speech P20'ning 42 foizi real
+  // qurilmada echo'ni 360ms davomida near-end speech deb qabul qildi va tayyor
+  // javobni client_cancelled bilan kesdi. Past ovozni saqlagan holda echo uchun
+  // yetarli margin qoldirish uchun barge-in threshold P20'ning 70 foizida.
+  const bargeInResidual = Math.round(clamp(speechP20 * 0.70, 300, 3200));
   const inputGain = Math.round(clamp(1800 / Math.max(speechP50, 1), 1, 6) * 100) / 100;
   const echoLagMs = Number.isFinite(echo?.lagMs) ? Math.round(clamp(echo.lagMs, 20, 500)) : null;
 
@@ -125,4 +130,28 @@ function resolveCalibratedNumber(name, rawEnv, profile, fallback) {
   return Number.isFinite(calibrated) ? calibrated : fallback;
 }
 
-module.exports = { PROFILE_VERSION, percentile, chunkRms, pcmFromWav, estimateEchoLag, buildCalibration, saveCalibration, loadCalibration, resolveCalibratedNumber };
+function resolveBargeInResidual(rawEnv, profile, fallback = 900) {
+  const explicit = rawEnv?.DUPLEX_BARGE_IN_RMS;
+  if (explicit !== undefined && String(explicit).trim() !== '') {
+    const value = Number(explicit);
+    if (Number.isFinite(value)) return value;
+  }
+  const recommended = Number(profile?.recommended?.DUPLEX_BARGE_IN_RMS);
+  const speechP20 = Number(profile?.measurements?.speechRmsP20);
+  // Old version-1 profiles may still contain the former 42% recommendation.
+  // Recompute a safe floor from their retained numeric measurement so users do
+  // not need to speak through calibration again merely to receive this fix.
+  const measuredFloor = Number.isFinite(speechP20)
+    ? Math.round(clamp(speechP20 * 0.70, 300, 3200))
+    : NaN;
+  return Math.max(
+    Number.isFinite(recommended) ? recommended : fallback,
+    Number.isFinite(measuredFloor) ? measuredFloor : fallback
+  );
+}
+
+module.exports = {
+  PROFILE_VERSION, percentile, chunkRms, pcmFromWav, estimateEchoLag,
+  buildCalibration, saveCalibration, loadCalibration, resolveCalibratedNumber,
+  resolveBargeInResidual
+};

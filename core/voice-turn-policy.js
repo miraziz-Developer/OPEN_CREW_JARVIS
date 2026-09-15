@@ -123,7 +123,17 @@ function isRepeatedResponse(candidate, previous, threshold = 0.82) {
   return (enoughForPrefixDecision && (b.startsWith(a) || a.startsWith(b))) || similarity(a, b) >= threshold;
 }
 
+function conversationIdleDelay(options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const idleMs = Math.max(0, Number(options.idleMs) || 0);
+  const followupMs = Math.max(0, Number(options.followupMs) || idleMs);
+  const playbackUntil = Number.isFinite(options.playbackUntil) ? options.playbackUntil : now;
+  const waitAfterPlayback = options.awaitingFollowup ? followupMs : idleMs;
+  return Math.max(0, playbackUntil - now) + waitAfterPlayback;
+}
+
 module.exports = {
   normalize, similarity, looksLikeUzbekTurn, looksLikeEnglishIntent,
-  looksLikeAddressedTurn, classifyUserTurn, isRepeatedResponse
+  looksLikeAddressedTurn, classifyUserTurn, isRepeatedResponse,
+  conversationIdleDelay
 };

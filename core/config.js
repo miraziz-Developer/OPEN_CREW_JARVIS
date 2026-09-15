@@ -9,23 +9,50 @@ const CONFIG_SCHEMA = Object.freeze({
   AZURE_SPEECH_REGION: { type: 'string', required: true },
   AZURE_SPEECH_VOICE: { type: 'string', default: 'en-US-GuyNeural' },
   AZURE_SPEECH_LANGUAGE: { type: 'string', default: 'en-US' },
+  AZURE_SPEECH_RATE_PERCENT: { type: 'number', default: -12, min: -40, max: 30 },
+  AZURE_SPEECH_PITCH_PERCENT: { type: 'number', default: -12, min: -30, max: 30 },
   AZURE_OPENAI_ENDPOINT: { type: 'url', required: true },
   AZURE_OPENAI_KEY: { type: 'secret', required: true },
   AZURE_OPENAI_DEPLOYMENT: { type: 'string', required: true },
-  DEEP_THINK_MODEL: { type: 'string', default: 'gpt-6-astra' },
+  // Foundry project reasoning tiers. Fast answers use Grok; demanding
+  // planning/architecture questions use GPT-5.6 Sol.
+  DEEP_THINK_FAST_MODEL: { type: 'string', default: 'grok-4-1-fast-reasoning' },
+  DEEP_THINK_COMPLEX_MODEL: { type: 'string', default: 'gpt-5.6-sol' },
   DEEP_THINK_TIMEOUT_MS: { type: 'integer', default: 90000, min: 5000, max: 300000 },
   DEEP_THINK_MAX_TOKENS: { type: 'integer', default: 1200, min: 64, max: 32768 },
+  AZURE_TERRA_ENDPOINT: { type: 'url' },
+  AZURE_TERRA_KEY: { type: 'secret' },
+  AZURE_TERRA_DEPLOYMENT: { type: 'string', default: 'gpt-5.6-terra' },
   OPENCLAW_GATEWAY_TOKEN: { type: 'secret', required: true },
   AZURE_OPENAI_VISION_DEPLOYMENT: { type: 'string', default: 'gpt-4.1' },
-  AZURE_REALTIME_DEPLOYMENT: { type: 'string', default: 'gpt-realtime-2.1' },
+  AZURE_VOICELIVE_ENDPOINT: { type: 'url' },
+  AZURE_VOICELIVE_KEY: { type: 'secret' },
+  AZURE_VOICELIVE_MODEL: { type: 'string', default: 'gpt-realtime' },
+  AZURE_VOICELIVE_VOICE: { type: 'string', default: 'en-US-OnyxTurboMultilingualNeural' },
+  AZURE_VOICELIVE_API_VERSION: { type: 'string', default: '2026-04-10' },
+  AZURE_REALTIME_ENDPOINT: { type: 'websocket-url' },
+  AZURE_REALTIME_KEY: { type: 'secret' },
+  AZURE_REALTIME_DEPLOYMENT: { type: 'string', default: 'gpt-realtime-1.5' },
   AZURE_REALTIME_VOICE: { type: 'string', default: 'cedar' },
+  AZURE_TRANSCRIBE_ENDPOINT: { type: 'url' },
+  AZURE_TRANSCRIBE_KEY: { type: 'secret' },
+  AZURE_TRANSCRIBE_DEPLOYMENT: { type: 'string', default: 'gpt-live-transcribe' },
+  AZURE_EMBEDDING_ENDPOINT: { type: 'url' },
+  AZURE_EMBEDDING_KEY: { type: 'secret' },
+  AZURE_EMBEDDING_DEPLOYMENT: { type: 'string', default: 'text-embedding-3-large-2' },
+  AZURE_RERANK_ENDPOINT: { type: 'url' },
+  AZURE_RERANK_KEY: { type: 'secret' },
+  AZURE_RERANK_DEPLOYMENT: { type: 'string', default: 'Cohere-rerank-v4.0-pro' },
   JARVIS_VOICE_STYLE: { type: 'enum', default: 'cinematic-robot', values: ['cinematic-robot', 'default'] },
-  REALTIME_TRANSCRIPTION_LANGUAGE: { type: 'string', default: 'en' },
+  // Empty lets the provider detect the spoken language. Deployments that need
+  // a fixed locale can still set an explicit BCP-47 language in .env.
+  REALTIME_TRANSCRIPTION_LANGUAGE: { type: 'string', default: '' },
   REALTIME_ENABLED: { type: 'boolean', default: true },
   REALTIME_IDLE_MS: { type: 'integer', default: 20000, min: 5000, max: 300000 },
-  REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 512, min: 64, max: 4096 },
+  REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 1024, min: 64, max: 4096 },
   REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS: { type: 'integer', default: 256, min: 64, max: 1024 },
-  REALTIME_BARGE_IN_CONFIRM_MS: { type: 'integer', default: 300, min: 100, max: 1000 },
+  REALTIME_BARGE_IN_CONFIRM_MS: { type: 'integer', default: 360, min: 100, max: 1000 },
+  REALTIME_BARGE_IN_MAX_GAP_MS: { type: 'integer', default: 80, min: 0, max: 300 },
   REALTIME_WAKE_PREROLL_MS: { type: 'integer', default: 1800, min: 400, max: 5000 },
   REALTIME_INPUT_GAIN: { type: 'number', default: 3, min: 1, max: 8 },
   REALTIME_FAILURE_LIMIT: { type: 'integer', default: 3, min: 1, max: 20 },
@@ -37,15 +64,15 @@ const CONFIG_SCHEMA = Object.freeze({
   MIC_LOWPASS_HZ: { type: 'number', default: 7600, min: 3000, max: 7900 },
   MIC_MUTE_GRACE_MS: { type: 'integer', default: 1500, min: 0, max: 10000 },
   DUPLEX_ECHO_THRESHOLD: { type: 'number', default: 0.72, min: 0.1, max: 0.99 },
-  DUPLEX_BARGE_IN_RMS: { type: 'number', default: 650, min: 10, max: 10000 },
+  DUPLEX_BARGE_IN_RMS: { type: 'number', default: 900, min: 10, max: 10000 },
   DUPLEX_NOISE_FLOOR: { type: 'number', default: 80, min: 0, max: 5000 },
   DUPLEX_NOISE_MULTIPLIER: { type: 'number', default: 2.4, min: 1, max: 10 },
-  DUPLEX_HANGOVER_MS: { type: 'integer', default: 650, min: 0, max: 5000 },
+  DUPLEX_HANGOVER_MS: { type: 'integer', default: 900, min: 0, max: 5000 },
   DUPLEX_MAX_ECHO_LAG_MS: { type: 'integer', default: 180, min: 0, max: 1000 },
   HOTWORD_COOLDOWN_MS: { type: 'integer', default: 3000, min: 500, max: 60000 },
   COMMAND_DEDUP_MS: { type: 'integer', default: 5000, min: 500, max: 60000 },
   RESPONSE_DEDUP_MS: { type: 'integer', default: 15000, min: 1000, max: 120000 },
-  CONVERSATION_FOLLOWUP_MS: { type: 'integer', default: 20000, min: 5000, max: 120000 },
+  CONVERSATION_FOLLOWUP_MS: { type: 'integer', default: 60000, min: 5000, max: 120000 },
   ACTION_CONFIRMATION_TTL_MS: { type: 'integer', default: 30000, min: 5000, max: 120000 },
   TURN_JOURNAL_MAX_BYTES: { type: 'integer', default: 8388608, min: 65536, max: 1073741824 },
   TURN_JOURNAL_RETENTION_FILES: { type: 'integer', default: 5, min: 1, max: 30 },
@@ -53,12 +80,25 @@ const CONFIG_SCHEMA = Object.freeze({
   JARVIS_FOCUS_MODE: { type: 'boolean', default: false },
   JARVIS_MEETING_MODE: { type: 'boolean', default: false },
   OPENWAKEWORD_ENABLED: { type: 'boolean', default: true },
+  OPENWAKEWORD_MODELS: { type: 'string', default: 'hey_jarvis' },
   OPENWAKEWORD_THRESHOLD: { type: 'number', default: 0.18, min: 0.01, max: 0.99 },
-  OPENWAKEWORD_STRONG_THRESHOLD: { type: 'number', default: 0.55, min: 0.01, max: 0.99 },
+  // >1 intentionally disables the single-frame strong-score bypass while
+  // retaining temporal confirmation for production custom models.
+  OPENWAKEWORD_STRONG_THRESHOLD: { type: 'number', default: 0.55, min: 0.01, max: 2 },
   OPENWAKEWORD_CONFIRM_THRESHOLD: { type: 'number', default: 0.06, min: 0.01, max: 0.99 },
   OPENWAKEWORD_CONFIRM_WINDOW_FRAMES: { type: 'integer', default: 4, min: 2, max: 10 },
   OPENWAKEWORD_DIAGNOSTIC_FLOOR: { type: 'number', default: 0.03, min: 0.001, max: 0.99 },
   OPENWAKEWORD_INPUT_GAIN: { type: 'number', default: 3, min: 1, max: 6 },
+  // Local whisper.cpp is opt-in and only supplements wake-word detection.
+  // Azure Realtime remains the authoritative STT/VAD path during a conversation.
+  WHISPER_WAKE_ENABLED: { type: 'boolean', default: false },
+  WHISPER_WAKE_BINARY: { type: 'string' },
+  WHISPER_WAKE_MODEL: { type: 'string' },
+  WHISPER_WAKE_LANGUAGE: { type: 'string', default: 'en' },
+  WHISPER_WAKE_WINDOW_MS: { type: 'integer', default: 3000, min: 1000, max: 10000 },
+  WHISPER_WAKE_INTERVAL_MS: { type: 'integer', default: 1500, min: 500, max: 10000 },
+  WHISPER_WAKE_COOLDOWN_MS: { type: 'integer', default: 5000, min: 1000, max: 60000 },
+  WHISPER_WAKE_TIMEOUT_MS: { type: 'integer', default: 15000, min: 1000, max: 60000 },
   WAKEWORD_THRESHOLD: { type: 'number', default: 0.35, min: 0.01, max: 0.99 },
   CLAP_TRIGGER_ENABLED: { type: 'boolean', default: false },
   CLAP_SPIKE_RATIO: { type: 'number', default: 4, min: 1.1, max: 30 },
@@ -135,6 +175,11 @@ function convert(name, raw, rule) {
     if (!['http:', 'https:'].includes(value.protocol)) throw new Error('faqat http/https URL');
     return value.toString().replace(/\/$/, '');
   }
+  if (rule.type === 'websocket-url') {
+    const value = new URL(String(raw));
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(value.protocol)) throw new Error('faqat http/https/ws/wss URL');
+    return value.toString().replace(/\/$/, '');
+  }
   if (rule.type === 'enum') {
     if (!rule.values.includes(raw)) throw new Error(`ruxsat etilgan qiymatlar: ${rule.values.join(', ')}`);
     return raw;
@@ -164,8 +209,17 @@ function validateConfig(input, options = {}) {
   for (const name of Object.keys(source)) {
     if (!schema[name] && options.warnUnknown) warnings.push({ key: name, code: 'unknown', message: `${name} schema’da yo‘q` });
   }
-  if (values.REALTIME_ENABLED && !values.AZURE_REALTIME_DEPLOYMENT) {
-    errors.push({ key: 'AZURE_REALTIME_DEPLOYMENT', code: 'conditional', message: 'Realtime yoqilganida deployment kerak' });
+  const voiceLivePartial = Boolean(values.AZURE_VOICELIVE_ENDPOINT) !== Boolean(values.AZURE_VOICELIVE_KEY);
+  const realtimePartial = Boolean(values.AZURE_REALTIME_ENDPOINT) !== Boolean(values.AZURE_REALTIME_KEY);
+  const terraPartial = Boolean(values.AZURE_TERRA_ENDPOINT) !== Boolean(values.AZURE_TERRA_KEY);
+  if (voiceLivePartial) errors.push({ key: 'AZURE_VOICELIVE_ENDPOINT', code: 'conditional', message: 'Voice Live endpoint va key birga berilishi kerak' });
+  if (realtimePartial) errors.push({ key: 'AZURE_REALTIME_ENDPOINT', code: 'conditional', message: 'Realtime endpoint va key birga berilishi kerak' });
+  if (terraPartial) errors.push({ key: 'AZURE_TERRA_ENDPOINT', code: 'conditional', message: 'Terra endpoint va key birga berilishi kerak' });
+  if (values.WHISPER_WAKE_ENABLED && (!values.WHISPER_WAKE_BINARY || !values.WHISPER_WAKE_MODEL)) {
+    errors.push({ key: 'WHISPER_WAKE_BINARY', code: 'conditional', message: 'WHISPER_WAKE_ENABLED=true uchun binary va model path berilishi kerak' });
+  }
+  if (values.REALTIME_ENABLED && !values.AZURE_VOICELIVE_ENDPOINT && !values.AZURE_REALTIME_ENDPOINT) {
+    warnings.push({ key: 'REALTIME_ENABLED', code: 'fallback', message: 'Voice provider sozlanmagan; Speech TTS fallback ishlatiladi' });
   }
   return { ok: errors.length === 0, values, errors, warnings };
 }

@@ -3,10 +3,10 @@
     "defaults": {
       "workspace": "/Users/mirazizerkinaliyev_dev/.openclaw/workspace",
       "model": {
-        "primary": "azure-openai/gpt-6-astra"
+        "primary": "azure-openai/gpt-5.6-sol"
       },
       "models": {
-        "azure-openai/gpt-6-astra": {}
+        "azure-openai/gpt-5.6-sol": {}
       },
       "skills": [
         "azure-tts",
@@ -29,6 +29,11 @@
   },
   "session": {
     "dmScope": "per-channel-peer"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false
+    }
   },
   "tools": {
     "profile": "full"
@@ -62,8 +67,8 @@
         "contextWindow": 128000,
         "models": [
           {
-            "id": "gpt-6-astra",
-            "name": "GPT-6 Astra",
+            "id": "gpt-5.6-sol",
+            "name": "GPT-5.6 Sol",
             "input": [
               "text"
             ],

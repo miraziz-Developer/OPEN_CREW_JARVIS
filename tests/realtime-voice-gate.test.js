@@ -2,17 +2,30 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const EventEmitter = require('node:events');
 const {
   RealtimeSession, needsGroundedAnswer, needsContextGrounding,
-  needsExpertAnswer, collectGrounding, matchDirectFastAction, loadInstructions
+  needsExpertAnswer, collectGrounding, matchDirectFastAction, buildSessionUpdate,
+  loadInstructions, runFullAgent
 } = require('../skills/realtime-voice');
 
-test('voice instructions preserve the user language and require real task execution', () => {
+test('voice instructions default to English, permit explicit translation, and require real task execution', () => {
   const instructions = loadInstructions();
-  assert.match(instructions, /Reply naturally in that same language/i);
-  assert.match(instructions, /rather than reverting to English/i);
-  assert.doesNotMatch(instructions, /Always reply only in natural English/i);
-  assert.doesNotMatch(instructions, /Never answer in Uzbek/i);
+  assert.match(instructions, /English is the default response language/i);
+  assert.match(instructions, /explicit request to translate into a named language/i);
+  assert.match(instructions, /Do not automatically switch to Uzbek, Russian, or any other language/i);
+  assert.doesNotMatch(instructions, /Reply naturally in that same language/i);
+  assert.match(instructions, /Talk like an attentive, capable person/i);
+  assert.match(instructions, /ACTION FIRST/i);
+  assert.match(instructions, /call the tool instead of merely explaining/i);
+  assert.match(instructions, /never claim success until the tool returns a successful result/i);
+  assert.match(instructions, /confirmation requirements/i);
+  assert.match(instructions, /without requiring the user to say Jarvis again/i);
+  assert.match(instructions, /preserve context/i);
+  assert.match(instructions, /what is that\?/i);
+  assert.match(instructions, /call see_screen silently before answering/i);
+  assert.match(instructions, /never guess an object from background audio/i);
+  assert.doesNotMatch(instructions, /cinematic machine-intelligence persona/i);
 });
 
 test('an acknowledgement after an assistant reply remains a realtime turn', () => {
@@ -25,15 +38,16 @@ test('an acknowledgement after an assistant reply remains a realtime turn', () =
   assert.equal(session._acceptTranscript('Ha'), true);
   const response = sent.find(message => message.type === 'response.create');
   assert.ok(response);
-  assert.match(response.response.instructions, /same language/i);
+  assert.match(response.response.instructions, /natural English by default/i);
+  assert.match(response.response.instructions, /only when the user explicitly requested that named language/i);
 });
 
-test('transcript gate routes simple conversation to Realtime and complex turns to Astra', async () => {
+test('transcript gate keeps generic conversation and reasoning on the low-latency Realtime route', async () => {
   const questions = [];
   const spoken = [];
   const session = new RealtimeSession({
     fastActionRunner: async id => ({ status: 'ok', message: id === 'info:time' ? 'It is 23:09.' : 'Done.' }),
-    expertAnswer: async question => { questions.push(question); return 'Astra answer.'; },
+    expertAnswer: async question => { questions.push(question); return 'Expert answer.'; },
     speakText: async text => { spoken.push(text); }
   });
   const sent = [];
@@ -68,7 +82,9 @@ test('transcript gate routes simple conversation to Realtime and complex turns t
   const realtimeResponses = sent.filter(message => message.type === 'response.create');
   assert.equal(realtimeResponses.length, 1);
   assert.equal(realtimeResponses[0].response.tool_choice, 'auto');
-  assert.match(realtimeResponses[0].response.instructions, /latest English turn/i);
+  assert.match(realtimeResponses[0].response.instructions, /latest turn/i);
+  assert.match(realtimeResponses[0].response.instructions, /natural English by default/i);
+  assert.match(realtimeResponses[0].response.instructions, /never cut a sentence short/i);
   assert.equal(questions.length, 0);
   assert.equal(spoken[0], 'It is 23:09.');
 
@@ -77,9 +93,30 @@ test('transcript gate routes simple conversation to Realtime and complex turns t
     transcript: 'Analyze why this architecture is better and explain the tradeoffs.'
   }) });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(questions.length, 1);
-  assert.match(questions[0], /Current question: Analyze why this architecture is better/);
-  assert.equal(spoken[1], 'Astra answer.');
+  assert.equal(questions.length, 0);
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 2);
+});
+
+test('YouTube search is a direct realtime route and never invokes deep-think', async () => {
+  const communicationIntents = [];
+  const expertQuestions = [];
+  const spoken = [];
+  const session = new RealtimeSession({
+    communicationRunner: async intent => {
+      communicationIntents.push(intent);
+      return { status: 'ok', message: 'YouTube qidiruvi ochildi.' };
+    },
+    expertAnswer: async question => { expertQuestions.push(question); return 'Expert answer.'; },
+    speakText: async text => { spoken.push(text); }
+  });
+  session.ws = { send: () => {} };
+  session._flushPlayback = () => {};
+
+  assert.equal(session._acceptTranscript('YouTube da lofi hip hop qidir'), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(communicationIntents, [{ kind: 'youtube-search', query: 'lofi hip hop' }]);
+  assert.deepEqual(expertQuestions, []);
+  assert.deepEqual(spoken, ['YouTube qidiruvi ochildi.']);
 });
 
 test('realtime response emits provider, first-content, and playback timing milestones once per turn', () => {
@@ -111,10 +148,121 @@ test('realtime response emits provider, first-content, and playback timing miles
   assert.equal(telemetry.find(event => event.type === 'provider.response.created').data.responseId, 'response-1');
 });
 
-test('Fn explicit trigger lets only the first meaningful media-background turn through', async () => {
+test('session becomes ready only after provider acknowledges session.update', () => {
+  const session = new RealtimeSession();
+  let ready = 0;
+  let provider = '';
+  session.provider = { id: 'voice-live' };
+  session.on('ready', () => ready++);
+  session.on('provider', event => { provider = event.id; });
+
+  assert.equal(session.ready, false);
+  session._onMessage({ data: JSON.stringify({ type: 'session.updated' }) });
+  session._onMessage({ data: JSON.stringify({ type: 'session.updated' }) });
+
+  assert.equal(session.ready, true);
+  assert.equal(ready, 1);
+  assert.equal(provider, 'voice-live');
+});
+
+test('GA v1 output audio and transcript events use the existing playback pipeline', () => {
+  const session = new RealtimeSession();
+  const played = [];
+  session._playChunk = chunk => played.push(Buffer.from(chunk));
+
+  session._onMessage({ data: JSON.stringify({ type: 'response.output_audio_transcript.delta', delta: 'Hello.' }) });
+  session._onMessage({ data: JSON.stringify({ type: 'response.output_audio.delta', delta: Buffer.from('pcm').toString('base64') }) });
+
+  assert.equal(session.assistantTranscript, 'Hello.');
+  assert.equal(session.assistantSpeaking, true);
+  assert.deepEqual(played, [Buffer.from('pcm')]);
+});
+
+test('confirmed server speech_started cancels the response and flushes local playback once', () => {
+  const session = new RealtimeSession();
+  const sent = [];
+  let flushes = 0;
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session.assistantSpeaking = true;
+  session._bargeInEvidenceAt = Date.now();
+  session._flushPlayback = () => { flushes++; };
+
+  session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+  session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+
+  assert.deepEqual(sent.filter(message => message.type === 'response.cancel'), [{ type: 'response.cancel' }]);
+  assert.equal(flushes, 1);
+});
+
+test('server speech_started without local barge-in evidence preserves playback', () => {
+  const session = new RealtimeSession();
+  const sent = [];
+  let flushes = 0;
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session.assistantSpeaking = true;
+  session._bargeInEvidenceAt = 0;
+  session._flushPlayback = () => { flushes++; };
+
+  session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+
+  assert.equal(sent.some(message => message.type === 'response.cancel'), false);
+  assert.equal(flushes, 0);
+});
+
+test('Fn is a hands-free conversation trigger and release does not force VAD finalization', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const daemonSource = fs.readFileSync(path.join(__dirname, '..', 'jarvis_daemon.js'), 'utf8');
+  const realtimeSource = fs.readFileSync(path.join(__dirname, '..', 'skills', 'realtime-voice', 'index.js'), 'utf8');
+
+  assert.match(daemonSource, /triggerVoice\('⌨️ Fn hands-free conversation'\)/);
+  assert.match(daemonSource, /Fn qo'yib yuborilishi suhbat turnini yopmaydi/);
+  assert.doesNotMatch(daemonSource, /finishPushToTalkTurn/);
+  assert.doesNotMatch(realtimeSource, /finishPushToTalkTurn/);
+});
+
+test('daemon does not arm the idle timeout while provider VAD reports active speech', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const daemonSource = fs.readFileSync(path.join(__dirname, '..', 'jarvis_daemon.js'), 'utf8');
+
+  assert.match(daemonSource, /let userSpeaking = false/);
+  assert.match(daemonSource, /if \(userSpeaking\) return;/);
+  assert.match(daemonSource, /session\.on\('user_speaking', \(\) => \{\s*userSpeaking = true;/);
+  assert.match(daemonSource, /session\.on\('user_speech_stopped', \(\) => \{\s*userSpeaking = false;/);
+});
+
+test('direct Azure Realtime session payload uses the nested GA audio schema', () => {
+  const event = buildSessionUpdate({ id: 'azure-realtime', voice: 'cedar' }, {
+    startMediaAware: false,
+    instructions: 'Test',
+    tools: []
+  });
+
+  assert.equal(event.session.type, 'realtime');
+  assert.deepEqual(event.session.output_modalities, ['audio']);
+  assert.deepEqual(event.session.audio.input.format, { type: 'audio/pcm', rate: 24000 });
+  assert.equal(event.session.audio.input.turn_detection.create_response, false);
+  assert.equal(event.session.audio.input.turn_detection.silence_duration_ms, 300);
+  assert.equal(event.session.audio.output.voice, 'cedar');
+  assert.equal(event.session.modalities, undefined);
+  assert.equal(event.session.input_audio_format, undefined);
+});
+
+test('media-aware sessions retain the conservative VAD silence window', () => {
+  const event = buildSessionUpdate({ id: 'azure-realtime', voice: 'cedar' }, {
+    startMediaAware: true,
+    instructions: 'Test',
+    tools: []
+  });
+
+  assert.equal(event.session.audio.input.turn_detection.silence_duration_ms, 750);
+});
+
+test('Fn hands-free session accepts media-background follow-up turns', async () => {
   const sent = [];
   const session = new RealtimeSession({
-    explicitUserTrigger: true,
+    explicitUserSession: true,
     speakText: async () => {}
   });
   session.ws = { send: raw => sent.push(JSON.parse(raw)) };
@@ -122,6 +270,23 @@ test('Fn explicit trigger lets only the first meaningful media-background turn t
   session._mediaModeActive = true;
 
   assert.equal(session._acceptTranscript('Hello there.'), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session._acceptTranscript('I have a plan for you.'), true);
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 2);
+});
+
+test('confirmed wake lets only the first meaningful media-background turn through', async () => {
+  const sent = [];
+  const session = new RealtimeSession({
+    explicitUserTrigger: true,
+    addressedWakeTrigger: true,
+    speakText: async () => {}
+  });
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+  session._mediaModeActive = true;
+
+  assert.equal(session._acceptTranscript('Jarvis, hello how are you?'), true);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(session._explicitUserTurnPending, false);
   assert.equal(session._acceptTranscript('Passive background dialogue.'), false);
@@ -158,6 +323,55 @@ test('wake-only transcript is suppressed without persisting an empty user turn',
   assert.deepEqual(suppressed, ['wake-only']);
 });
 
+test('wake suffix preserves and accepts the command before Jarvis', async () => {
+  const sent = [];
+  const accepted = [];
+  const session = new RealtimeSession({ addressedWakeTrigger: true });
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+  session.on('user_transcript', text => accepted.push(text));
+
+  assert.equal(session._acceptTranscript('What the heck, Jarvis?'), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(accepted, ['what the heck']);
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
+});
+
+test('duplex uses a low-latency normal hangover and retains a conservative media profile', () => {
+  const session = new RealtimeSession();
+  assert.equal(session.duplex.hangoverMs, 450);
+  session.ws = { send() {} };
+  session._setMediaLikelyPlaying();
+  assert.ok(session.duplex.hangoverMs >= 900);
+});
+
+test('run_task starts the full agent with configured credentials instead of crashing', async () => {
+  let invocation;
+  const fakeSpawn = (command, args, options) => {
+    invocation = { command, args, options };
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    process.nextTick(() => {
+      proc.stdout.emit('data', Buffer.from('Task completed successfully.'));
+      proc.emit('close', 0, null);
+    });
+    return proc;
+  };
+
+  const result = await runFullAgent('Open the requested song', 'agent:main:test-task', null, fakeSpawn);
+
+  assert.equal(result, 'Task completed successfully.');
+  assert.equal(invocation.command, 'openclaw');
+  assert.deepEqual(invocation.args, [
+    'agent', '--session-key', 'agent:main:test-task',
+    '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\nOpen the requested song', '--agent', 'main'
+  ]);
+  assert.ok(Object.hasOwn(invocation.options.env, 'AZURE_OPENAI_KEY'));
+  assert.equal(invocation.options.env.JARVIS_PROJECT_DIR.endsWith('OPEN_CREW_JARVIS'), true);
+  assert.equal(invocation.options.timeout, 180000);
+});
+
 test('recall_memory tool returns hybrid memory results to the realtime conversation', async () => {
   const sent = [];
   const calls = [];
@@ -179,15 +393,13 @@ test('recall_memory tool returns hybrid memory results to the realtime conversat
 
 test('optional external TTS failure falls back to realtime read-only playback', async () => {
   const session = new RealtimeSession({
-    expertAnswer: async () => 'Prepared Astra answer.',
     speakText: async () => { throw new Error('tts unavailable'); }
   });
   const sent = [];
   session.ws = { send: raw => sent.push(JSON.parse(raw)) };
   session._flushPlayback = () => {};
 
-  session._acceptTranscript('Analyze how we should plan today.');
-  await new Promise(resolve => setImmediate(resolve));
+  await session._deliverSpokenAnswer('Prepared Astra answer.');
 
   const response = sent.find(message => message.type === 'response.create');
   assert.match(response.response.instructions, /Prepared Astra answer/);
@@ -278,7 +490,51 @@ test('injectable authoritative recovery can replace a native transcript', async 
   assert.ok(sent.some(message => message.type === 'conversation.item.delete' && message.item_id === 'bad-audio-item'));
   assert.ok(sent.some(message => message.type === 'conversation.item.create' && message.item.content[0].text === 'Telegramni yop'));
   assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
-  assert.equal(sent.find(message => message.type === 'response.create').response.tool_choice, 'auto');
+  assert.match(sent.find(message => message.type === 'response.create').response.instructions, /natural English by default/i);
+});
+
+test('wake recovery selects an Uzbek direct action over a wrong native transcript', async () => {
+  const actions = [];
+  const transcripts = [];
+  const session = new RealtimeSession({
+    authoritativeTranscribe: async () => ({ text: 'Chrome ni och', confidence: 0.94 }),
+    fastActionRunner: async id => { actions.push(id); return { status: 'ok', message: 'Chrome ochildi' }; },
+    speakText: async () => {}
+  });
+  session.ws = { send() {} };
+  session._flushPlayback = () => {};
+  session.on('user_transcript', text => transcripts.push(text));
+
+  session._beginAuthoritativeTranscription({ chunks: [Buffer.alloc(6400, 2)] });
+  session._pendingAuthoritativeTurn.native = { text: 'From Nodge.', itemId: 'wrong-native' };
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(transcripts, ['Chrome ni och']);
+  assert.deepEqual(actions, ['open:chrome']);
+});
+
+test('wake first turn waits for authoritative STT despite a confident wrong native transcript', async () => {
+  let finishAuthoritative;
+  const accepted = [];
+  const session = new RealtimeSession({
+    requireAuthoritativeFirstTurn: true,
+    authoritativeTranscribe: () => new Promise(resolve => { finishAuthoritative = resolve; })
+  });
+  session.ws = { send() {} };
+  session._flushPlayback = () => {};
+  session.on('user_transcript', text => accepted.push(text));
+
+  session._beginAuthoritativeTranscription({ chunks: [Buffer.alloc(6400, 2)] });
+  session._onMessage({ data: JSON.stringify({
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'wrong-native', transcript: 'open the telegram hey jarvis chrome notch'
+  }) });
+  assert.deepEqual(accepted, []);
+
+  finishAuthoritative({ text: 'Chrome ni och', confidence: 0.94 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(accepted, ['Chrome ni och']);
 });
 
 test('short unambiguous local actions use native STT without waiting for Uzbek STT', async () => {
@@ -455,7 +711,7 @@ test('fast desktop actions do not enter the slower grounding path', () => {
   assert.equal(needsContextGrounding('Oldingi loyiha nega ishlamay qolgan?'), true);
 });
 
-test('generic reasoning skips grounding and carries recent conversation to expert', async () => {
+test('generic reasoning skips grounding and streams through Realtime', async () => {
   const calls = [];
   const session = new RealtimeSession({
     groundingProvider: async () => {
@@ -476,12 +732,10 @@ test('generic reasoning skips grounding and carries recent conversation to exper
   await new Promise(resolve => setImmediate(resolve));
 
   assert.equal(calls.some(call => call[0] === 'grounding'), false);
-  assert.equal(calls[0][0], 'expert');
-  assert.match(calls[0][1], /Node\.js haqida gaplashyapmiz/);
-  assert.match(calls[0][1], /Current question: Nega event loop bloklanadi/);
-  assert.equal(calls[0][2], '');
+  assert.equal(calls.some(call => call[0] === 'expert'), false);
   const response = sent.find(message => message.type === 'response.create');
-  assert.match(response.response.instructions, /Event loop/);
+  assert.equal(response.response.tool_choice, 'auto');
+  assert.match(response.response.instructions, /latest turn/i);
 });
 
 test('safe common voice commands map to deterministic fast actions', () => {
@@ -590,6 +844,22 @@ test('server VAD cannot cancel playback without locally confirmed barge-in', () 
   assert.equal(flushed, 1);
 });
 
+test('provider VAD acknowledgement does not cancel an already locally interrupted response twice', () => {
+  const session = new RealtimeSession();
+  const sent = [];
+  let flushed = 0;
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => { flushed++; };
+  session.assistantSpeaking = true;
+  session._bargeInEvidenceAt = Date.now();
+  session._responseInterrupted = true;
+
+  session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+
+  assert.equal(sent.some(message => message.type === 'response.cancel'), false);
+  assert.equal(flushed, 0);
+});
+
 test('playback requires sustained local speech before forwarding barge-in audio', () => {
   const session = new RealtimeSession();
   const sent = [];
@@ -597,6 +867,11 @@ test('playback requires sustained local speech before forwarding barge-in audio'
   session.assistantSpeaking = true;
   session.ws = { send: raw => sent.push(JSON.parse(raw)) };
   session._externalPlayProc = { kill() {} };
+  let flushed = 0;
+  session._flushPlayback = () => {
+    flushed++;
+    session._resetBargeInCandidate();
+  };
   let processed = 0;
   session.duplex.process = audio => {
     processed++;
@@ -612,11 +887,14 @@ test('playback requires sustained local speech before forwarding barge-in audio'
 
   session.feedAudio(chunk);
   session.feedAudio(chunk);
+  session.feedAudio(chunk);
 
   const appended = sent.filter(message => message.type === 'input_audio_buffer.append');
-  assert.equal(processed, 3);
+  assert.equal(processed, 4);
   assert.equal(appended.length, 1);
-  assert.equal(Buffer.from(appended[0].audio, 'base64').length, 14400);
+  assert.equal(Buffer.from(appended[0].audio, 'base64').length, 19200);
+  assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
+  assert.equal(flushed, 1);
   assert.ok(session._bargeInEvidenceAt > 0);
 });
 
@@ -626,17 +904,42 @@ test('a playback-noise chunk resets an unconfirmed barge-in candidate', () => {
   session.ready = true;
   session.assistantSpeaking = true;
   session.ws = { send: raw => sent.push(JSON.parse(raw)) };
-  const results = ['barge-in', 'playback-noise', 'barge-in', 'barge-in'];
+  const results = ['barge-in', 'playback-noise', 'playback-noise', 'barge-in'];
   session.duplex.process = audio => {
     const reason = results.shift();
     return { send: reason === 'barge-in', audio, reason, residualRms: 900, correlation: 0 };
   };
-  const chunk = Buffer.alloc(3200, 1);
+  const chunk = Buffer.alloc(3200, 1); // 100ms; playback noise exceeds the 80ms gap allowance
 
   for (let i = 0; i < 4; i++) session.feedAudio(chunk);
 
   assert.equal(sent.some(message => message.type === 'input_audio_buffer.append'), false);
   assert.equal(session._bargeInEvidenceAt, 0);
+});
+
+test('a brief energy dip does not lose a natural barge-in onset', () => {
+  const session = new RealtimeSession();
+  const sent = [];
+  session.ready = true;
+  session.assistantSpeaking = true;
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => session._resetBargeInCandidate();
+  const results = ['barge-in', 'playback-noise', 'barge-in', 'barge-in'];
+  session.duplex.process = audio => {
+    const reason = results.shift();
+    return { send: reason === 'barge-in', audio, reason, residualRms: 900, correlation: 0 };
+  };
+
+  const speechChunk = Buffer.alloc(1920, 1); // 60ms at 16kHz PCM16
+  const dipChunk = Buffer.alloc(1280, 1); // 40ms, below max gap
+  session.feedAudio(speechChunk);
+  session.feedAudio(dipChunk);
+  session.feedAudio(Buffer.alloc(3840, 1)); // 120ms
+  session.feedAudio(Buffer.alloc(6400, 1)); // 200ms; accumulated speech safely exceeds 360ms
+
+  assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
+  assert.equal(sent.filter(message => message.type === 'input_audio_buffer.append').length, 1);
+  assert.ok(session._bargeInEvidenceAt > 0);
 });
 
 test('external Azure TTS PCM is queued as playback reference', () => {

@@ -17,7 +17,12 @@ function commandForPid(pid) {
 
 function commandOwnsScript(command, scriptPath) {
   const script = path.resolve(scriptPath);
-  return String(command || '').split(/\s+/).some(arg => path.resolve(arg) === script);
+  const text = String(command || '').trim();
+  // A diagnostic shell (`sh -c "... jarvis_daemon.js ..."`) mentions service
+  // paths without owning them. Counting it as a service creates false duplicate
+  // alarms while `doctor` itself is running.
+  if (/(?:^|[\s/])(?:sh|bash|zsh)\s+-c(?:\s|$)/.test(text) || /(?:^|[\s/])node\s+(?:-[a-zA-Z]*e|--eval)(?:\s|$)/.test(text)) return false;
+  return text.split(/\s+/).some(arg => path.resolve(arg.replace(/^['"]|['"]$/g, '')) === script);
 }
 
 function findMatchingProcesses(scriptPath, options = {}) {

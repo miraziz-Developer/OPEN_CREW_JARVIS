@@ -4,11 +4,17 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { ok, inf, wrn } = require('./log');
 
+function parseWakeWorkerLine(line) {
+  const match = String(line || '').trim().match(/^DETECT\s+(?:(\S+)\s+)?([0-9]*\.?[0-9]+)$/);
+  if (!match) return null;
+  return { model: match[1] || 'hey_jarvis', score: Number(match[2]) };
+}
+
 // Bepul va to'liq lokal hey_jarvis modeli. Python worker ishlamay qolsa
 // daemon qulamaydi: Azure STT backup hotword ishlashda davom etadi.
 class OpenWakeWordDetector {
   constructor({ projectDir, pythonPath, env, sampleRate = 16000 } = {}) {
-    this.detected = false;
+    this.detected = null;
     this.ready = false;
     this.closed = false;
     this.lineBuffer = '';
@@ -22,7 +28,9 @@ class OpenWakeWordDetector {
         OPENWAKEWORD_STRONG_THRESHOLD: env('OPENWAKEWORD_STRONG_THRESHOLD') || '0.55',
         OPENWAKEWORD_CONFIRM_THRESHOLD: env('OPENWAKEWORD_CONFIRM_THRESHOLD') || '0.06',
         OPENWAKEWORD_CONFIRM_WINDOW_FRAMES: env('OPENWAKEWORD_CONFIRM_WINDOW_FRAMES') || '4',
-        OPENWAKEWORD_DIAGNOSTIC_FLOOR: env('OPENWAKEWORD_DIAGNOSTIC_FLOOR') || '0.03'
+        OPENWAKEWORD_CONFIRM_COUNT: env('OPENWAKEWORD_CONFIRM_COUNT') || '2',
+        OPENWAKEWORD_DIAGNOSTIC_FLOOR: env('OPENWAKEWORD_DIAGNOSTIC_FLOOR') || '0.03',
+        OPENWAKEWORD_MODELS: env('OPENWAKEWORD_MODELS') || 'hey_jarvis'
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -49,10 +57,12 @@ class OpenWakeWordDetector {
     for (const line of lines) {
       if (line === 'READY') {
         this.ready = true;
-        ok('openWakeWord "hey Jarvis" modeli tayyor (lokal, bepul)');
+        ok('openWakeWord lokal worker tayyor (bepul)');
+      } else if (line.startsWith('MODELS ')) {
+        ok('openWakeWord modellar: ' + line.slice(7));
       } else if (line.startsWith('DETECT ')) {
-        this.detected = true;
-        inf('openWakeWord score=' + line.slice(7));
+        this.detected = parseWakeWorkerLine(line);
+        if (this.detected) inf('openWakeWord model=' + this.detected.model + ' score=' + this.detected.score.toFixed(4));
       } else if (line.startsWith('SCORE ')) {
         inf('openWakeWord candidate score=' + line.slice(6));
       } else if (line.startsWith('ERROR ')) {
@@ -66,7 +76,7 @@ class OpenWakeWordDetector {
       this.worker.stdin.write(pcm16Buffer);
     }
     const result = this.detected;
-    this.detected = false;
+    this.detected = null;
     return result;
   }
 
@@ -77,4 +87,4 @@ class OpenWakeWordDetector {
   }
 }
 
-module.exports = { OpenWakeWordDetector };
+module.exports = { OpenWakeWordDetector, parseWakeWorkerLine };

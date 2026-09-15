@@ -54,7 +54,7 @@ function createUrgentCheckJob({ projectDir, localDateStr, proactivePolicy, askAg
       ok('🚨 Shoshilinch: ' + summary.substring(0, 80));
       playUrgentSound();
       sendTelegram('🚨 ' + summary);
-      const audio = await ttsToFile(('Diqqat. ' + summary).substring(0, 300));
+      const audio = await ttsToFile(('Attention. ' + summary).substring(0, 300));
       if (audio) { try { execSync('afplay "' + audio + '"'); } catch (e) {} }
     }
   }

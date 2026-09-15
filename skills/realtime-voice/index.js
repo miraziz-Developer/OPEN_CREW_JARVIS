@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * REALTIME VOICE — English-first low-latency voice pipeline.
+ * REALTIME VOICE — multilingual low-latency voice pipeline.
  *
- * gpt-realtime-2.1 handles English STT, VAD, conversation and speech directly.
- * Complex/grounded questions retain gpt-6-astra reasoning and are spoken by
+ * Voice Live gpt-realtime (primary) or gpt-realtime-1.5 (fallback) handles
+ * STT, VAD, conversation and speech directly.
+ * Complex/grounded questions use the tiered Grok/GPT-5.6 Sol reasoning path and are spoken by
  * the same Realtime session, avoiding a second STT/TTS provider round-trip.
  *
  * Murakkab, ko'p bosqichli vazifalar (brauzer, fayl, ekran) uchun
@@ -14,17 +15,21 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const { promisify } = require('util');
 const EventEmitter = require('events');
+const WebSocketClient = require('ws');
 const { DuplexVoiceEngine } = require('../../core/duplex-voice-engine');
 const { PcmPlaybackBuffer } = require('../../core/pcm-playback-buffer');
 const { classifyUserTurn, isRepeatedResponse } = require('../../core/voice-turn-policy');
 const { chooseTranscript, authoritativeTimeoutMs, nativeIsConfident } = require('../../core/stt-recovery');
-const { loadCalibration, resolveCalibratedNumber } = require('../../core/audio-calibration');
+const { loadCalibration, resolveCalibratedNumber, resolveBargeInResidual } = require('../../core/audio-calibration');
 const { ConversationContext } = require('../../core/conversation-context');
 const { ActionSafetyPolicy } = require('../../core/action-safety-policy');
+const { buildVoiceProviders } = require('../../core/voice-provider');
 
 const { PROJECT_DIR } = require('../../core/paths');
+const execFileAsync = promisify(execFile);
 let ENV = '';
 try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (error) {
   if (error.code !== 'ENOENT') throw error;
@@ -37,11 +42,7 @@ function env(k, def) {
 const ENV_VALUES = Object.fromEntries(ENV.split(/\r?\n/).map(line => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)).filter(Boolean).map(match => [match[1], match[2].trim()]));
 const AUDIO_CALIBRATION = loadCalibration(path.join(PROJECT_DIR, '.run', 'audio-calibration.json'));
 
-const KEY = env('AZURE_OPENAI_KEY');
-const RAW_ENDPOINT = (env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '');
-const BASE = RAW_ENDPOINT.replace(/\/openai\/v1$/, '').replace(/^https:/, 'wss:');
-const DEPLOYMENT = env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1');
-const API_VERSION = '2024-10-01-preview';
+const VOICE_PROVIDERS = buildVoiceProviders(env);
 
 // Media (video/musiqa) "hali ijro etilyapti" holati — avval bu faqat
 // bitta RealtimeSession obyekti ichida (xotirada) saqlanardi. Muammo:
@@ -57,11 +58,11 @@ const API_VERSION = '2024-10-01-preview';
 const MEDIA_STATE_FILE = path.join(PROJECT_DIR, '.media-playing-state.json');
 const MEDIA_STATE_TTL_MS = 40 * 60 * 1000; // 40 daqiqadan keyin eskirgan deb hisoblanadi (video/qo'shiq odatda shuncha davom etmaydi)
 function saveMediaState() {
-  try { fs.writeFileSync(MEDIA_STATE_FILE, JSON.stringify({ active: true, setAt: Date.now() })); } catch (e) {}
+  fs.promises.writeFile(MEDIA_STATE_FILE, JSON.stringify({ active: true, setAt: Date.now() })).catch(() => {});
 }
-function isMediaRecentlyLikelyPlaying() {
+async function isMediaRecentlyLikelyPlaying() {
   try {
-    const s = JSON.parse(fs.readFileSync(MEDIA_STATE_FILE, 'utf8'));
+    const s = JSON.parse(await fs.promises.readFile(MEDIA_STATE_FILE, 'utf8'));
     return s.active && (Date.now() - s.setAt) < MEDIA_STATE_TTL_MS;
   } catch (e) { return false; }
 }
@@ -91,7 +92,6 @@ function checkSystemAudioPlaying() {
 // OpenAI realtime ovozlari ichida `cedar` va `marin` eng sifatli tavsiya
 // etilgan avlodga kiradi. JARVIS uchun tiniqroq, vazmin erkak ohangli cedar
 // tanlandi. .env orqali xohlansa keyin A/B almashtirish mumkin.
-const VOICE = env('AZURE_REALTIME_VOICE', 'cedar');
 const VOICE_STYLE = env('JARVIS_VOICE_STYLE', 'cinematic-robot');
 // Empty lets the Realtime provider detect the language for multilingual turns.
 const TRANSCRIPTION_LANGUAGE = env('REALTIME_TRANSCRIPTION_LANGUAGE', '');
@@ -102,13 +102,17 @@ const TRANSCRIPTION_MODEL = env('REALTIME_TRANSCRIPTION_MODEL', 'gpt-4o-transcri
 const MIC_MUTE_GRACE_MS = parseInt(env('MIC_MUTE_GRACE_MS'), 10) || 900;
 const NORMAL_VAD_THRESHOLD = parseFloat(env('REALTIME_VAD_THRESHOLD')) || 0.55;
 const MEDIA_VAD_THRESHOLD = parseFloat(env('REALTIME_MEDIA_VAD_THRESHOLD')) || 0.72;
-const NORMAL_VAD_SILENCE_MS = parseInt(env('REALTIME_VAD_SILENCE_MS'), 10) || 420;
+// Fn/hotword orqali boshlangan oddiy suhbatda turn tez yopilishi kerak: model
+// foydalanuvchi gapini tugatganidan so'ng 300 ms ichida ishga tushadi. Bu
+// tabiiy qisqa pauzalarni ham yetarli saqlaydi, media rejimi esa pastda alohida
+// konservativ profil bilan himoyalangan.
+const NORMAL_VAD_SILENCE_MS = parseInt(env('REALTIME_VAD_SILENCE_MS'), 10) || 300;
 const MEDIA_VAD_SILENCE_MS = parseInt(env('REALTIME_MEDIA_VAD_SILENCE_MS'), 10) || 750;
 // Realtime'da output token budjeti matn va audioni birga qoplaydi. Live
 // telemetry 160 tokenli 7–13 so'z javoblarning ham `max_output_tokens` bilan
 // kesilganini ko'rsatdi. Lo'ndalik prompt/policy orqali boshqariladi; texnik
 // limit esa tayyor gapni o'rtasida uzmasligi kerak.
-const REALTIME_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_MAX_RESPONSE_TOKENS'), 10) || 512;
+const REALTIME_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_MAX_RESPONSE_TOKENS'), 10) || 1024;
 // Realtime audio tokenlari matn tokenlaridan ancha tez sarflanadi. 40 token
 // hatto "Hozir soat 20:20" kabi qisqa tasdiqni ham o'rtasida kesib qo'ydi.
 // Fast-action javobi qisqa bo'lsa-da, audio to'liq ijro etilishi uchun alohida
@@ -117,18 +121,34 @@ const REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_FAST_ACT
 // Realtime audio chunklari tarmoqda notekis kelishi mumkin. Audio darhol
 // ijro qilinsa sox pipe vaqti-vaqti bilan och qolib, gap o'rtasida jimlik
 // paydo qiladi. Kichik boshlang'ich zaxira bu jitter'ni yutadi.
-const PLAYBACK_PREBUFFER_MS = Math.max(0, parseInt(env('REALTIME_PLAYBACK_PREBUFFER_MS', '240'), 10) || 0);
-const PLAYBACK_MAX_WAIT_MS = Math.max(0, parseInt(env('REALTIME_PLAYBACK_MAX_WAIT_MS', '320'), 10) || 0);
+const PLAYBACK_PREBUFFER_MS = Math.max(0, parseInt(env('REALTIME_PLAYBACK_PREBUFFER_MS', '160'), 10) || 0);
+const PLAYBACK_MAX_WAIT_MS = Math.max(0, parseInt(env('REALTIME_PLAYBACK_MAX_WAIT_MS', '220'), 10) || 0);
 const DUPLEX_ECHO_THRESHOLD = parseFloat(env('DUPLEX_ECHO_THRESHOLD')) || 0.72;
-const DUPLEX_BARGE_IN_RMS = resolveCalibratedNumber('DUPLEX_BARGE_IN_RMS', ENV_VALUES, AUDIO_CALIBRATION, 650);
+const DUPLEX_BARGE_IN_RMS = resolveBargeInResidual(ENV_VALUES, AUDIO_CALIBRATION, 900);
 const DUPLEX_NOISE_FLOOR = resolveCalibratedNumber('DUPLEX_NOISE_FLOOR', ENV_VALUES, AUDIO_CALIBRATION, 80);
 const DUPLEX_NOISE_MULTIPLIER = resolveCalibratedNumber('DUPLEX_NOISE_MULTIPLIER', ENV_VALUES, AUDIO_CALIBRATION, 2.4);
-const DUPLEX_HANGOVER_MS = parseInt(env('DUPLEX_HANGOVER_MS'), 10) || 650;
+// Lokal gate server VAD so'ragan jimlikdan oldin audio yuborishni to'xtatsa,
+// provider speech_stopped chiqarmaydi va turn idle timeoutgacha ochiq qoladi.
+// Media VAD oynasi ustiga bitta daemon audio step (150 ms) qo'shamiz. Oddiy
+// dialog esa o'zining qisqaroq hangover'idan foydalanadi; aks holda 900 ms
+// local gate 300 ms server VAD optimizatsiyasini samarasiz qilib qo'yardi.
+const NORMAL_DUPLEX_HANGOVER_MS = Math.max(
+  parseInt(env('REALTIME_NORMAL_DUPLEX_HANGOVER_MS'), 10) || 450,
+  NORMAL_VAD_SILENCE_MS + 150
+);
+const MEDIA_DUPLEX_HANGOVER_MS = Math.max(
+  parseInt(env('DUPLEX_HANGOVER_MS'), 10) || 900,
+  MEDIA_VAD_SILENCE_MS + 150
+);
 const DUPLEX_MAX_ECHO_LAG_MS = resolveCalibratedNumber('DUPLEX_MAX_ECHO_LAG_MS', ENV_VALUES, AUDIO_CALIBRATION, 180);
 // A single loud echo residual must not interrupt Jarvis. Hold candidate audio
 // locally until near-end speech remains continuous for this long, then replay
 // the complete candidate to server VAD so the user's first syllable is kept.
-const BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_BARGE_IN_CONFIRM_MS'), 10) || 300;
+const BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_BARGE_IN_CONFIRM_MS'), 10) || 360;
+// Tabiiy nutq boshidagi undosh yoki juda qisqa pauza energiyani vaqtincha
+// pasaytirishi mumkin. Candidate'ni kichik oynada saqlaymiz; uzoq uzilish esa
+// alohida echo/shovqin bo'lishi mumkinligi uchun uni reset qiladi.
+const BARGE_IN_MAX_GAP_MS = parseInt(env('REALTIME_BARGE_IN_MAX_GAP_MS'), 10) || 80;
 
 const IN_RATE = 16000;   // jarvis_daemon.js mikrofon oqimi shu tezlikda
 const OUT_RATE = 24000;  // Realtime API kutgan/qaytaradigan tezlik
@@ -149,6 +169,51 @@ function resample16to24(pcm16) {
     out.writeInt16LE(Math.max(-32768, Math.min(32767, s)), i * 2);
   }
   return out;
+}
+
+function buildSessionUpdate(provider, options) {
+  const turnDetection = options.startMediaAware
+    ? { type: 'server_vad', threshold: MEDIA_VAD_THRESHOLD, silence_duration_ms: MEDIA_VAD_SILENCE_MS, prefix_padding_ms: 300, create_response: false, interrupt_response: false }
+    : { type: 'server_vad', threshold: NORMAL_VAD_THRESHOLD, silence_duration_ms: NORMAL_VAD_SILENCE_MS, prefix_padding_ms: 300, create_response: false, interrupt_response: false };
+  const transcription = {
+    model: TRANSCRIPTION_MODEL,
+    ...(TRANSCRIPTION_LANGUAGE ? { language: TRANSCRIPTION_LANGUAGE } : {})
+  };
+  const common = {
+    instructions: options.instructions,
+    tools: options.tools,
+    tool_choice: 'auto'
+  };
+
+  if (provider.id === 'azure-realtime') {
+    return {
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        ...common,
+        output_modalities: ['audio'],
+        audio: {
+          input: { format: { type: 'audio/pcm', rate: 24000 }, transcription, turn_detection: turnDetection },
+          output: { format: { type: 'audio/pcm', rate: 24000 }, voice: provider.voice }
+        },
+        max_output_tokens: REALTIME_MAX_RESPONSE_TOKENS
+      }
+    };
+  }
+
+  return {
+    type: 'session.update',
+    session: {
+      ...common,
+      modalities: ['text', 'audio'],
+      voice: provider.voice,
+      input_audio_format: 'pcm16',
+      output_audio_format: 'pcm16',
+      max_response_output_tokens: REALTIME_MAX_RESPONSE_TOKENS,
+      turn_detection: turnDetection,
+      input_audio_transcription: transcription
+    }
+  };
 }
 
 // Suhbat BOSHLANISHIDAN oldin, foydalanuvchi so'nggi soatlarda nima qilgani
@@ -222,10 +287,11 @@ function profileSummaryBlock() {
 // yo'riqnomaning 69% ini egallardi va har bir javobda qayta qayta ishlanardi.
 const SOUL_VOICE_SECTIONS = ['Klondek harakat qilish', 'Chegaralar', 'Uslub', 'Asl Maqsad'];
 const SOUL_FULL_FOR_VOICE = (env('SOUL_FULL_FOR_VOICE') || 'false') === 'true'; // A/B sinov uchun
+let SOUL_FOR_VOICE = '';
 
 function loadSoulForVoice() {
-  let raw = '';
-  try { raw = fs.readFileSync(path.join(PROJECT_DIR, 'SOUL.md'), 'utf8'); } catch (e) { return ''; }
+  const raw = SOUL_FOR_VOICE;
+  if (!raw) return '';
   if (SOUL_FULL_FOR_VOICE) return raw;
   const out = [];
   // Sarlavhagacha bo'lgan kirish qismi (Jarvis kimligi) — qisqa, saqlanadi
@@ -237,17 +303,18 @@ function loadSoulForVoice() {
   }
   return out.join('\n\n');
 }
+fs.promises.readFile(path.join(PROJECT_DIR, 'SOUL.md'), 'utf8').then(raw => { SOUL_FOR_VOICE = raw; }).catch(() => {});
 
 function loadLegacyInstructions() {
   const soul = loadSoulForVoice();
   const voiceStyle = '';
   const pronunciationBlock = '';
   return (
-      "You are Jarvis, the user's multilingual realtime voice assistant. Interpret incoming speech in the language the user speaks and reply naturally in that same language unless the user explicitly asks to switch languages. Preserve the user's language across short follow-up turns, including acknowledgements or continuations, rather than reverting to English. " +
-      "Be fast, natural, calm, precise, and conversational. Usually answer in one short sentence; use two short sentences only when needed. " +
+      "You are Jarvis, the user's English-speaking realtime voice assistant. Interpret all incoming speech as English and always reply in English. " +
+      "Be natural, calm, precise, and conversational. Speak at a measured, slightly slower-than-default pace with varied cadence and natural pauses. Usually answer in one short sentence; use two short sentences only when needed. " +
       "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
       "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
-      "Keep crisp consonants, measured rhythm, restrained emotion, and no theatrical growling or imitation of any real actor or copyrighted character. " +
+      "Keep the register low and full, with crisp consonants, measured rhythm, restrained emotion, and a subtle synthetic edge. Do not imitate any real actor or copyrighted character. " +
       "TOOLS: use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or any multi-step task; " +
       "use see_screen when the user asks about what is visible; use recall_memory for older personal context; use ask_expert for serious analysis. " +
       "Call fast tools silently and speak only their result. A run_task may receive one brief acknowledgement, then report the actual result when available. " +
@@ -327,16 +394,19 @@ function loadLegacyInstructions() {
 
 function loadInstructions() {
   return (
-    "You are Jarvis, the user's multilingual realtime voice assistant. Interpret incoming speech in the language the user speaks and reply naturally in that same language unless the user explicitly asks to switch languages. Preserve the user's language across short follow-up turns, including acknowledgements or continuations, rather than reverting to English. " +
-    "Be fast, natural, calm, precise, and conversational. Usually answer in one short sentence; use two short sentences only when needed. " +
-    "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
-    "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
-    "Keep crisp consonants, measured rhythm, restrained emotion, and never imitate a real actor or copyrighted character. " +
-    "TOOLS: use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
-    "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert for serious analysis. " +
-    "Call fast tools silently and speak only their result. Independent run_task calls may run in parallel; report each result when it finishes. " +
+    "You are Jarvis, the user's realtime voice assistant. English is the default response language: reply in natural English regardless of the language, accent, isolated foreign words, quoted text, transcription errors, or background audio in the user's speech. Do not automatically switch to Uzbek, Russian, or any other language. An explicit request to translate into a named language, or to speak or respond in a named language, is the only exception; fulfill that requested translation or language conversation, then return to English unless the user explicitly asks to continue in that language. " +
+    "Talk like an attentive, capable person: warm, direct, context-aware, and unforced. Never claim to be human. Use natural contractions, varied sentence length, and brief conversational reactions when they fit; avoid canned assistant phrases and robotic repetition. Prefer concise, colloquial spoken wording over formal written prose; say the useful thing first and stop when the answer is complete. " +
+    "Match the answer length to the need: keep simple replies short, but give enough detail to fully answer a real question. Do not force every reply into one sentence and never cut a thought short. " +
+    "Speak at a calm, comfortable pace with natural pauses and expressive but restrained intonation. Do not use a metallic, synthetic, announcer-like, or theatrical delivery. " +
+    "Never add unnecessary greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
+    "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
+    "Use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
+    "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert for serious analysis. Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
+    "Call fast tools silently and speak only their result. For a long run_task, one brief acknowledgement is acceptable, but never claim success until the tool returns a successful result. If a tool fails or only partially completes the work, say that plainly. " +
+    "Independent run_task calls may run in parallel; report each result when it finishes. Preserve confirmation requirements for destructive, external, or sensitive actions. " +
     "MEMORY: treat recent activity and the user profile below as facts you already remember. Use them naturally without mentioning memory files. " +
     "Resolve references such as 'that task' from recent context; if ambiguity could cause a wrong action, ask one concise clarification. " +
+    "During the same live session, treat each new utterance as a natural follow-up without requiring the user to say Jarvis again; preserve context and resolve short follow-ups such as 'yana-chi?' or 'what about tomorrow?'. " +
     "Never invent a remembered fact. Adapt subtly to urgency or mood audible in the user's voice without explicitly commenting on emotion." +
     recentContextBlock() + profileSummaryBlock()
   );
@@ -402,12 +472,12 @@ function buildTools() {
     name: 'see_screen',
     description: "Ekranda hozir nima borligini KO'RISH kerak bo'lganda shuni chaqiring — rasm to'g'ridan-to'g'ri " +
       "sizga ko'rsatiladi va uni o'zingiz tahlil qilasiz. Qachon: foydalanuvchi \"bu nima\", \"shu xato nima\", " +
-      "\"ekranimda nima ko'rinyapti\", \"buni o'qib ber\", \"shu yerda nima yozilgan\" kabi KO'RISHGA oid narsa " +
+      "\"what is that\", \"what's this\", \"ekranimda nima ko'rinyapti\", \"buni o'qib ber\", \"shu yerda nima yozilgan\" kabi KO'RISHGA oid narsa " +
       "so'raganda, yoki uning gapini tushunish uchun ekran konteksti kerak bo'lganda. Bu `run_task`dan ANCHA " +
       "TEZROQ — ekranni ko'rish uchun HECH QACHON run_task ishlatmang, doim shuni ishlating. Eslatma: bu faqat " +
       "KO'RADI, hech narsani bosmaydi/o'zgartirmaydi — ekranda biror amal bajarish kerak bo'lsa `run_task` kerak. " +
       "MUHIM: chaqirishdan oldin \"hozir qarayman\", \"bir zum ko'ray\" kabi HECH NARSA AYTMANG — jim chaqiring va " +
-      "rasmni ko'rgach TO'G'RIDAN-TO'G'RI javobning o'zini ayting. Bu oraliq gap ortiqcha bir necha soniya " +
+      "rasmni ko'rgach TO'G'RIDAN-TO'G'RI javobning o'zini ayting. Rasm dalilisiz obyekt nomini taxmin qilmang; background audio yoki matn parchasidan xulosa chiqarmang. Bu oraliq gap ortiqcha bir necha soniya " +
       "kechikish qo'shadi va foydalanuvchini bekorga kutdiradi.",
     parameters: { type: 'object', properties: {}, required: [] }
   });
@@ -504,10 +574,13 @@ const RUN_TASK_TIMEOUT_MS = parseInt(env('RUN_TASK_TIMEOUT_MS'), 10) || 180000;
 // onProc — ishga tushgan jarayonni chaqiruvchiga qaytaradi, shunda uni
 // keyinroq to'xtatish (foydalanuvchi "to'xtat" desa) yoki suhbat tugaganda
 // tozalash mumkin bo'ladi.
-function runFullAgent(description, sessionKey, onProc) {
+function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn) {
   return new Promise((resolve) => {
-    const proc = spawn('openclaw', ['agent', '--session-key', sessionKey, '--message', description, '--agent', 'main'], {
-      cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: KEY }, timeout: RUN_TASK_TIMEOUT_MS
+    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
+    const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', englishOnly + description, '--agent', 'main'], {
+      cwd: PROJECT_DIR,
+      env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR },
+      timeout: RUN_TASK_TIMEOUT_MS
     });
     if (typeof onProc === 'function') onProc(proc);
     let out = '';
@@ -544,7 +617,9 @@ function askExpert(question, callId, grounding = '') {
       "USER QUESTION:\n" + question;
     const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:jarvis-expert-' + callId,
       '--message', prompt, '--agent', 'main'], {
-      cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: KEY }, timeout: 45000
+      cwd: PROJECT_DIR,
+      env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR },
+      timeout: 45000
     });
     let out = '';
     proc.stdout.on('data', d => out += d);
@@ -727,6 +802,7 @@ class RealtimeSession extends EventEmitter {
     this._bargeInEvidenceAt = 0;
     this._bargeInCandidate = [];
     this._bargeInCandidateMs = 0;
+    this._bargeInGapMs = 0;
     this._bargeInConfirmed = false;
     this._externalPlaybackCancelled = false;
     this.userTranscript = '';
@@ -737,18 +813,25 @@ class RealtimeSession extends EventEmitter {
     this._firstAudioObserved = false;
     this._playbackStartedForTurn = false;
     this._pendingFnArgs = {};
+    this.provider = null;
+    this._providerIndex = -1;
+    this._connecting = false;
     this._mediaModeActive = false;
-    // Fn push-to-talk foydalanuvchining aynan Jarvisga gapirmoqchi ekanini
-    // tasdiqlaydi. Media ijro etilayotgan bo'lsa ham birinchi mazmunli turnni
-    // til-marker talab qilmasdan o'tkazamiz; echo/noise/ack filtrlari qoladi.
+    // Fn hands-free suhbatining o'zi foydalanuvchining aynan Jarvisga
+    // murojaatini butun sessiya uchun tasdiqlaydi. Media ijro etilayotgan
+    // bo'lsa ham follow-up turnlarga til-marker talab qilmaymiz; echo/noise/ack
+    // filtrlari esa hamon qo'llanadi. Wake-word trigger esa avvalgidek faqat
+    // birinchi mazmunli turn uchun bir martalik bypass oladi.
+    this._explicitUserSession = Boolean(options.explicitUserSession);
     this._explicitUserTurnPending = Boolean(options.explicitUserTrigger);
     this._addressedWakePending = Boolean(options.addressedWakeTrigger);
     this._initialTranscript = String(options.initialTranscript || '').trim();
-    // English mode accepts the native Realtime transcript immediately. The
-    // legacy authoritative hook remains injectable only for isolated recovery
-    // tests; production no longer supplies it or waits on a second STT call.
+    // Native Realtime transcription is accepted immediately. The legacy
+    // authoritative hook remains injectable only for isolated recovery tests;
+    // production no longer supplies it or waits on a second STT call.
     this._authoritativeTranscribe = typeof options.authoritativeTranscribe === 'function'
       ? options.authoritativeTranscribe : null;
+    this._requireAuthoritativeFirstTurn = Boolean(options.requireAuthoritativeFirstTurn);
     this._sttPreRoll = [];
     this._sttPreRollBytes = 0;
     this._sttTurn = null;
@@ -763,6 +846,9 @@ class RealtimeSession extends EventEmitter {
       ? options.speakText : null;
     this._fastActionRunner = typeof options.fastActionRunner === 'function'
       ? options.fastActionRunner : require('../fast-actions').runFastAction;
+    this._communicationRunner = typeof options.communicationRunner === 'function'
+      ? options.communicationRunner
+      : intent => require('../communications').searchYouTube(intent.query);
     this._memoryProvider = options.memoryProvider || require('../memory');
     this._conversationContext = options.conversationContext || new ConversationContext();
     this._actionSafety = options.actionSafetyPolicy || new ActionSafetyPolicy({
@@ -779,7 +865,7 @@ class RealtimeSession extends EventEmitter {
     this.duplex = new DuplexVoiceEngine({
       sampleRate: OUT_RATE, echoThreshold: DUPLEX_ECHO_THRESHOLD,
       bargeInResidual: DUPLEX_BARGE_IN_RMS, noiseFloor: DUPLEX_NOISE_FLOOR,
-      noiseMultiplier: DUPLEX_NOISE_MULTIPLIER, hangoverMs: DUPLEX_HANGOVER_MS,
+      noiseMultiplier: DUPLEX_NOISE_MULTIPLIER, hangoverMs: NORMAL_DUPLEX_HANGOVER_MS,
       maxEchoLagMs: DUPLEX_MAX_ECHO_LAG_MS
     });
   }
@@ -795,16 +881,34 @@ class RealtimeSession extends EventEmitter {
   }
 
   connect() {
-    if (!KEY || !RAW_ENDPOINT) { this.emit('error', new Error('AZURE_OPENAI_KEY/ENDPOINT yo\'q')); return; }
-    const url = BASE + '/openai/realtime?api-version=' + API_VERSION + '&deployment=' + DEPLOYMENT + '&api-key=' + KEY;
-    this.ws = new WebSocket(url);
+    if (!VOICE_PROVIDERS.length) {
+      this.emit('error', new Error('AZURE_VOICELIVE_* yoki AZURE_REALTIME_* provider sozlanmagan'));
+      return;
+    }
     this._startPlayback();
+    this._connectProvider(0);
+  }
+
+  _connectProvider(index) {
+    const provider = VOICE_PROVIDERS[index];
+    if (!provider || this.closed) {
+      this._connecting = false;
+      this.emit('error', new Error('Barcha realtime voice providerlari ishlamadi'));
+      return;
+    }
+    this._providerIndex = index;
+    this.provider = provider;
+    this._connecting = true;
+    const socket = new WebSocketClient(provider.url, { headers: provider.headers, handshakeTimeout: 10000 });
+    this.ws = socket;
 
     // Oldingi (endi tugagan) suhbatda video/musiqa ishga tushirilgan bo'lsa
     // va hali eskirmagan bo'lsa, YANGI suhbat ham boshidanoq yuqori
     // chegara bilan boshlanadi — pastki izohga qarang (MEDIA_STATE_FILE).
-    const startMediaAware = isMediaRecentlyLikelyPlaying();
-    if (startMediaAware) this._mediaModeActive = true;
+    const startMediaAware = this._mediaModeActive;
+    isMediaRecentlyLikelyPlaying().then(playing => {
+      if (playing === true && !this.closed) this._setMediaLikelyPlaying();
+    }).catch(() => {});
     // Fayl holati eskirishi yoki foydalanuvchi videoni o'zi ochishi mumkin.
     // Tizim signalini parallel tekshiramiz; ulanishni kutdirib qo'ymaymiz.
     checkSystemAudioPlaying().then(playing => {
@@ -812,54 +916,32 @@ class RealtimeSession extends EventEmitter {
     }).catch(() => {});
 
     this.ws.addEventListener('open', () => {
-      this.ws.send(JSON.stringify({
-        type: 'session.update',
-        session: {
-          modalities: ['text', 'audio'],
-          instructions: loadInstructions(),
-          voice: VOICE,
-          input_audio_format: 'pcm16',
-          output_audio_format: 'pcm16',
-          max_response_output_tokens: REALTIME_MAX_RESPONSE_TOKENS,
-          // Oddiy suhbatda 420ms — tabiiy qisqa pauzani saqlab, javobni tezroq
-          // boshlaydi. Media rejimi fon nutqidan himoya uchun ehtiyotkorroq (750ms).
-          // `create_response:false` juda muhim: server_vad aks holda
-          // transkript tayyor bo'lishidan OLDIN javob yaratib yuboradi. Policy
-          // keyin fon/media gapini bloklasa ham ovozning bir qismi allaqachon
-          // karnayga ketgan bo'ladi. Endi VAD faqat audio turnni commit qiladi;
-          // response.create faqat transcript gate qabul qilgach yuboriladi.
-          turn_detection: startMediaAware
-            ? { type: 'server_vad', threshold: MEDIA_VAD_THRESHOLD, silence_duration_ms: MEDIA_VAD_SILENCE_MS, prefix_padding_ms: 300, create_response: false, interrupt_response: false }
-            : { type: 'server_vad', threshold: NORMAL_VAD_THRESHOLD, silence_duration_ms: NORMAL_VAD_SILENCE_MS, prefix_padding_ms: 300, create_response: false, interrupt_response: false },
-          // English is explicitly pinned so language auto-detection cannot add
-          // multilingual ambiguity or delay to the transcript gate.
-          input_audio_transcription: {
-            model: TRANSCRIPTION_MODEL,
-            ...(TRANSCRIPTION_LANGUAGE ? { language: TRANSCRIPTION_LANGUAGE } : {})
-          },
-          tools: buildTools(),
-          tool_choice: 'auto'
-        }
-      }));
-      this.ready = true;
-      this.emit('ready');
-      if (this._initialTranscript) {
-        const initial = this._initialTranscript;
-        this._initialTranscript = '';
-        this._acceptTranscript(initial, { source: 'wake-stt', replaceAudioItem: true });
-      }
+      this._connecting = false;
+      this.ws.send(JSON.stringify(buildSessionUpdate(provider, {
+        startMediaAware: this._mediaModeActive,
+        instructions: loadInstructions(),
+        tools: buildTools()
+      })));
     });
 
     this.ws.addEventListener('message', (ev) => this._onMessage(ev));
     this.ws.addEventListener('error', (ev) => {
+      if (this.ws !== socket) return;
       // Node'ning ErrorEvent'ida .message/.error xususiyatlari ko'pincha
       // enumerable emas — JSON.stringify(ev) shunchaki "{}" berardi, hech
       // narsa ko'rsatmasdan. Xususiyatlarga to'g'ridan-to'g'ri murojaat
       // qilamiz.
       const reason = ev?.error?.message || ev?.message || ev?.error?.code || ev?.type || 'noma\'lum (ws close race bo\'lishi mumkin)';
-      this.emit('error', new Error('WebSocket xatolik: ' + reason));
+      if (!this.ready && index + 1 < VOICE_PROVIDERS.length) {
+        this.emit('telemetry', 'provider.fallback', { from: provider.id, to: VOICE_PROVIDERS[index + 1].id, reason });
+        try { this.ws.close(); } catch (_) {}
+        this._connectProvider(index + 1);
+        return;
+      }
+      this.emit('error', new Error(provider.id + ' WebSocket xatolik: ' + reason));
     });
     this.ws.addEventListener('close', () => {
+      if (this.ws !== socket) return;
       this.closed = true;
       this.cancelRunningTasks();
       this._stopPlayback();
@@ -872,6 +954,18 @@ class RealtimeSession extends EventEmitter {
     try { msg = JSON.parse(ev.data); } catch (e) { return; }
 
     switch (msg.type) {
+      case 'session.updated':
+        if (!this.ready) {
+          this.ready = true;
+          this.emit('provider', { id: this.provider?.id || 'unknown' });
+          this.emit('ready');
+          if (this._initialTranscript) {
+            const initial = this._initialTranscript;
+            this._initialTranscript = '';
+            this._acceptTranscript(initial, { source: 'wake-stt', replaceAudioItem: true });
+          }
+        }
+        break;
       case 'input_audio_buffer.speech_started':
         // Serverga avtomatik interrupt qilishga ruxsat berilmaydi: xona aks-
         // sadosi server VAD'dan o'tib qolsa, tayyor javob o'rtasida kesilmasin.
@@ -879,11 +973,16 @@ class RealtimeSession extends EventEmitter {
         // residual emas deb tasdiqlagan audio bo'lsa qo'lda barge-in qilamiz.
         const confirmedBargeIn = this.assistantSpeaking &&
           Date.now() - this._bargeInEvidenceAt <= 1200;
-        if (confirmedBargeIn) {
+        if (confirmedBargeIn && !this._responseInterrupted) {
           this._responseInterrupted = true;
           try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
           this._flushPlayback();
           this.emit('telemetry', 'barge_in.confirmed', {});
+        } else if (confirmedBargeIn) {
+          // Lokal duplex gate playback'ni allaqachon kesgan. Provider VAD
+          // lifecycle eventini qabul qilamiz, ammo response.cancel/flush'ni
+          // takrorlab yangi playback jarayoni bilan poyga yaratmaymiz.
+          this.emit('telemetry', 'barge_in.provider_acknowledged', {});
         } else if (this.assistantSpeaking) {
           this.emit('telemetry', 'barge_in.ignored', { reason: 'no-local-speech-evidence' });
         }
@@ -916,7 +1015,7 @@ class RealtimeSession extends EventEmitter {
           // o'zbekcha buyruqlarga mo'ljallangan: erkin qisqa gaplar undan
           // o'tmaydi va avvalgidek uz-UZ STT'ni kutadi.
           const nativeFastAction = matchDirectFastAction(pending.native.text);
-          if (!pending.settled && (nativeIsConfident(pending.native.text) || nativeFastAction)) {
+          if (!pending.settled && !pending.requireAuthoritative && (nativeIsConfident(pending.native.text) || nativeFastAction)) {
             pending.settled = true;
             clearTimeout(pending.timer);
             this._pendingAuthoritativeTurn = null;
@@ -941,6 +1040,7 @@ class RealtimeSession extends EventEmitter {
         });
         break;
       case 'response.audio_transcript.delta':
+      case 'response.output_audio_transcript.delta':
         if (!this._firstTextObserved && msg.delta) {
           this._firstTextObserved = true;
           this.emit('telemetry', 'assistant.text.first', {});
@@ -954,6 +1054,7 @@ class RealtimeSession extends EventEmitter {
         }
         break;
       case 'response.audio.delta':
+      case 'response.output_audio.delta':
         if (this._suppressCurrentResponse) break;
         if (!this._firstAudioObserved) {
           this._firstAudioObserved = true;
@@ -1022,6 +1123,17 @@ class RealtimeSession extends EventEmitter {
         }
       case 'error': {
         const errMsg = msg.error?.message || JSON.stringify(msg);
+        if (!this.ready && this._providerIndex + 1 < VOICE_PROVIDERS.length) {
+          const failedProvider = this.provider?.id || 'unknown';
+          const nextIndex = this._providerIndex + 1;
+          this.emit('telemetry', 'provider.fallback', {
+            from: failedProvider, to: VOICE_PROVIDERS[nextIndex].id, reason: errMsg
+          });
+          const failedSocket = this.ws;
+          this._connectProvider(nextIndex);
+          try { failedSocket.close(); } catch (_) {}
+          break;
+        }
         // Bular haqiqiy xatolik emas — javob aynan tugab qolgan payt bekor
         // qilishga urinish yoki ikkita response bir vaqtda so'ralishi kabi
         // tabiiy poyga holatlari (Realtime API'ning o'zi shunday ishlaydi).
@@ -1077,7 +1189,7 @@ class RealtimeSession extends EventEmitter {
     const policy = classifyUserTurn(this.userTranscript, {
       lastAssistant: this._lastAssistantTranscript,
       mediaMode: this._mediaModeActive,
-      explicitUserTrigger: this._explicitUserTurnPending,
+      explicitUserTrigger: this._explicitUserSession || this._explicitUserTurnPending,
       conversationActive: this._conversationContext.isActive()
     });
     if (!policy.accept) {
@@ -1121,6 +1233,12 @@ class RealtimeSession extends EventEmitter {
     // grounded javobni eskirtiradi. Aks holda foydalanuvchi boshqa buyruqqa
     // o'tib bo'lgach eski savol javobi kutilmaganda gapirib yuborishi mumkin.
     const turnSerial = ++this._groundedTurnSerial;
+    const communicationIntent = require('../communications').parseCommunicationIntent(this.userTranscript);
+    if (communicationIntent?.kind === 'youtube-search') {
+      this.emit('telemetry', 'router.decision', { route: 'direct-communication', action: communicationIntent.kind });
+      this._runCommunicationIntent(communicationIntent);
+      return true;
+    }
     const directAction = matchDirectFastAction(this.userTranscript);
     if (directAction) {
       this.emit('telemetry', 'router.decision', { route: 'direct-fast-action', action: directAction });
@@ -1128,14 +1246,15 @@ class RealtimeSession extends EventEmitter {
       return true;
     }
     const reference = this._conversationContext.resolve(this.userTranscript);
+    // Hands-free dialogda javobning tez boshlanishi ustuvor. Xotira yoki
+    // oldingi suhbatga aniq murojaat bo'lsa grounding kerak, lekin umumiy
+    // "nega/qanday/tahlil" savolini alohida Deep Think jarayoniga yuborish
+    // first-audio'ni 8–25 soniyagacha cho'zardi. Bunday savollar Realtime'da
+    // stream qilinadi; zarur chuqur tekshiruv uchun model ask_expert toolidan
+    // o'zi foydalanishi mumkin.
     if (needsContextGrounding(this.userTranscript) || reference.resolved) {
       this.emit('telemetry', 'router.decision', { route: 'grounded-answer' });
       this._respondWithGrounding(this.userTranscript, turnSerial);
-      return true;
-    }
-    if (needsExpertAnswer(this.userTranscript)) {
-      this.emit('telemetry', 'router.decision', { route: 'expert-answer' });
-      this._respondWithExpert(this.userTranscript, turnSerial);
       return true;
     }
     // Keep conversation and tool selection inside the same Realtime session.
@@ -1150,7 +1269,7 @@ class RealtimeSession extends EventEmitter {
     return this._sendResponseCreate({
       max_output_tokens: REALTIME_MAX_RESPONSE_TOKENS,
       tool_choice: 'auto',
-      instructions: "Respond to the user's latest English turn naturally and concisely. Use an available tool when the request requires action. Never invent missing facts, and do not use markdown."
+      instructions: "Respond to the user's latest turn in natural English by default. Do not switch languages because of the user's language, accent, isolated foreign words, quoted text, transcription errors, or background audio. Translate into or speak in another language only when the user explicitly requested that named language; otherwise answer in English. Sound warm, attentive, and unforced, with natural wording and varied sentence length. Use complete sentences, always finish the thought, and never cut a sentence short; be concise for simple turns, but include enough detail when the question needs it. If the user requested an action, use the appropriate available tool instead of only describing or promising the action, and never claim completion before a successful tool result. Never invent missing facts, and do not use markdown.",
     });
   }
 
@@ -1185,6 +1304,20 @@ class RealtimeSession extends EventEmitter {
     const output = (ok ? result?.message : ('Error: ' + (result?.message || 'action failed'))) || 'Done.';
     this.emit('tool_result', output, callId);
     this.emit('telemetry', 'fast_action.completed', { action: id, ok, direct: true });
+    await this._deliverSpokenAnswer(output.slice(0, 500), { maxOutputTokens: REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS });
+  }
+
+  async _runCommunicationIntent(intent) {
+    const callId = 'communication-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+    this.emit('tool_call', 'communication: ' + intent.kind, callId);
+    let result;
+    try { result = await this._communicationRunner(intent); }
+    catch (error) { result = { status: 'error', message: error.message }; }
+    if (this.closed) return;
+    const ok = result?.status === 'ok';
+    const output = (ok ? result?.message : ('Error: ' + (result?.message || 'communication action failed'))) || 'Done.';
+    this.emit('tool_result', output, callId);
+    this.emit('telemetry', 'communication.completed', { action: intent.kind, ok, direct: true });
     await this._deliverSpokenAnswer(output.slice(0, 500), { maxOutputTokens: REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS });
   }
 
@@ -1260,14 +1393,18 @@ class RealtimeSession extends EventEmitter {
     return this._sendResponseCreate({
       max_output_tokens: options.maxOutputTokens || REALTIME_MAX_RESPONSE_TOKENS,
       tool_choice: 'none',
-      instructions: "Read the following prepared English answer exactly as written in your deep, controlled cinematic machine voice. Add, remove, and rewrite nothing:\n\n" + text
+      instructions: "Read the following prepared answer exactly as written, preserving its language. Use a warm, natural conversational voice with a calm pace, natural pauses, and varied cadence. Do not sound metallic, synthetic, theatrical, or like an announcer. Add, remove, and rewrite nothing. Do not translate it:\n\n" + text
     });
   }
 
   _beginAuthoritativeTranscription(turn) {
     // Oldingi turn favqulodda holatda tugamay qolgan bo'lsa, yangi turn uni
     // almashtiradi; timeout stale callback'ni javob yaratishdan saqlaydi.
-    const pending = { id: Symbol('voice-turn'), native: null, result: null, settled: false, timer: null, startedAt: Date.now() };
+    const pending = {
+      id: Symbol('voice-turn'), native: null, result: null, settled: false,
+      timer: null, startedAt: Date.now(), requireAuthoritative: this._requireAuthoritativeFirstTurn
+    };
+    this._requireAuthoritativeFirstTurn = false;
     this._pendingAuthoritativeTurn = pending;
     const pcm = Buffer.concat(turn.chunks || []);
     pending.timer = setTimeout(() => {
@@ -1314,7 +1451,8 @@ class RealtimeSession extends EventEmitter {
     clearTimeout(pending.timer);
     this._pendingAuthoritativeTurn = null;
     const selected = chooseTranscript(pending.result, pending.native.text, {
-      context: { lastAssistant: this._lastAssistantTranscript, mediaMode: this._mediaModeActive }
+      context: { lastAssistant: this._lastAssistantTranscript, mediaMode: this._mediaModeActive },
+      preferAuthoritative: pending.requireAuthoritative
     });
     const latencyMs = Date.now() - pending.startedAt;
     this.emit('telemetry', 'stt.selection', {
@@ -1549,15 +1687,15 @@ class RealtimeSession extends EventEmitter {
     const tmpSmall = tmpRaw.replace('.png', '-s.png');
     let b64 = null, errMsg = null;
     try {
-      execFileSync('screencapture', ['-x', tmpRaw], { timeout: 8000 });
-      try { execFileSync('sips', ['-Z', '900', tmpRaw, '--out', tmpSmall], { timeout: 8000, stdio: 'ignore' }); }
+      await execFileAsync('screencapture', ['-x', tmpRaw], { timeout: 8000 });
+      try { await execFileAsync('sips', ['-Z', '900', tmpRaw, '--out', tmpSmall], { timeout: 8000 }); }
       catch (e) { /* sips ishlamasa, asl o'lchamdagi rasm ishlatiladi */ }
-      const useFile = fs.existsSync(tmpSmall) ? tmpSmall : tmpRaw;
-      b64 = fs.readFileSync(useFile).toString('base64');
+      const useFile = await fs.promises.access(tmpSmall).then(() => tmpSmall).catch(() => tmpRaw);
+      b64 = (await fs.promises.readFile(useFile)).toString('base64');
     } catch (e) {
       errMsg = 'Ekranni suratga ololmadim: ' + (e.message || '').slice(0, 150);
     }
-    for (const f of [tmpRaw, tmpSmall]) { try { fs.unlinkSync(f); } catch (e) {} }
+    await Promise.all([tmpRaw, tmpSmall].map(file => fs.promises.unlink(file).catch(() => {})));
 
     try {
       // Avval funksiya natijasi (protokol talabi), keyin rasmning o'zi
@@ -1588,6 +1726,10 @@ class RealtimeSession extends EventEmitter {
     saveMediaState(); // keyingi (yangi) suhbatlar ham buni bilishi uchun — connect() dagi izohga qarang
     if (this._mediaModeActive) return;
     this._mediaModeActive = true;
+    // Media fonida local gate ham server VAD bilan bir xil konservativ
+    // trailing-silence oynaga o'tishi shart; aks holda video shovqini turnni
+    // noto'g'ri yopishi yoki keyingi audio lifecycle'ni buzishi mumkin.
+    this.duplex.hangoverMs = MEDIA_DUPLEX_HANGOVER_MS;
     try {
       // 0.92 real mikrofon darajasida foydalanuvchini ham deyarli kar qilib
       // qo'ydi. Media paytida uzunroq tasdiq oynasi va echo-mute bilan birga
@@ -1640,22 +1782,37 @@ class RealtimeSession extends EventEmitter {
       }
     }
     if (this.assistantSpeaking) {
+      const chunkMs = pcm16_16k.length / (IN_RATE * 2) * 1000;
       if (!processed.send || processed.reason !== 'barge-in') {
-        if (!this._bargeInConfirmed) this._resetBargeInCandidate();
+        if (!this._bargeInConfirmed && this._bargeInCandidateMs > 0) {
+          this._bargeInGapMs += chunkMs;
+          if (this._bargeInGapMs > BARGE_IN_MAX_GAP_MS) this._resetBargeInCandidate();
+        }
         return;
       }
 
       if (!this._bargeInConfirmed) {
+        this._bargeInGapMs = 0;
         this._bargeInCandidate.push(Buffer.from(processed.audio));
-        this._bargeInCandidateMs += pcm16_16k.length / (IN_RATE * 2) * 1000;
+        this._bargeInCandidateMs += chunkMs;
         if (this._bargeInCandidateMs < BARGE_IN_CONFIRM_MS) return;
 
-        this._bargeInConfirmed = true;
-        this._bargeInEvidenceAt = now;
         const candidate = Buffer.concat(this._bargeInCandidate);
         this._bargeInCandidate = [];
         this._bargeInCandidateMs = 0;
-        this.emit('telemetry', 'barge_in.evidence', { confirmationMs: BARGE_IN_CONFIRM_MS });
+        // Provider VAD'ni kutish sezilarli kechikish beradi. Mahalliy AEC gate
+        // nutqni tasdiqlashi bilan karnayni to'xtatamiz; server event keyinroq
+        // faqat turn lifecycle'ni davom ettiradi. _flushPlayback candidate
+        // state'ni reset qilgani uchun confirmed/evidence undan KEYIN yoziladi.
+        this._responseInterrupted = true;
+        try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
+        this._flushPlayback();
+        this._bargeInConfirmed = true;
+        this._bargeInEvidenceAt = now;
+        this.emit('telemetry', 'barge_in.confirmed', {
+          confirmationMs: BARGE_IN_CONFIRM_MS,
+          source: 'local-duplex'
+        });
         this._sendInputAudio(candidate);
         return;
       }
@@ -1685,6 +1842,7 @@ class RealtimeSession extends EventEmitter {
   _resetBargeInCandidate() {
     this._bargeInCandidate = [];
     this._bargeInCandidateMs = 0;
+    this._bargeInGapMs = 0;
     this._bargeInConfirmed = false;
     this._bargeInEvidenceAt = 0;
   }
@@ -1782,5 +1940,6 @@ class RealtimeSession extends EventEmitter {
 
 module.exports = {
   RealtimeSession, resample16to24, needsGroundedAnswer, needsContextGrounding,
-  needsExpertAnswer, collectGrounding, matchDirectFastAction, prepareSpokenAnswer
+  needsExpertAnswer, collectGrounding, matchDirectFastAction, prepareSpokenAnswer,
+  buildSessionUpdate, loadInstructions, runFullAgent
 };

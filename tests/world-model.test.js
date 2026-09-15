@@ -50,7 +50,7 @@ test('vision prompt is grounded with app browser and focused accessibility conte
   assert.match(prompt, /Google Chrome/);
   assert.match(prompt, /https:\/\/example\.com/);
   assert.match(prompt, /AXTextField/);
-  assert.match(prompt, /o‘ylab topma/);
+  assert.match(prompt, /Do not invent invisible elements or coordinates/);
 });
 
 test('macOS JXA payload parser rejects noise and accepts semantic context', () => {

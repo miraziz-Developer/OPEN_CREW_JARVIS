@@ -24,3 +24,23 @@ Local Obsidian-backed memory used by the voice daemon and Telegram bot.
 - `profileUpdate(section, value, source)` appends a profile entry.
 
 Set `OBSIDIAN_VAULT` to override the default `~/Documents/Obsidian Vault` location.
+
+## Agent memory lookup
+
+For a user-memory question, use the memory skill's JSON interface from the project
+root. It searches only the supported Markdown and structured-memory stores, so it
+does not traverse browser databases or other binary files:
+
+```bash
+printf '%s\n' '{"action":"search","query":"favorite music","limit":6}' | node skills/memory/index.js
+printf '%s\n' '{"action":"profile_read"}' | node skills/memory/index.js
+```
+
+- Do **not** use the generic project `search` tool to look up personal memory.
+- Do **not** append unsupported filters such as `in !*.sqlite*` to a search
+  request. The memory skill already excludes non-Markdown files safely.
+- If semantic lookup is unavailable, run the JSON `search` command above as the
+  local fallback before answering.
+- A failed search command does not establish that memory is unavailable. Report
+  only a confirmed result, or say that no matching memory was found after the
+  supported lookup completes.

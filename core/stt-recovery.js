@@ -31,6 +31,13 @@ function chooseTranscript(authoritativeResult, nativeText, options = {}) {
   });
   const native = transcriptQuality(nativeText, { context: options.context });
 
+  // Wake-word'dan keyingi birinchi turnda Realtime'ning en-US transkripti
+  // o'zbekcha buyruqni uzun, ravon ko'rinadigan inglizcha matnga aylantirishi
+  // mumkin. Uz-UZ natija policy bo'yicha yaroqli bo'lsa, matn uzunligiga
+  // asoslangan score bunday xato native taxminni ustun qo'ymasligi kerak.
+  if (options.preferAuthoritative && authoritative.usable) {
+    return { source: 'authoritative', text: authoritative.text, authoritative, native };
+  }
   if (authoritative.usable && (!native.usable || authoritative.score >= native.score - 8)) {
     return { source: 'authoritative', text: authoritative.text, authoritative, native };
   }

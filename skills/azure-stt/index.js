@@ -13,6 +13,9 @@ const readline = require('readline');
 const REGION = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY    = process.env.AZURE_SPEECH_KEY;
 const LOCALE = process.env.AZURE_SPEECH_LANGUAGE || process.env.AZURE_STT_LOCALE || 'en-US';
+const TRANSCRIBE_ENDPOINT = process.env.AZURE_TRANSCRIBE_ENDPOINT;
+const TRANSCRIBE_KEY = process.env.AZURE_TRANSCRIBE_KEY;
+const TRANSCRIBE_MODEL = process.env.AZURE_TRANSCRIBE_DEPLOYMENT || 'gpt-live-transcribe';
 
 function ensureKey() {
   if (!KEY) throw new Error('AZURE_SPEECH_KEY muhit ozgaruvchisi topilmadi.');
@@ -75,6 +78,35 @@ async function sttRest(audioBuffer, locale) {
   });
 }
 
+async function liveTranscribe(audioBuffer, locale) {
+  if (!TRANSCRIBE_ENDPOINT || !TRANSCRIBE_KEY) throw new Error('gpt-live-transcribe sozlanmagan');
+  const form = new FormData();
+  form.append('file', new Blob([audioBuffer], { type: 'audio/wav' }), 'speech.wav');
+  form.append('model', TRANSCRIBE_MODEL);
+  const language = String(locale || LOCALE).split('-')[0];
+  if (language) form.append('language', language);
+  form.append('response_format', 'verbose_json');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(TRANSCRIBE_ENDPOINT, {
+      method: 'POST', headers: { 'api-key': TRANSCRIBE_KEY }, body: form, signal: controller.signal
+    });
+    const raw = await response.text();
+    let data = {};
+    try { data = JSON.parse(raw); } catch (_) {}
+    if (!response.ok) throw new Error(data.error?.message || `transcribe HTTP ${response.status}`);
+    return { text: String(data.text || '').trim(), confidence: Number(data.confidence) || 1, provider: 'gpt-live-transcribe' };
+  } finally { clearTimeout(timer); }
+}
+
+async function recognize(audioBuffer, locale) {
+  if (TRANSCRIBE_ENDPOINT && TRANSCRIBE_KEY) {
+    try { return await liveTranscribe(audioBuffer, locale); } catch (_) {}
+  }
+  return { ...(await sttRest(audioBuffer, locale)), provider: 'azure-speech' };
+}
+
 // Multi-request server: har qatorda JSON o'qiydi
 const rl = readline.createInterface({
   input: process.stdin,
@@ -89,9 +121,11 @@ rl.on('line', async (line) => {
   try {
     const input = JSON.parse(line);
     const audioBuffer = loadAudio(input);
-    const result = await sttRest(audioBuffer, input.locale);
+    const result = await recognize(audioBuffer, input.locale);
     console.log(JSON.stringify({ status: 'ok', ...result }));
   } catch (err) {
     console.log(JSON.stringify({ status: 'error', error: err.message || 'STT xatolik' }));
   }
 });
+
+module.exports = { sttRest, liveTranscribe, recognize, loadAudio };

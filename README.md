@@ -111,10 +111,12 @@ AZURE_SPEECH_KEY=...
 AZURE_SPEECH_REGION=eastus2
 AZURE_SPEECH_VOICE=uz-UZ-SardorNeural
 
-# AZURE AI (GPT-6 Astra)
+# AZURE AI Foundry reasoning tiers
 AZURE_OPENAI_KEY=...
 AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
-AZURE_OPENAI_DEPLOYMENT=gpt-6-astra
+AZURE_OPENAI_DEPLOYMENT=gpt-5.6-sol
+DEEP_THINK_FAST_MODEL=grok-4-1-fast-reasoning
+DEEP_THINK_COMPLEX_MODEL=gpt-5.6-sol
 
 # TELEGRAM
 TELEGRAM_BOT_TOKEN=...
@@ -123,6 +125,27 @@ JARVIS_CHAT_ID=...         # Sizning Telegram chat ID
 # OPENCLAW GATEWAY (openssl rand -hex 32 bilan yarating)
 OPENCLAW_GATEWAY_TOKEN=...
 ```
+
+### Ixtiyoriy: local whisper.cpp wake transcript fallback
+
+Azure Realtime asosiy streaming STT, VAD va audio javob yo‘li bo‘lib qoladi.
+`whisper.cpp` faqat idle `listening` holatida “Jarvis” transcriptini aniqlash
+uchun opt-in fallbackdir; faol realtime suhbatda unga audio berilmaydi.
+
+`whisper.cpp` binary va Tiny modelni alohida o‘rnating, keyin `.env`ga absolute
+yo‘llarni yozing:
+
+```bash
+WHISPER_WAKE_ENABLED=true
+WHISPER_WAKE_BINARY=/absolute/path/to/whisper-cli
+WHISPER_WAKE_MODEL=/absolute/path/to/ggml-tiny.en.bin
+WHISPER_WAKE_LANGUAGE=en
+```
+
+U 3 soniyalik bounded audio oynani transkripsiya qiladi va `Jarvis` alohida
+so‘z sifatida uchragandagina wake signal yuboradi. Model/binary yo‘q bo‘lsa
+feature’ni `false` holatda qoldiring; u daemon yoki Azure voice pipeline’ni
+to‘xtatmaydi.
 
 ---
 

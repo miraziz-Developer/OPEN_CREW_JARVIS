@@ -31,7 +31,12 @@ function extractAddressedCommand(text) {
     const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
     const match = normalized.match(new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`));
     if (!match) continue;
-    return { addressed: true, wake: alias, command: normalized.slice(match.index + match[0].length).trim() };
+    // Wake phrase boshida ham, oxirida ham kelishi mumkin. Avval faqat undan
+    // keyingi matn olinardi; "What happened, Jarvis?" shu sabab wake-only deb
+    // noto'g'ri bloklanardi. Aliasning ikki tomonidagi mazmunni saqlaymiz.
+    const before = normalized.slice(0, match.index).trim();
+    const after = normalized.slice(match.index + match[0].length).trim();
+    return { addressed: true, wake: alias, command: [before, after].filter(Boolean).join(' ') };
   }
   return null;
 }

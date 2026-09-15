@@ -39,7 +39,11 @@ shift
 
 PATTERN='(token|secret|api[_-]?key|password)["[:space:]]*[:=]["[:space:]]*[A-Za-z0-9_./+-]{24,}'
 SECRET_FRAGMENT_LOG_PATTERN='console\.(log|error|warn|info)[^(]*\([^\n]*(TOKEN|KEY|SECRET)\.(substring|slice)[[:space:]]*\('
-PATHS=('--' ':!package-lock.json' ':!.env.example' ':!tests/**')
+# Browser profiles are generated, machine-specific state (and are ignored by
+# this repository). Their encrypted browser metadata can resemble a secret;
+# scanning old commits containing that state makes the history check noisy
+# without protecting shipped source.
+PATHS=('--' ':!package-lock.json' ':!.env.example' ':!tests/**' ':!browser/**')
 
 scan_tree() {
   local revision="${1:-}"

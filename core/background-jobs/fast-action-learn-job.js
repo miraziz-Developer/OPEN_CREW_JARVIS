@@ -73,7 +73,7 @@ function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTele
     }
     if (added.length) {
       ok('⚡ Yangi tez amallar o\'rganildi: ' + added.join(', '));
-      sendTelegram('⚡ So\'rovlaringiz asosida yangi tez amallar qo\'shdim: ' + added.join(', ') + ' — endi bular tezroq bajariladi.');
+      sendTelegram('⚡ I added new fast actions based on your requests: ' + added.join(', ') + '. These will now run faster.');
       try { writeMemory('Tez amal o\'rganildi', 'Avtomatik qo\'shilgan yangi fast-action(lar): ' + added.join(', '), ['fast-action', 'autonomous']); } catch (e) {}
     }
   }

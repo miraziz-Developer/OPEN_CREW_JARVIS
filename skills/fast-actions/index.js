@@ -14,22 +14,42 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { execFile, execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 
 const { PROJECT_DIR } = require('../../core/paths');
 const BASE_FILE = path.join(__dirname, 'actions.json');
 const LEARNED_FILE = path.join(PROJECT_DIR, '.fast-actions-learned.json');
 
-function loadActions() {
+let cachedActions = [];
+let actionsReady = null;
+
+async function refreshActions() {
+  const [baseResult, learnedResult] = await Promise.all([
+    fs.promises.readFile(BASE_FILE, 'utf8').catch(() => '[]'),
+    fs.promises.readFile(LEARNED_FILE, 'utf8').catch(() => '[]')
+  ]);
   let base = [];
-  try { base = JSON.parse(fs.readFileSync(BASE_FILE, 'utf8')); } catch (e) {}
   let learned = [];
-  try { learned = JSON.parse(fs.readFileSync(LEARNED_FILE, 'utf8')); } catch (e) {}
+  try { base = JSON.parse(baseResult); } catch (_) {}
+  try { learned = JSON.parse(learnedResult); } catch (_) {}
   const seen = new Set(base.map(a => a.id));
   const merged = base.slice();
   for (const a of learned) if (!seen.has(a.id)) { merged.push(a); seen.add(a.id); }
-  return merged;
+  cachedActions = merged;
+  return cachedActions;
 }
+
+function preloadActions() {
+  if (!actionsReady) actionsReady = refreshActions().catch(() => cachedActions);
+  return actionsReady;
+}
+
+function loadActions() {
+  // Callers on the realtime path get a memory-only snapshot. The async preload
+  // starts at module load and runFastAction waits for it before execution.
+  return cachedActions;
+}
+preloadActions();
 
 function findAction(id) {
   return loadActions().find(a => a.id === id);
@@ -37,12 +57,13 @@ function findAction(id) {
 
 function runFastAction(id) {
   return new Promise((resolve) => {
-    const a = findAction(id);
-    if (!a) { resolve({ status: 'error', message: "Noma'lum action: " + id }); return; }
+    preloadActions().then(() => {
+      const a = findAction(id);
+      if (!a) { resolve({ status: 'error', message: "Noma'lum action: " + id }); return; }
 
     const done = (status, message) => resolve({ status, message, id, uz: a.uz });
 
-    try {
+      try {
       switch (a.type) {
         case 'open_app':
           execFile('open', ['-a', a.target], (err) => {
@@ -79,9 +100,10 @@ function runFastAction(id) {
         default:
           done('error', "Noma'lum action turi: " + a.type);
       }
-    } catch (e) {
-      done('error', e.message);
-    }
+      } catch (e) {
+        done('error', e.message);
+      }
+    });
   });
 }
 
@@ -89,19 +111,20 @@ function runFastAction(id) {
 // (mavjud bo'lmagan ilova nomi shunchaki xato qaytaradi, hech qanday
 // zararli ta'sir yo'q). Ixtiyoriy shell/applescript buyruqlar hech
 // qachon avtomatik qo'shilmaydi.
-function learnOpenAppAction(appName) {
+async function learnOpenAppAction(appName) {
   if (!appName || typeof appName !== 'string') return { status: 'error' };
   const clean = appName.trim();
   if (!clean) return { status: 'error' };
   const id = 'open:learned:' + clean.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  const existing = loadActions();
+  const existing = await preloadActions();
   if (existing.some(a => a.id === id || (a.type === 'open_app' && a.target.toLowerCase() === clean.toLowerCase()))) {
     return { status: 'duplicate' };
   }
   let learned = [];
-  try { learned = JSON.parse(fs.readFileSync(LEARNED_FILE, 'utf8')); } catch (e) {}
+  try { learned = JSON.parse(await fs.promises.readFile(LEARNED_FILE, 'utf8')); } catch (_) {}
   learned.push({ id, uz: clean + ' ochish', type: 'open_app', target: clean, learnedAt: new Date().toISOString() });
-  fs.writeFileSync(LEARNED_FILE, JSON.stringify(learned, null, 2));
+  await fs.promises.writeFile(LEARNED_FILE, JSON.stringify(learned, null, 2));
+  await refreshActions();
   return { status: 'ok', id };
 }
 
@@ -117,7 +140,7 @@ function main() {
     switch (input.action) {
       case 'run': result = await runFastAction(input.id); break;
       case 'list': result = { status: 'ok', actions: loadActions() }; break;
-      case 'learn_app': result = learnOpenAppAction(input.appName); break;
+      case 'learn_app': result = await learnOpenAppAction(input.appName); break;
       default: result = { status: 'error', message: 'Noma\'lum action: ' + input.action };
     }
     console.log(JSON.stringify(result));

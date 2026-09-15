@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { VoiceFlightRecorder, redactText } = require('../core/voice-flight-recorder');
 
-test('redacts transcript text by default and never stores raw audio', () => {
+test('redacts transcript text by default and never stores raw audio', async () => {
   let now = 1000;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-flight-'));
   const file = path.join(dir, 'voice.jsonl');
@@ -23,6 +23,7 @@ test('redacts transcript text by default and never stores raw audio', () => {
   recorder.event('assistant.audio.first');
   now += 200;
   recorder.event('turn.completed');
+  await recorder.flush();
 
   const contents = fs.readFileSync(file, 'utf8');
   assert.equal(contents.includes('maxfiy buyruq matni'), false);

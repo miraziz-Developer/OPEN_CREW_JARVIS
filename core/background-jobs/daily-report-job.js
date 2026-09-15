@@ -52,7 +52,7 @@ function createDailyReportJob({ projectDir, localDateStr, reportHour, askAgent, 
     if (!reply) return;
 
     ok('📊 Kunlik hisobot tayyor');
-    sendTelegram('📊 Bugungi hisobot:\n\n' + reply);
+    sendTelegram('📊 Today’s report:\n\n' + reply);
     try { writeMemory('Kunlik hisobot', reply, ['report']); } catch (e) {}
     const audio = await ttsToFile(reply.substring(0, 400));
     if (audio) { try { execSync('afplay "' + audio + '"'); } catch (e) {} }

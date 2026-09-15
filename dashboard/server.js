@@ -131,7 +131,8 @@ function getProfile() {
 // ── /api/chat — dashboard'dan to'g'ridan-to'g'ri Jarvisga yozish ──────────
 function askAgent(message) {
   return new Promise((resolve) => {
-    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:dashboard', '--message', message, '--agent', 'main'], {
+    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
+    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:dashboard', '--message', englishOnly + message, '--agent', 'main'], {
       cwd: PROJECT_DIR,
       env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY') },
       timeout: 120000
@@ -160,13 +161,13 @@ async function handleChat(req, res) {
   let payload;
   try { payload = JSON.parse(await readBody(req)); } catch (e) { payload = {}; }
   const message = (payload.message || '').trim();
-  if (!message) { return json(res, { error: 'message kerak' }, 400); }
+  if (!message) { return json(res, { error: 'A message is required.' }, 400); }
 
   const reply = await askAgent(message);
   if (reply) {
     try { mem.writeMemory('Dashboard chat', 'Foydalanuvchi: ' + message + '\nJarvis: ' + reply.slice(0, 500), ['dashboard', 'chat']); } catch (e) {}
   }
-  json(res, { reply: reply || 'Kechirasiz, hozir javob bera olmadim.' });
+  json(res, { reply: reply || 'I could not respond right now.' });
 }
 
 // ── HTTP server ─────────────────────────────────────────────────────────
