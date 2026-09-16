@@ -29,7 +29,7 @@ function env(k, def) {
 
 const FAST_MODEL = env('DEEP_THINK_FAST_MODEL', 'grok-4-1-fast-reasoning');
 const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL', 'gpt-5.6-sol');
-const TIMEOUT_MS = parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 90000;
+const TIMEOUT_MS = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
 const MAX_TOKENS = parseInt(env('DEEP_THINK_MAX_TOKENS'), 10) || 1200;
 
 // Javob OG'ZAKI o'qiladi — shuning uchun markdown (sarlavha, **qalin**,

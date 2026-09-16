@@ -27,6 +27,7 @@ const { loadCalibration, resolveCalibratedNumber, resolveBargeInResidual } = req
 const { ConversationContext } = require('../../core/conversation-context');
 const { ActionSafetyPolicy } = require('../../core/action-safety-policy');
 const { buildVoiceProviders } = require('../../core/voice-provider');
+const { createCheckpointStore } = require('../../core/agent-task-checkpoints');
 
 const { PROJECT_DIR } = require('../../core/paths');
 const execFileAsync = promisify(execFile);
@@ -43,6 +44,12 @@ const ENV_VALUES = Object.fromEntries(ENV.split(/\r?\n/).map(line => line.match(
 const AUDIO_CALIBRATION = loadCalibration(path.join(PROJECT_DIR, '.run', 'audio-calibration.json'));
 
 const VOICE_PROVIDERS = buildVoiceProviders(env);
+const OPENCLAW_AGENT_TIMEOUT_MS = Math.max(30000, parseInt(env('OPENCLAW_AGENT_TIMEOUT_MS'), 10) || 300000);
+const AGENT_LONG_TASK_NOTICE_MS = Math.min(
+  OPENCLAW_AGENT_TIMEOUT_MS - 10000,
+  Math.max(10000, parseInt(env('AGENT_LONG_TASK_NOTICE_MS'), 10) || OPENCLAW_AGENT_TIMEOUT_MS - 30000)
+);
+const TASK_CHECKPOINTS = createCheckpointStore(PROJECT_DIR);
 
 // Media (video/musiqa) "hali ijro etilyapti" holati — avval bu faqat
 // bitta RealtimeSession obyekti ichida (xotirada) saqlanardi. Muammo:
@@ -144,7 +151,7 @@ const DUPLEX_MAX_ECHO_LAG_MS = resolveCalibratedNumber('DUPLEX_MAX_ECHO_LAG_MS',
 // A single loud echo residual must not interrupt Jarvis. Hold candidate audio
 // locally until near-end speech remains continuous for this long, then replay
 // the complete candidate to server VAD so the user's first syllable is kept.
-const BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_BARGE_IN_CONFIRM_MS'), 10) || 360;
+const BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_BARGE_IN_CONFIRM_MS'), 10) || 420;
 // Tabiiy nutq boshidagi undosh yoki juda qisqa pauza energiyani vaqtincha
 // pasaytirishi mumkin. Candidate'ni kichik oynada saqlaymiz; uzoq uzilish esa
 // alohida echo/shovqin bo'lishi mumkinligi uchun uni reset qiladi.
@@ -564,7 +571,7 @@ function buildTools() {
   return tools;
 }
 
-const RUN_TASK_TIMEOUT_MS = parseInt(env('RUN_TASK_TIMEOUT_MS'), 10) || 180000;
+const RUN_TASK_TIMEOUT_MS = OPENCLAW_AGENT_TIMEOUT_MS;
 
 // Har bir chaqiruv o'ziga xos, izolyatsiyalangan session'da ishlaydi — shu
 // bilan bir nechta vazifa CHINDAN parallel, bir-birining kontekstini
@@ -574,7 +581,7 @@ const RUN_TASK_TIMEOUT_MS = parseInt(env('RUN_TASK_TIMEOUT_MS'), 10) || 180000;
 // onProc — ishga tushgan jarayonni chaqiruvchiga qaytaradi, shunda uni
 // keyinroq to'xtatish (foydalanuvchi "to'xtat" desa) yoki suhbat tugaganda
 // tozalash mumkin bo'ladi.
-function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn) {
+function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onProgress) {
   return new Promise((resolve) => {
     const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
     const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', englishOnly + description, '--agent', 'main'], {
@@ -582,27 +589,53 @@ function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn) {
       env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR },
       timeout: RUN_TASK_TIMEOUT_MS
     });
+    const task = {
+      id: TASK_CHECKPOINTS.createId(description, sessionKey), sessionKey,
+      request: String(description || '').slice(0, 8000), status: 'running',
+      createdAt: new Date().toISOString()
+    };
+    TASK_CHECKPOINTS.save(task);
+    const noticeTimer = setTimeout(() => {
+      if (task.status !== 'running') return;
+      task.longRunningNoticeAt = new Date().toISOString();
+      TASK_CHECKPOINTS.save(task);
+      onProgress?.('This is taking longer than expected. Would you like me to keep going, or give you what I have so far?');
+    }, AGENT_LONG_TASK_NOTICE_MS);
+    noticeTimer.unref?.();
     if (typeof onProc === 'function') onProc(proc);
     let out = '';
     proc.stdout.on('data', d => out += d);
     proc.stderr.on('data', () => {});
     proc.on('close', (code, signal) => {
+      clearTimeout(noticeTimer);
       const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
       // Foydalanuvchi o'zi to'xtatgan bo'lsa — bu xato emas, ataylab qilingan.
-      if (proc._jarvisCancelled) { resolve('Vazifa to\'xtatildi.'); return; }
+      if (proc._jarvisCancelled) {
+        task.status = 'cancelled'; task.finishedAt = new Date().toISOString(); TASK_CHECKPOINTS.save(task);
+        resolve('Vazifa to\'xtatildi.'); return;
+      }
       // Vaqt chegarasi: jarayon SIGTERM bilan o'ldirilgan. Bu holda yig'ilgan
       // matn CHALA — avval u to'liq natija sifatida qaytarilardi, ya'ni
       // yarim bajarilgan ish "bajarildi" deb ko'rsatilardi.
       if (signal === 'SIGTERM' && proc.killed) {
+        task.status = 'partial'; task.finishedAt = new Date().toISOString(); task.result = clean.slice(0, 12000); TASK_CHECKPOINTS.save(task);
         const mins = Math.round(RUN_TASK_TIMEOUT_MS / 60000);
         resolve(clean
           ? 'Vazifa ' + mins + ' daqiqada tugamadi, to\'xtatildi. Shu yergacha bajarildi: ' + clean
           : 'Vazifa ' + mins + ' daqiqada tugamadi va to\'xtatildi — natija olinmadi.');
         return;
       }
+      task.status = code === 0 && clean ? 'completed' : 'failed';
+      task.finishedAt = new Date().toISOString();
+      task.result = clean.slice(0, 12000);
+      TASK_CHECKPOINTS.save(task);
       resolve(clean || "Kechirasiz, bajara olmadim.");
     });
-    proc.on('error', () => resolve("Xatolik yuz berdi."));
+    proc.on('error', () => {
+      clearTimeout(noticeTimer);
+      task.status = 'failed'; task.finishedAt = new Date().toISOString(); task.error = 'OpenClaw spawn failed'; TASK_CHECKPOINTS.save(task);
+      resolve("Xatolik yuz berdi.");
+    });
   });
 }
 
@@ -1507,13 +1540,24 @@ class RealtimeSession extends EventEmitter {
 
     const result = await runFullAgent(description, taskSessionKey, (proc) => {
       this._runningTasks.set(msg.call_id, { proc, description });
-    });
+    }, spawn, progress => this._sendTaskProgress(msg.call_id, progress));
     this._runningTasks.delete(msg.call_id);
     this.emit('tool_result', result, msg.call_id);
     try {
       this.ws.send(JSON.stringify({
         type: 'conversation.item.create',
         item: { type: 'function_call_output', call_id: msg.call_id, output: result.slice(0, 4000) }
+      }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
+  _sendTaskProgress(callId, progress) {
+    this.emit('tool_progress', progress, callId);
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: callId, output: String(progress).slice(0, 1000) }
       }));
       this._sendResponseCreate();
     } catch (e) {}
@@ -1670,7 +1714,7 @@ class RealtimeSession extends EventEmitter {
     this.emit('tool_call', description, callId);
     const result = await runFullAgent(description, 'agent:main:jarvis-task-' + callId, (proc) => {
       this._runningTasks.set(callId, { proc, description });
-    });
+    }, spawn, progress => this._sendTaskProgress(callId, progress));
     this._runningTasks.delete(callId);
     if (this.closed) return;
     this.emit('tool_result', result, callId);

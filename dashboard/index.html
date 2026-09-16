@@ -140,6 +140,15 @@ body.booted header{animation:panelIn .4s backwards}
       <div class="kv"><span><span class="dot" id="d-monitor"></span>Ekran Kuzatuv</span><b id="s-monitor">—</b></div>
       <div class="kv"><span><span class="dot" id="d-sentinel"></span>Fn+Shift Sentinel</span><b id="s-sentinel">—</b></div>
     </div>
+    <div class="panel"><h2><span>VAD / LATENCY</span><span class="num">04</span></h2>
+      <div class="kv"><span>Speech start / stop</span><b id="t-vad-turns">—</b></div>
+      <div class="kv"><span>Match bo'lmagan stop</span><b id="t-vad-unmatched">—</b></div>
+      <div class="kv"><span>VAD watchdog</span><b id="t-vad-watchdog">—</b></div>
+      <div class="kv"><span>Speaking yoshi</span><b id="t-vad-speaking">—</b></div>
+      <div class="kv"><span>So'nggi N o'rtacha</span><b id="t-latency-average">—</b></div>
+      <div class="kv"><span>Eng sekin bosqich</span><b id="t-latency-slowest">—</b></div>
+      <div id="t-providers"></div>
+    </div>
     <div class="panel"><h2><span>MODEL</span><span class="num">02</span></h2>
       <div class="kv"><span>Asosiy</span><b id="m-primary">—</b></div>
       <div class="kv"><span>Ovozli (Realtime)</span><b id="m-realtime">—</b></div>
@@ -250,7 +259,7 @@ function setDot(id, on){ $(id).className = "dot " + (on ? "on" : "off"); }
 
 async function refreshStatus(){
   try{
-    const s = await jget("/api/status");
+    const [s, telemetry] = await Promise.all([jget("/api/status"), jget("/api/telemetry")]);
     const rt = s.runtime || {};
     const components = rt.components || {};
     const mic = components.microphone || {};
@@ -273,6 +282,18 @@ async function refreshStatus(){
     $("m-realtime").textContent = s.model.realtime;
     $("m-vision").textContent = s.model.vision;
     $("m-fallback").textContent = s.model.expert;
+    const vad = telemetry.vad || {};
+    const summary = (telemetry.latency || {}).summary || {};
+    const slowest = summary.slowestStage;
+    $("t-vad-turns").textContent = `${vad.speechStarted || 0} / ${vad.speechStopped || 0}`;
+    $("t-vad-unmatched").textContent = vad.unmatchedSpeechStops || 0;
+    $("t-vad-watchdog").textContent = vad.watchdogTimeouts || 0;
+    $("t-vad-speaking").textContent = vad.speakingAgeMs == null ? "—" : `${Math.round(vad.speakingAgeMs)}ms`;
+    $("t-latency-average").textContent = ((summary.averages || {}).total_ms || {}).averageMs == null ? "—" : `${summary.averages.total_ms.averageMs}ms`;
+    $("t-latency-slowest").textContent = slowest ? `${slowest.stage} ${slowest.averageMs}ms` : "—";
+    $("t-providers").innerHTML = Object.entries(telemetry.providers || {}).map(([id, p]) =>
+      `<div class="kv"><span>${esc(id)}</span><b class="${p.circuit === 'open' ? 'warn' : ''}">${p.successCount || 0}✓ / ${p.failureCount || 0}✕ · ${esc(p.circuit || 'closed')}</b></div>`
+    ).join("") || '<div class="kv"><span>Providerlar</span><b>—</b></div>';
 
     if (s.paused) setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
     else if (s.gateway && s.bot && s.daemon && micHealthy && realtimeHealthy) setState("active", "FAOL", "HAMMASI ISHLAMOQDA");

@@ -31,11 +31,13 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.AZURE_SPEECH_LANGUAGE, 'en-US');
   assert.equal(result.values.AZURE_SPEECH_RATE_PERCENT, -12);
   assert.equal(result.values.AZURE_SPEECH_PITCH_PERCENT, -12);
-  assert.equal(result.values.REALTIME_BARGE_IN_CONFIRM_MS, 360);
+  assert.equal(result.values.REALTIME_BARGE_IN_CONFIRM_MS, 420);
   assert.equal(result.values.REALTIME_BARGE_IN_MAX_GAP_MS, 80);
   assert.equal(result.values.DEEP_THINK_FAST_MODEL, 'grok-4-1-fast-reasoning');
   assert.equal(result.values.DEEP_THINK_COMPLEX_MODEL, 'gpt-5.6-sol');
-  assert.equal(result.values.DEEP_THINK_TIMEOUT_MS, 90000);
+  assert.equal(result.values.OPENCLAW_AGENT_TIMEOUT_MS, 300000);
+  assert.equal(result.values.DEEP_THINK_TIMEOUT_MS, 240000);
+  assert.equal(result.values.AGENT_LONG_TASK_NOTICE_MS, 270000);
   assert.equal(result.values.DEEP_THINK_MAX_TOKENS, 1200);
   assert.equal(result.values.AZURE_TERRA_DEPLOYMENT, 'gpt-5.6-terra');
   assert.equal(result.values.AZURE_VOICELIVE_MODEL, 'gpt-realtime');

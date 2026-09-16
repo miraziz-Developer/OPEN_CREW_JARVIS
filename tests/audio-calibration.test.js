@@ -32,6 +32,17 @@ test('calibration separates room noise from speech and recommends bounded values
   assert.equal(profile.privacy.rawAudioStored, false);
 });
 
+test('calibration keeps a P95 noise spike from swallowing quiet speech', () => {
+  const silence = Buffer.concat([constant(1, 61), constant(1, 517)]);
+  const profile = buildCalibration({ silence, speech: constant(2, 1376), now: () => 0 });
+  const { DUPLEX_NOISE_FLOOR: floor, DUPLEX_NOISE_MULTIPLIER: multiplier } = profile.recommended;
+  const speechGate = floor * multiplier;
+
+  assert.ok(floor < 200, 'P95 spike must not become the baseline floor');
+  assert.ok(speechGate < 700, 'quiet user speech must remain above the local gate');
+  assert.ok(speechGate < profile.measurements.speechRmsP20);
+});
+
 test('explicit env overrides calibration, then fallback is used', () => {
   const profile = { recommended: { REALTIME_INPUT_GAIN: 2.2 } };
   assert.equal(resolveCalibratedNumber('REALTIME_INPUT_GAIN', {}, profile, 3), 2.2);

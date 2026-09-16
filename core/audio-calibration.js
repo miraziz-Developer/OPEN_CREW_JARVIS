@@ -73,9 +73,16 @@ function buildCalibration({ silence, speech, echo = null, sampleRate = 16000, no
   const separation = speechP20 / Math.max(noiseP95, 1);
   if (separation < 1.6) throw new Error('Nutq va xona shovqini yetarlicha ajralmadi; mikrofonni yaqinlashtiring');
 
-  const noiseFloor = Math.round(clamp(noiseP95 * 1.15, 20, 1200));
+  // P95 qisqa click/echo burstlarini ham o'z ichiga oladi. P50 asosiy floor;
+  // P95 faqat cheklangan margin bo'lib qolishi kerak.
+  const noiseFloor = Math.round(clamp(Math.max(
+    noiseP50 * 1.15,
+    Math.min(noiseP95 * 1.15, noiseP50 * 1.8)
+  ), 20, 1200));
   const desiredThreshold = Math.sqrt(Math.max(noiseFloor, 1) * speechP20);
-  const noiseMultiplier = Math.round(clamp(desiredThreshold / Math.max(noiseP50, 1), 1.35, 4.5) * 100) / 100;
+  // Engine threshold'i noiseFloor × multiplier; P50 bilan bo'lish P50/P95
+  // farqini ikkinchi marta qo'shib yuboradi.
+  const noiseMultiplier = Math.round(clamp(desiredThreshold / Math.max(noiseFloor, 1), 1.35, 4.5) * 100) / 100;
   // Playback paytida AEC'dan qolgan karnay reverberatsiyasi oddiy xona
   // shovqinidan ancha baland bo'lishi mumkin. Speech P20'ning 42 foizi real
   // qurilmada echo'ni 360ms davomida near-end speech deb qabul qildi va tayyor

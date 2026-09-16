@@ -4,7 +4,8 @@ const { SkillPlatform } = require('../core/skill-platform');
 
 function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
   const platform = new SkillPlatform(platformOptions);
-  const deepThinkTimeoutMs = Math.max(5000, parseInt(env?.('DEEP_THINK_TIMEOUT_MS'), 10) || 90000) + 5000;
+  // Keep the outer skill deadline beyond the HTTP request deadline.
+  const deepThinkTimeoutMs = Math.max(30000, parseInt(env?.('DEEP_THINK_TIMEOUT_MS'), 10) || 240000) + 5000;
   platform.register({
     id: 'google-calendar', version: '1.0.0', capabilities: ['calendar.read', 'calendar.write'],
     actions: {

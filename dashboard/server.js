@@ -22,6 +22,8 @@ function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm'));
 const mem = require(path.join(PROJECT_DIR, 'skills', 'memory'));
 const tasks = require(path.join(PROJECT_DIR, 'skills', 'tasks'));
 const { loadVoiceTelemetry } = require(path.join(PROJECT_DIR, 'core', 'voice-telemetry'));
+const { RuntimeTelemetry } = require(path.join(PROJECT_DIR, 'core', 'runtime-telemetry'));
+const runtimeTelemetry = new RuntimeTelemetry({ file: path.join(PROJECT_DIR, '.run', 'telemetry.json') });
 
 // Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
 // uchun UTC+8'da mahalliy soat 08:00gacha dashboard "kechagi kun" faylini
@@ -113,6 +115,8 @@ function getVoiceTelemetry() {
   return loadVoiceTelemetry(path.join(PROJECT_DIR, '.run', 'voice-flight-recorder.jsonl'), { maxLines: 3000 });
 }
 
+function getRuntimeTelemetry() { return runtimeTelemetry.snapshot(); }
+
 // ── /api/profile — so'nggi o'rganilgan naqshlar ────────────────────────────
 function getProfile() {
   const pr = mem.readProfile();
@@ -130,6 +134,7 @@ function getProfile() {
 
 // ── /api/chat — dashboard'dan to'g'ridan-to'g'ri Jarvisga yozish ──────────
 function askAgent(message) {
+  const startedAt = Date.now();
   return new Promise((resolve) => {
     const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
     const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:dashboard', '--message', englishOnly + message, '--agent', 'main'], {
@@ -140,11 +145,17 @@ function askAgent(message) {
     let out = '';
     proc.stdout.on('data', d => out += d);
     proc.stderr.on('data', () => {});
-    proc.on('close', () => {
+    proc.on('close', code => {
       const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
+      runtimeTelemetry.latency({ source: 'dashboard-chat', provider: 'openclaw', agent_ms: Date.now() - startedAt, error: code === 0 && clean ? undefined : 'OpenClaw dashboard request failed' });
+      runtimeTelemetry.providerResult('openclaw', code === 0 && clean ? null : 'OpenClaw dashboard request failed');
       resolve(clean || null);
     });
-    proc.on('error', () => resolve(null));
+    proc.on('error', error => {
+      runtimeTelemetry.latency({ source: 'dashboard-chat', provider: 'openclaw', agent_ms: Date.now() - startedAt, error });
+      runtimeTelemetry.providerResult('openclaw', error);
+      resolve(null);
+    });
   });
 }
 
@@ -188,6 +199,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());
     if (url.pathname === '/api/runtime') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}));
     if (url.pathname === '/api/voice-telemetry') return json(res, getVoiceTelemetry());
+    if (url.pathname === '/api/telemetry') return json(res, getRuntimeTelemetry());
     if (url.pathname === '/api/profile') return json(res, getProfile());
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'application/json' });

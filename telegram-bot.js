@@ -14,6 +14,9 @@ const os = require('os');
 const { writeMemory, searchMemory, readProfile } = require('./skills/memory');
 const { createTelegramPoller } = require('./core/telegram-poller');
 const { analyzeVideoNote, validateVideoNote } = require('./core/video-note-analysis');
+const { createAgentBridge } = require('./core/agent-bridge');
+const { createSkillPlatform } = require('./skills/platform');
+const { RuntimeTelemetry } = require('./core/runtime-telemetry');
 
 const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
@@ -42,6 +45,7 @@ const CONTEXT_TTL_MS = 10 * 60 * 1000;
 const videoNoteQueues = new Map();
 const processedVideoNotes = new Set();
 const MAX_PROCESSED_VIDEO_NOTES = 1000;
+const runtimeTelemetry = new RuntimeTelemetry({ file: path.join(PROJECT_DIR, '.run', 'telemetry.json') });
 
 // MUHIM: tarmoq vaqtincha uzilib qolsa (DNS/WiFi), node-telegram-bot-api'ning
 // ichki polling xatoligi ILGARI butun jarayonni yiqitib yuborardi (uncaught
@@ -68,7 +72,8 @@ const telegramPoller = createTelegramPoller({
 
 // ── Helpers ──────────────────────────────────────────────────
 
-async function ttsToFile(text) {
+async function ttsToFile(text, timing = {}) {
+  const startedAt = Date.now();
   return new Promise((resolve) => {
     const tmpIn = '/tmp/_tts_in_' + Date.now() + '.json';
     fs.writeFileSync(tmpIn, JSON.stringify({ text }), 'utf8');
@@ -81,13 +86,17 @@ async function ttsToFile(text) {
     proc.stderr.on('data', d => console.error('TTS stderr:', d.toString().substring(0, 200)));
     proc.on('close', () => {
       try { fs.unlinkSync(tmpIn); } catch (e) {}
-      try { resolve(JSON.parse(out.trim()).audioFile || null); } catch (e) { resolve(null); }
+      let audioFile = null;
+      try { audioFile = JSON.parse(out.trim()).audioFile || null; } catch (e) {}
+      runtimeTelemetry.latency({ requestId: timing.requestId, source: timing.source || 'telegram', provider: 'azure-tts', tts_ms: Date.now() - startedAt, error: audioFile ? undefined : 'TTS did not produce an audio file' });
+      resolve(audioFile);
     });
     fs.createReadStream(tmpIn).pipe(proc.stdin);
   });
 }
 
-async function sttFromFile(wavPath) {
+async function sttFromFile(wavPath, timing = {}) {
+  const startedAt = Date.now();
   return new Promise((resolve) => {
     const adjustedPath = wavPath.replace(/\/$/, '');
     if (!adjustedPath || adjustedPath === '-') return resolve({ status: 'error', text: '' });
@@ -102,28 +111,26 @@ async function sttFromFile(wavPath) {
     proc.stderr.on('data', d => console.error('STT stderr:', d.toString().substring(0, 200)));
     proc.on('close', () => {
       try { fs.unlinkSync(tmpIn); } catch (e) {}
-      try { resolve(JSON.parse(out.trim())); } catch (e) { resolve({ status: 'error', text: '' }); }
+      let result;
+      try { result = JSON.parse(out.trim()); } catch (e) { result = { status: 'error', text: '' }; }
+      runtimeTelemetry.latency({ requestId: timing.requestId, source: timing.source || 'telegram-voice', provider: 'azure-stt', stt_ms: Date.now() - startedAt, error: result.status === 'ok' ? undefined : 'STT failed' });
+      resolve(result);
     });
     fs.createReadStream(tmpIn).pipe(proc.stdin);
   });
 }
 
-async function askAgent(message) {
-  return new Promise((resolve) => {
-    const env = { ...process.env, AZURE_OPENAI_KEY, AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, AZURE_SPEECH_VOICE };
-    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
-    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:telegram', '--message', englishOnly + message, '--agent', 'main'], {
-      cwd: PROJECT_DIR, env, timeout: 120000
-    });
-    let out = '';
-    proc.stdout.on('data', d => (out += d.toString()));
-    proc.stderr.on('data', d => {});
-    proc.on('close', () => {
-      const clean = out.split('\n')
-        .filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim())
-        .join('\n').trim();
-      resolve(clean || null);
-    });
+const telegramAgentBridge = createAgentBridge({
+  chatId: null, token: TOKEN, projectDir: PROJECT_DIR, env: getEnv,
+  azureOpenAiKey: AZURE_OPENAI_KEY,
+  skillPlatform: createSkillPlatform({ projectDir: PROJECT_DIR, env: getEnv }), runtime: {}, telemetry: runtimeTelemetry
+});
+
+function askAgent(message, chatId) {
+  return telegramAgentBridge.askAgent(message, 'agent:main:telegram', {
+    source: 'telegram',
+    onProgress: text => bot.sendMessage(chatId, '⏳ ' + text),
+    onLongRunning: text => bot.sendMessage(chatId, '⏳ ' + text)
   });
 }
 
@@ -182,7 +189,7 @@ async function sendDocument(chatId, filePath, caption) {
 async function sendVoiceReply(chatId, text) {
   try {
     const safe = text.substring(0, 400);
-    const audioPath = await ttsToFile(safe);
+    const audioPath = await ttsToFile(safe, { source: 'telegram-voice-reply' });
     if (!audioPath || !fs.existsSync(audioPath)) {
       console.error('Voice reply skipped: TTS did not produce an audio file for chat ' + chatId + '.');
       return;
@@ -391,7 +398,7 @@ async function handleMessage(chatId, userText, isVoice) {
     enrichedMessage = 'Oldingi suhbat:\n' + lastMsgs + '\n---\n' + enrichedMessage;
   }
 
-  const reply = await askAgent(enrichedMessage);
+  const reply = await askAgent(enrichedMessage, chatId);
 
   if (!reply) {
     await bot.sendMessage(chatId, 'I cannot respond right now. Please try again shortly.');
@@ -493,7 +500,7 @@ bot.on('message', async (msg) => {
       execSync('curl -sL "' + fileLink + '" -o "' + ogaPath + '"');
       execSync('ffmpeg -y -i "' + ogaPath + '" -ar 16000 -ac 1 -sample_fmt s16 "' + wavPath + '" 2>/dev/null');
       
-      const stt = await sttFromFile(wavPath);
+      const stt = await sttFromFile(wavPath, { source: 'telegram-voice' });
       if (stt && stt.status === 'ok' && stt.text) {
         const transcript = stt.text;
         await bot.sendMessage(chatId, 'I heard: “' + transcript.substring(0, 200) + '”');

@@ -232,6 +232,17 @@ test('daemon does not arm the idle timeout while provider VAD reports active spe
   assert.match(daemonSource, /session\.on\('user_speech_stopped', \(\) => \{\s*userSpeaking = false;/);
 });
 
+test('daemon recovers when provider VAD never emits speech_stopped', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const daemonSource = fs.readFileSync(path.join(__dirname, '..', 'jarvis_daemon.js'), 'utf8');
+
+  assert.match(daemonSource, /const REALTIME_MAX_USER_SPEECH_MS = Math\.max\(30000,/);
+  assert.match(daemonSource, /let userSpeechStartedAt = 0;/);
+  assert.match(daemonSource, /userSpeaking && Date\.now\(\) - userSpeechStartedAt >= REALTIME_MAX_USER_SPEECH_MS/);
+  assert.match(daemonSource, /finishRealtimeSession\('VAD speech timeout'\)/);
+});
+
 test('direct Azure Realtime session payload uses the nested GA audio schema', () => {
   const event = buildSessionUpdate({ id: 'azure-realtime', voice: 'cedar' }, {
     startMediaAware: false,
@@ -369,7 +380,7 @@ test('run_task starts the full agent with configured credentials instead of cras
   ]);
   assert.ok(Object.hasOwn(invocation.options.env, 'AZURE_OPENAI_KEY'));
   assert.equal(invocation.options.env.JARVIS_PROJECT_DIR.endsWith('OPEN_CREW_JARVIS'), true);
-  assert.equal(invocation.options.timeout, 180000);
+  assert.equal(invocation.options.timeout, 300000);
 });
 
 test('recall_memory tool returns hybrid memory results to the realtime conversation', async () => {
@@ -888,11 +899,12 @@ test('playback requires sustained local speech before forwarding barge-in audio'
   session.feedAudio(chunk);
   session.feedAudio(chunk);
   session.feedAudio(chunk);
+  session.feedAudio(chunk);
 
   const appended = sent.filter(message => message.type === 'input_audio_buffer.append');
-  assert.equal(processed, 4);
+  assert.equal(processed, 5);
   assert.equal(appended.length, 1);
-  assert.equal(Buffer.from(appended[0].audio, 'base64').length, 19200);
+  assert.equal(Buffer.from(appended[0].audio, 'base64').length, 24000);
   assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
   assert.equal(flushed, 1);
   assert.ok(session._bargeInEvidenceAt > 0);
@@ -935,7 +947,7 @@ test('a brief energy dip does not lose a natural barge-in onset', () => {
   session.feedAudio(speechChunk);
   session.feedAudio(dipChunk);
   session.feedAudio(Buffer.alloc(3840, 1)); // 120ms
-  session.feedAudio(Buffer.alloc(6400, 1)); // 200ms; accumulated speech safely exceeds 360ms
+  session.feedAudio(Buffer.alloc(7680, 1)); // 240ms; accumulated active speech reaches 420ms
 
   assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
   assert.equal(sent.filter(message => message.type === 'input_audio_buffer.append').length, 1);

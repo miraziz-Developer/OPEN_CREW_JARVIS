@@ -47,6 +47,7 @@ const { createAgentBridge } = require('./core/agent-bridge');
 const { conversationIdleDelay } = require('./core/voice-turn-policy');
 const { createWakeAudioHandoff } = require('./core/wake-audio-handoff');
 const { VoiceTelemetry, VOICE_MILESTONES } = require('./utils/telemetry');
+const { RuntimeTelemetry } = require('./core/runtime-telemetry');
 
 function execFileAsync(file, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -134,6 +135,10 @@ const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shu
 // tiklaydi; oddiy 20s follow-up oynasidan ancha uzun, shuning uchun tabiiy
 // suhbatni uzmaydi.
 const REALTIME_STALE_SESSION_MS = Math.max(75000, parseInt(env('REALTIME_STALE_SESSION_MS'), 10) || 75000);
+// Provider `speech_started` yuborib `speech_stopped`ni yo'qotsa normal idle
+// timer ataylab qurollanmaydi. Bunday stuck VAD holati keyingi Fn triggerlarni
+// bloklamasligi uchun bitta nutq turni qancha davom etishi mumkinligini cheklaymiz.
+const REALTIME_MAX_USER_SPEECH_MS = Math.max(30000, parseInt(env('REALTIME_MAX_USER_SPEECH_MS'), 10) || 45000);
 const REALTIME_WAKE_PREROLL_MS = parseInt(env('REALTIME_WAKE_PREROLL_MS'), 10) || 1800;
 const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 60000;
 const ACTION_CONFIRMATION_TTL_MS = parseInt(env('ACTION_CONFIRMATION_TTL_MS'), 10) || 30000;
@@ -145,6 +150,7 @@ const TURN_STALE_TIMEOUT_MS = Math.max(30000, parseInt(env('TURN_STALE_TIMEOUT_M
 // fayl orqali ulanadi (soddaroq, qo'shimcha IPC shart emas).
 const REALTIME_TASKS_STATE_FILE = path.join(PROJECT_DIR, '.realtime-tasks-state.json');
 const RUNTIME_STATE_FILE = path.join(PROJECT_DIR, '.jarvis-runtime.json');
+const RUNTIME_TELEMETRY_FILE = path.join(PROJECT_DIR, '.run', 'telemetry.json');
 const VOICE_FLIGHT_RECORDER_FILE = path.join(PROJECT_DIR, '.run', 'voice-flight-recorder.jsonl');
 const MISSION_CONTROL_FILE = path.join(PROJECT_DIR, '.mission-control.json');
 const REALTIME_TASKS_MAX = 15;
@@ -154,6 +160,7 @@ const runtime = new JarvisRuntime({
   commandWindowMs: parseInt(env('COMMAND_DEDUP_MS'), 10) || 5000,
   responseWindowMs: parseInt(env('RESPONSE_DEDUP_MS'), 10) || 15000
 });
+const runtimeTelemetry = new RuntimeTelemetry({ file: RUNTIME_TELEMETRY_FILE });
 const DAEMON_STARTED_AT = Date.now();
 const runtimeIdentity = () => ({ pid: process.pid, startedAt: DAEMON_STARTED_AT });
 const missions = new MissionControl({ file: MISSION_CONTROL_FILE, defaultMaxAttempts: 3 });
@@ -247,7 +254,7 @@ const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
 // TELEGRAM / TTS / AGENT BRIDGE (core/agent-bridge.js)
 // ════════════════════════════════════════════
 const { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders, askAgent } = createAgentBridge({
-  chatId: CHAT_ID, token: TOKEN, projectDir: PROJECT_DIR, env, azureOpenAiKey: AZURE_OPENAI_KEY, skillPlatform, runtime
+  chatId: CHAT_ID, token: TOKEN, projectDir: PROJECT_DIR, env, azureOpenAiKey: AZURE_OPENAI_KEY, skillPlatform, runtime, telemetry: runtimeTelemetry
 });
 
 // ════════════════════════════════════════════
@@ -618,6 +625,7 @@ async function mainLoop() {
     // mumkin. Bu holatda ready handler idle timer o'rnatib, hali davom
     // etayotgan gapni REALTIME_IDLE_MS o'tgach noto'g'ri yopmasligi kerak.
     let userSpeaking = false;
+    let userSpeechStartedAt = 0;
     const toolTurns = new Map();
     let speechStoppedAt = 0;
     let transcriptAcceptedAt = 0;
@@ -659,6 +667,12 @@ async function mainLoop() {
     const markRealtimeActivity = () => { lastRealtimeActivityAt = Date.now(); };
     staleSessionTimer = setInterval(() => {
       if (finished || activeToolCount > 0) return;
+      if (userSpeaking && Date.now() - userSpeechStartedAt >= REALTIME_MAX_USER_SPEECH_MS) {
+        runtimeTelemetry.vadWatchdogTimeout();
+        wrn('Realtime VAD speech_stopped bermadi (' + Math.round((Date.now() - userSpeechStartedAt) / 1000) + 's) — stuck turn yopilyapti');
+        finishRealtimeSession('VAD speech timeout');
+        return;
+      }
       const inactiveMs = Date.now() - lastRealtimeActivityAt;
       if (inactiveMs < REALTIME_STALE_SESSION_MS) return;
       wrn('Realtime sessiya faolliksiz qolgan (' + Math.round(inactiveMs / 1000) + 's) — tiklanish uchun yopilyapti');
@@ -710,6 +724,8 @@ async function mainLoop() {
     session.on('audio_activity', () => { markRealtimeActivity(); armIdleTimer(); });
     session.on('user_speaking', () => {
       userSpeaking = true;
+      runtimeTelemetry.speechStarted();
+      userSpeechStartedAt = Date.now();
       markRealtimeActivity();
       awaitingFollowup = false;
       const turnId = flightRecorder.beginTurn({ source: 'realtime', trigger: reason });
@@ -719,6 +735,8 @@ async function mainLoop() {
     });
     session.on('user_speech_stopped', () => {
       userSpeaking = false;
+      runtimeTelemetry.speechStopped();
+      userSpeechStartedAt = 0;
       markRealtimeActivity();
       speechStoppedAt = Date.now();
       transcriptAcceptedAt = 0;
@@ -827,6 +845,18 @@ async function mainLoop() {
       const now = Date.now();
       if (transcriptAcceptedAt) runtime.observeLatency('transcript-to-first-audio', now - transcriptAcceptedAt);
       if (speechStoppedAt) runtime.observeLatency('first-audio', now - speechStoppedAt);
+      if (speechStoppedAt) {
+        const profile = {
+          requestId: currentTurnId,
+          source: 'realtime',
+          stt_ms: transcriptAcceptedAt ? transcriptAcceptedAt - speechStoppedAt : null,
+          agent_ms: null,
+          tts_ms: null,
+          total_ms: now - speechStoppedAt
+        };
+        runtimeTelemetry.latency(profile);
+        console.log(JSON.stringify({ event: 'response_latency', ...profile }));
+      }
     });
     session.on('tool_call', (description, callId) => {
       markRealtimeActivity();

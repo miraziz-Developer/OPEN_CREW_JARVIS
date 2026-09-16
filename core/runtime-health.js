@@ -22,7 +22,14 @@ function commandOwnsScript(command, scriptPath) {
   // paths without owning them. Counting it as a service creates false duplicate
   // alarms while `doctor` itself is running.
   if (/(?:^|[\s/])(?:sh|bash|zsh)\s+-c(?:\s|$)/.test(text) || /(?:^|[\s/])node\s+(?:-[a-zA-Z]*e|--eval)(?:\s|$)/.test(text)) return false;
-  return text.split(/\s+/).some(arg => path.resolve(arg.replace(/^['"]|['"]$/g, '')) === script);
+  const args = text.split(/\s+/);
+  const scriptIndex = args.findIndex(arg => path.resolve(arg.replace(/^['"]|['"]$/g, '')) === script);
+  if (scriptIndex < 0) return false;
+  // A command such as `git diff -- jarvis_daemon.js` merely mentions a source
+  // file. Service scripts must be launched by their interpreter; bash remains
+  // valid because it owns the supervisor script itself.
+  const executable = path.basename(args[0] || '');
+  return /^(?:node|nodejs|python(?:\d+(?:\.\d+)*)?|bash|sh|zsh)$/.test(executable);
 }
 
 function findMatchingProcesses(scriptPath, options = {}) {
