@@ -2246,11 +2246,17 @@ class RealtimeSession extends EventEmitter {
   _beginDuck() {
     if (this._duck) return;
     const duck = { at: Date.now(), timer: null };
-    duck.timer = setTimeout(() => { if (this._duck === duck) this._commitBargeIn('timeout'); }, BARGE_IN_VERIFY_TIMEOUT_MS);
+    duck.timer = setTimeout(() => { if (this._duck === duck) this._onDuckTimeout(); }, BARGE_IN_VERIFY_TIMEOUT_MS);
     if (duck.timer.unref) duck.timer.unref();
     this._duck = duck;
     try { this.playProc?.kill('SIGSTOP'); } catch (e) {}
     this.emit('telemetry', 'barge_in.paused', {});
+  }
+
+  // Tekshiruv vaqti tugadi: server hali ham nutq eshitayotgan bo'lsa haqiqiy to'xtatish, bo'lmasa — aks-sado: davom.
+  _onDuckTimeout() {
+    if (this._serverSpeechOpen) this._commitBargeIn('timeout-speaking');
+    else this._resumeBargeIn('timeout-no-speech');
   }
 
   _commitBargeIn(reason) {

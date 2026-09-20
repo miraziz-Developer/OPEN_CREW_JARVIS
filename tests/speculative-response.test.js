@@ -221,3 +221,19 @@ test('an unverified pause is committed after the verify timeout', () => {
   assert.equal(session._duck, null);
   assert.equal(sent.filter(m => m.type === 'response.cancel').length, 1);
 });
+
+test('verify timeout resumes the reply when the server heard no ongoing speech, and commits when it did', () => {
+  const quiet = duckedSession();
+  quiet.session._flushPlayback = () => {};
+  quiet.session._beginDuck();
+  quiet.session._onDuckTimeout();
+  assert.deepEqual(quiet.signals, ['SIGSTOP', 'SIGCONT']);
+  assert.equal(quiet.sent.some(m => m.type === 'response.cancel'), false);
+
+  const talking = duckedSession();
+  talking.session._flushPlayback = () => {};
+  talking.session._beginDuck();
+  msg(talking.session, { type: 'input_audio_buffer.speech_started' });
+  talking.session._onDuckTimeout();
+  assert.equal(talking.sent.filter(m => m.type === 'response.cancel').length, 1);
+});
