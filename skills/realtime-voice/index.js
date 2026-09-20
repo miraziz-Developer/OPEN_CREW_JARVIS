@@ -112,6 +112,7 @@ const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in na
 // 'explicit' (standart): oddiy savollarga realtime model darhol o'zi javob beradi; sekin ask_expert faqat aniq
 // chuqur tahlil so'ralganda. 'always' — eski xulq (jiddiy savol har doim ask_expert'ga, ~10+ s).
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
+const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
 const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
@@ -199,7 +200,6 @@ function resample16to24(pcm16) {
 
 function buildSessionUpdate(provider, options) {
   // Allow session-level tuning via env vars so behavior can match Playground
-  const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
   // Server o'zi javobni kesmasin: xona aks-sadosi server VAD'dan o'tsa javob o'rtada uzilardi (logda 20% turn_detected).
   // Haqiqiy barge-in'ni mahalliy exo-filtr (duplex) tasdiqlaydi.
   const SESSION_INTERRUPT = (env('AZURE_VOICELIVE_INTERRUPT_RESPONSE') || 'false') === 'true';
@@ -908,6 +908,7 @@ class RealtimeSession extends EventEmitter {
     this._suppressCurrentResponse = false;
     this._spec = null;
     this._serverSpeechOpen = false;
+    this._autoResponseOn = true;
     this._trailingSilenceMs = 0;
     this._specClearing = false;
     this._specQueue = [];
@@ -1187,6 +1188,7 @@ class RealtimeSession extends EventEmitter {
           this.emit('telemetry', 'assistant.audio.first', {});
         }
         this.assistantSpeaking = true;
+        this._syncAutoResponse();
         this._playChunk(Buffer.from(msg.delta, 'base64'));
         break;
       case 'response.function_call_arguments.delta':
@@ -1215,6 +1217,7 @@ class RealtimeSession extends EventEmitter {
         // kerak. Bu sox ichiga allaqachon yozilgan joriy audioga tegmaydi.
         this.playbackBuffer?.reset();
         this.assistantSpeaking = false;
+        this._syncAutoResponse();
         this._resetBargeInCandidate();
         // response.done server yuborishni tugatganini anglatadi, karnay esa
         // navbatdagi PCM'ni hali ijro etayotgan bo'lishi mumkin. feedAudio()
@@ -1330,9 +1333,14 @@ class RealtimeSession extends EventEmitter {
     });
     if (!policy.accept) {
       this.emit('turn_suppressed', policy.reason, this.userTranscript);
+      const speculativeInFlight = Boolean(this._spec && ['expected', 'held'].includes(this._spec.state));
       this._discardSpeculative();
-      try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
-      this._flushPlayback();
+      // Rad etilgan turn (aks-sado/shovqin) JARVISning hozir aytayotgan haqiqiy javobini bekor qilmasin
+      // va playbackni uzmasin — aynan shu titrash va gap o'rtasida uzilishni keltirib chiqargan.
+      if (!speculativeInFlight && !this.assistantSpeaking) {
+        try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
+        this._flushPlayback();
+      }
       this.userTranscript = '';
       return false;
     }
@@ -1495,12 +1503,28 @@ class RealtimeSession extends EventEmitter {
     this._deliverReadyBackgroundWork();
   }
 
+  // Gapirish vaqtida server avtomatik javob yaratmasin (xona aks-sadosi "yangi gap" bo'lib qolmasin);
+  // jim paytda esa yoqiq — taxminiy tez javob uchun.
+  _syncAutoResponse() {
+    if (!this._speculativeEnabled()) return;
+    const want = !this.assistantSpeaking;
+    if (this._autoResponseOn === want) return;
+    this._autoResponseOn = want;
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'session.update',
+        session: { turn_detection: { type: 'server_vad', threshold: NORMAL_VAD_THRESHOLD, silence_duration_ms: NORMAL_VAD_SILENCE_MS, prefix_padding_ms: SESSION_PREFIX_PADDING_MS, create_response: want, interrupt_response: false } }
+      }));
+    } catch (e) {}
+  }
+
   _speculativeEnabled() {
     return SPECULATIVE_RESPONSE && this.provider?.id === 'voice-live' && !this._mediaModeActive && !this._authoritativeTranscribe;
   }
 
   _beginSpeculative() {
-    if (!this._speculativeEnabled()) return;
+    // Gapirish paytida kelgan speech_stopped (aks-sado) yangi taxminiy javobni ochmasin.
+    if (!this._speculativeEnabled() || this.assistantSpeaking || this._realtimeResponseActive) return;
     clearTimeout(this._specTimer);
     this._spec = { state: 'expected', held: [], calls: [], doneInfo: null, created: false };
     const spec = this._spec;
@@ -1582,6 +1606,7 @@ class RealtimeSession extends EventEmitter {
           this.emit('telemetry', 'assistant.audio.first', {});
         }
         this.assistantSpeaking = true;
+        this._syncAutoResponse();
         for (const delta of chunks) this._playChunk(Buffer.from(delta, 'base64'));
       }
       if (spec.doneInfo) {

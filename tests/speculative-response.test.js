@@ -121,3 +121,28 @@ test('gate-closed silence is fed to the server only while its VAD still thinks t
   session._feedTrailingSilence(960);
   assert.equal(appends().length, 1);
 });
+
+test('a rejected echo/noise turn never cancels or flushes the reply that is currently being spoken', () => {
+  const { session, sent } = liveSession();
+  let flushed = 0;
+  session._flushPlayback = () => { flushed++; };
+  session.assistantSpeaking = true;
+  session._realtimeResponseActive = true;
+  msg(session, { type: 'input_audio_buffer.speech_stopped' });
+  assert.equal(session._spec, null);
+  msg(session, { type: 'conversation.item.input_audio_transcription.completed', transcript: 'uh' });
+  assert.equal(sent.some(m => m.type === 'response.cancel'), false);
+  assert.equal(flushed, 0);
+});
+
+test('server auto-response is switched off while JARVIS speaks and back on when the reply is done', () => {
+  const { session, sent } = liveSession();
+  const updates = () => sent.filter(m => m.type === 'session.update').map(m => m.session.turn_detection.create_response);
+  msg(session, { type: 'response.created', response: { id: 'own' } });
+  msg(session, audio('hi'));
+  assert.deepEqual(updates(), [false]);
+  msg(session, audio(' there'));
+  assert.deepEqual(updates(), [false]);
+  msg(session, { type: 'response.done', response: { status: 'completed' } });
+  assert.deepEqual(updates(), [false, true]);
+});
