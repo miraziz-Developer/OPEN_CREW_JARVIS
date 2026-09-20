@@ -26,3 +26,17 @@ test('voice instructions include the character by default and JARVIS_PERSONA=pla
     if (previous === undefined) delete process.env.JARVIS_PERSONA; else process.env.JARVIS_PERSONA = previous;
   }
 });
+
+test('hedged musings are conversation, while real commands still start a background task', () => {
+  const { needsBackgroundAgentTask } = require('../skills/realtime-voice');
+  for (const text of [
+    'I think I should just delete all my files and start over.',
+    'Maybe I should open a new project.',
+    'What if we restart the server?',
+    'I should probably fix the login bug tomorrow.'
+  ]) assert.equal(needsBackgroundAgentTask(text), false, text);
+  for (const text of [
+    'Delete all my files and start over.',
+    'Open the project folder and create a new file called notes.'
+  ]) assert.equal(needsBackgroundAgentTask(text), true, text);
+});

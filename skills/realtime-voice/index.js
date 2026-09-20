@@ -749,8 +749,12 @@ function needsGroundedAnswer(text) {
   return needsContextGrounding(text) || needsExpertAnswer(text);
 }
 
+// Mulohaza, taxmin yoki maslahat so'rash ("I think I should...", "maybe", "what if") buyruq emas — vazifa ishga tushmasin.
+const HEDGED_UTTERANCE = /^(?:(?:well|so|hmm+|um+|uh+|okay|ok)[,.]?\s+)*(?:i\s+(?:think|guess|suppose|wonder|feel like|might|may|could|should|would|was thinking|am thinking|'m thinking|'m not sure|don'?t know)|i'm\s+(?:thinking|not sure|wondering)|maybe|perhaps|what if|should i|do you think|would it be|it might be|it would be|just thinking)\b/i;
+
 function needsBackgroundAgentTask(text) {
   const value = String(text || '').trim();
+  if (HEDGED_UTTERANCE.test(value)) return false;
   if (!value || /\?|\b(?:why|how|what|which|should i|advice|explain|nega|qanday|nima|qaysi|maslahat|tushuntir)\b/i.test(value)) return false;
   const action = /\b(?:open|close|click|type|write|create|edit|update|fix|debug|build|test|install|configure|deploy|run|start|launch|search|research|send|upload|download|fill|submit|och|yop|bos|yoz|yarat|tahrir|yangila|tuzat|tekshir|o'rnat|ornat|sozla|ishga tushir|qidir|izla|yubor|yukla|to'ldir|jo'nat|jonat|bajar)\b/i.test(value);
   const work = value.length >= 12 || /\b(?:file|code|project|browser|form|email|report|website|app|fayl|kod|loyiha|brauzer|forma|hisobot|sayt|dastur)\b/i.test(value);
@@ -1420,7 +1424,7 @@ class RealtimeSession extends EventEmitter {
       if (!authorization.allowed) {
         this._pendingConfirmedAction = () => this._startBackgroundAgentTask(this.userTranscript);
         this.emit('telemetry', 'safety.confirmation_required', { risk: authorization.assessment.risk, kind: 'task' });
-        this._deliverSpokenAnswer('This action may have an external, destructive, or permission-changing effect. Say confirm to proceed, or cancel.');
+        this._deliverSpokenAnswer('That one is destructive or hard to undo. Say confirm to proceed, or cancel.');
         return true;
       }
       this.emit('telemetry', 'router.decision', { route: 'realtime-with-background-agent' });
@@ -1676,7 +1680,7 @@ class RealtimeSession extends EventEmitter {
     if (!authorization.allowed) {
       this._pendingConfirmedAction = () => this._runDirectFastAction(id);
       this.emit('telemetry', 'safety.confirmation_required', { risk: authorization.assessment.risk, kind: 'fast-action' });
-      await this._deliverSpokenAnswer('This action may have an external or destructive effect. Say confirm to proceed, or cancel.');
+      await this._deliverSpokenAnswer('That one is destructive or hard to undo. Say confirm to proceed, or cancel.');
       return;
     }
     const callId = 'direct-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
