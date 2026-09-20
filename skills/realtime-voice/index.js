@@ -108,6 +108,11 @@ const TRANSCRIPTION_LANGUAGE = env('REALTIME_TRANSCRIPTION_LANGUAGE', '');
 const TRANSCRIPTION_MODEL = env('REALTIME_TRANSCRIPTION_MODEL', 'gpt-4o-transcribe');
 // Voice Live'da Azure Speech transkripsiyasi ~0.2 s (gpt-4o-transcribe ~1 s) — o'lchangan.
 // Zaxira azure-realtime faqat OpenAI modellarini qabul qiladi.
+const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in natural English by default. Do not switch languages because of the user's language, accent, isolated foreign words, quoted text, transcription errors, or background audio. Translate into or speak in another language only when the user explicitly requested that named language; otherwise answer in English. Sound warm, attentive, and unforced, with natural wording and varied sentence length. Use complete sentences, always finish the thought, and never cut a sentence short; be concise for simple turns, but include enough detail when the question needs it. If the user requested an action, use the appropriate available tool instead of only describing or promising the action, and never claim completion before a successful tool result. Never invent missing facts, and do not use markdown.";
+// Taxminiy javob: server ovoz tugashi bilanoq javob boshlaydi (Azure playground kabi), JARVIS esa
+// transkriptni tekshirib qabul qiladi yoki bekor qiladi. Ovoz va tool-chaqiruvlar qaror chiqquncha ushlab turiladi.
+const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
+const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
 const VOICE_LIVE_TRANSCRIPTION_MODEL = env('REALTIME_VOICE_LIVE_TRANSCRIPTION_MODEL', 'azure-speech');
 // Jarvis gapirib bo'lgach, mikrofon yana necha ms kutib turadi (xona
 // akustikasi/karnay ovozi pasayishi uchun) — real foydalanishda 500ms
@@ -193,15 +198,16 @@ function buildSessionUpdate(provider, options) {
   const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
   const SESSION_INTERRUPT = (env('AZURE_VOICELIVE_INTERRUPT_RESPONSE') || 'true') === 'true';
 
+  const speculative = Boolean(options.speculative) && provider.id === 'voice-live' && !options.startMediaAware;
   const turnDetection = options.startMediaAware
     ? { type: 'server_vad', threshold: MEDIA_VAD_THRESHOLD, silence_duration_ms: MEDIA_VAD_SILENCE_MS, prefix_padding_ms: SESSION_PREFIX_PADDING_MS, create_response: false, interrupt_response: SESSION_INTERRUPT }
-    : { type: 'server_vad', threshold: NORMAL_VAD_THRESHOLD, silence_duration_ms: NORMAL_VAD_SILENCE_MS, prefix_padding_ms: SESSION_PREFIX_PADDING_MS, create_response: false, interrupt_response: SESSION_INTERRUPT };
+    : { type: 'server_vad', threshold: NORMAL_VAD_THRESHOLD, silence_duration_ms: NORMAL_VAD_SILENCE_MS, prefix_padding_ms: SESSION_PREFIX_PADDING_MS, create_response: speculative, interrupt_response: SESSION_INTERRUPT };
   const transcription = {
     model: provider.id === 'voice-live' ? VOICE_LIVE_TRANSCRIPTION_MODEL : TRANSCRIPTION_MODEL,
     ...(TRANSCRIPTION_LANGUAGE ? { language: TRANSCRIPTION_LANGUAGE } : {})
   };
   const common = {
-    instructions: options.instructions,
+    instructions: speculative ? options.instructions + '\n\n' + CONVERSATION_STYLE_INSTRUCTIONS : options.instructions,
     tools: options.tools,
     tool_choice: 'auto'
   };
@@ -889,6 +895,11 @@ class RealtimeSession extends EventEmitter {
     this.assistantTranscript = '';
     this._lastAssistantTranscript = '';
     this._suppressCurrentResponse = false;
+    this._spec = null;
+    this._specClearing = false;
+    this._specQueue = [];
+    this._specTimer = null;
+    this._specClearTimer = null;
     this._firstTextObserved = false;
     this._firstAudioObserved = false;
     this._playbackStartedForTurn = false;
@@ -1013,6 +1024,7 @@ class RealtimeSession extends EventEmitter {
       this._connecting = false;
       this.ws.send(JSON.stringify(buildSessionUpdate(provider, {
         startMediaAware: this._mediaModeActive,
+        speculative: SPECULATIVE_RESPONSE && !this._authoritativeTranscribe,
         instructions: loadInstructions(),
         tools: buildTools()
       })));
@@ -1089,6 +1101,7 @@ class RealtimeSession extends EventEmitter {
         break;
       case 'input_audio_buffer.speech_stopped':
         this.emit('telemetry', 'vad.speech_stopped', {});
+        this._beginSpeculative();
         if (this._authoritativeTranscribe && this._sttTurn) {
           this._beginAuthoritativeTranscription(this._sttTurn);
           this._sttTurn = null;
@@ -1130,6 +1143,7 @@ class RealtimeSession extends EventEmitter {
       case 'response.created':
         this._responseInterrupted = false;
         this._realtimeResponseActive = true;
+        this._onSpeculativeResponseCreated();
         this.emit('telemetry', 'provider.response.created', {
           responseId: msg.response?.id || msg.response_id || null
         });
@@ -1151,6 +1165,7 @@ class RealtimeSession extends EventEmitter {
       case 'response.audio.delta':
       case 'response.output_audio.delta':
         if (this._suppressCurrentResponse) break;
+        if (this._spec?.state === 'held') { this._spec.held.push(msg.delta); break; }
         if (!this._firstAudioObserved) {
           this._firstAudioObserved = true;
           this.emit('telemetry', 'assistant.audio.first', {});
@@ -1169,6 +1184,8 @@ class RealtimeSession extends EventEmitter {
           msg.arguments = this._pendingFnArgs[msg.call_id];
         }
         delete this._pendingFnArgs[msg.call_id];
+        if (this._suppressCurrentResponse && this._spec && ['cleared', 'discarded'].includes(this._spec.state)) break;
+        if (this._spec?.state === 'held') { this._spec.calls.push(msg); break; }
         this._handleFunctionCall(msg);
         break;
       case 'response.done': {
@@ -1199,7 +1216,9 @@ class RealtimeSession extends EventEmitter {
           interrupted,
           hasAssistantTranscript: Boolean(this.assistantTranscript.trim())
         });
-        if (!this._suppressCurrentResponse && this.assistantTranscript.trim()) {
+        if (!this._suppressCurrentResponse && this.assistantTranscript.trim() && this._spec?.state === 'held') {
+          this._spec.doneInfo = { transcript: this.assistantTranscript.trim(), status: responseStatus, reason: responseReason };
+        } else if (!this._suppressCurrentResponse && this.assistantTranscript.trim()) {
           this.emit('assistant_transcript', this.assistantTranscript.trim(), {
             status: responseStatus,
             reason: responseReason
@@ -1210,6 +1229,7 @@ class RealtimeSession extends EventEmitter {
         this.assistantTranscript = '';
         this._suppressCurrentResponse = false;
         this._realtimeResponseActive = false;
+        this._onSpeculativeResponseDone();
         // Barge-in paytida cancelled response.done yangi speech turni ochib
         // bo'lgandan keyin kelishi mumkin. Statussiz event daemon'da o'sha
         // yangi turnni yolg'on completed qilib qo'yar edi.
@@ -1269,12 +1289,14 @@ class RealtimeSession extends EventEmitter {
       if (addressed) this.userTranscript = addressed.command;
       this._addressedWakePending = false;
       if (!this.userTranscript) {
+        this._discardSpeculative();
         this.emit('turn_suppressed', 'wake-only', text);
         return false;
       }
     }
     const confirmation = this._actionSafety.handleUtterance(this.userTranscript);
     if (confirmation.matched) {
+      this._discardSpeculative();
       const pending = this._pendingConfirmedAction;
       this._pendingConfirmedAction = null;
       this.emit('user_transcript', this.userTranscript);
@@ -1292,6 +1314,7 @@ class RealtimeSession extends EventEmitter {
     });
     if (!policy.accept) {
       this.emit('turn_suppressed', policy.reason, this.userTranscript);
+      this._discardSpeculative();
       try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
       this._flushPlayback();
       this.userTranscript = '';
@@ -1333,17 +1356,20 @@ class RealtimeSession extends EventEmitter {
     const turnSerial = ++this._groundedTurnSerial;
     const communicationIntent = require('../communications').parseCommunicationIntent(this.userTranscript);
     if (communicationIntent?.kind === 'youtube-search') {
+      this._discardSpeculative();
       this.emit('telemetry', 'router.decision', { route: 'direct-communication', action: communicationIntent.kind });
       this._runCommunicationIntent(communicationIntent);
       return true;
     }
     const directAction = matchDirectFastAction(this.userTranscript);
     if (directAction) {
+      this._discardSpeculative();
       this.emit('telemetry', 'router.decision', { route: 'direct-fast-action', action: directAction });
       this._runDirectFastAction(directAction);
       return true;
     }
     if (needsBackgroundAgentTask(this.userTranscript)) {
+      this._discardSpeculative();
       const authorization = this._actionSafety.authorize({ kind: 'task', description: this.userTranscript });
       if (!authorization.allowed) {
         this._pendingConfirmedAction = () => this._startBackgroundAgentTask(this.userTranscript);
@@ -1362,7 +1388,7 @@ class RealtimeSession extends EventEmitter {
     // and can provide a follow-up after the current spoken turn is complete.
     if (needsContextGrounding(this.userTranscript) || reference.resolved) {
       this.emit('telemetry', 'router.decision', { route: 'realtime-with-background-grounding' });
-      this._respondWithRealtimeConversation();
+      if (!this._adoptSpeculative(options)) this._respondWithRealtimeConversation();
       this._startBackgroundGrounding(this.userTranscript, turnSerial);
       return true;
     }
@@ -1370,7 +1396,7 @@ class RealtimeSession extends EventEmitter {
     // This preserves run_task for complex computer work without another model
     // or TTS round-trip; deterministic fast actions/Astra routes run above.
     this.emit('telemetry', 'router.decision', { route: 'realtime-conversation' });
-    this._respondWithRealtimeConversation();
+    if (!this._adoptSpeculative(options)) this._respondWithRealtimeConversation();
     return true;
   }
 
@@ -1378,7 +1404,7 @@ class RealtimeSession extends EventEmitter {
     return this._sendResponseCreate({
       max_output_tokens: REALTIME_MAX_RESPONSE_TOKENS,
       tool_choice: 'auto',
-      instructions: "Respond to the user's latest turn in natural English by default. Do not switch languages because of the user's language, accent, isolated foreign words, quoted text, transcription errors, or background audio. Translate into or speak in another language only when the user explicitly requested that named language; otherwise answer in English. Sound warm, attentive, and unforced, with natural wording and varied sentence length. Use complete sentences, always finish the thought, and never cut a sentence short; be concise for simple turns, but include enough detail when the question needs it. If the user requested an action, use the appropriate available tool instead of only describing or promising the action, and never claim completion before a successful tool result. Never invent missing facts, and do not use markdown.",
+      instructions: CONVERSATION_STYLE_INSTRUCTIONS,
     });
   }
 
@@ -1453,7 +1479,118 @@ class RealtimeSession extends EventEmitter {
     this._deliverReadyBackgroundWork();
   }
 
+  _speculativeEnabled() {
+    return SPECULATIVE_RESPONSE && this.provider?.id === 'voice-live' && !this._mediaModeActive && !this._authoritativeTranscribe;
+  }
+
+  _beginSpeculative() {
+    if (!this._speculativeEnabled()) return;
+    clearTimeout(this._specTimer);
+    this._spec = { state: 'expected', held: [], calls: [], doneInfo: null, created: false };
+    const spec = this._spec;
+    // Transkript umuman kelmasa ovoz abadiy ushlanib qolmasin: eski xulq (javobsiz) bilan bir xil.
+    this._specTimer = setTimeout(() => { if (this._spec === spec && ['expected', 'held'].includes(spec.state)) this._discardSpeculative(); }, SPECULATIVE_DECISION_TIMEOUT_MS);
+    if (this._specTimer.unref) this._specTimer.unref();
+  }
+
+  _onSpeculativeResponseCreated() {
+    const spec = this._spec;
+    if (!spec) return;
+    if (spec.state === 'expected') spec.state = 'held';
+    else if (spec.state === 'adopted') spec.created = true;
+    else if (spec.state === 'discarded') {
+      spec.state = 'cleared';
+      this._suppressCurrentResponse = true;
+      this._specClearing = true;
+      this._armSpecClearTimer();
+      try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
+    }
+  }
+
+  _onSpeculativeResponseDone() {
+    if (this._specClearing) this._releaseSpecClearing();
+    const spec = this._spec;
+    if (spec && ['adopted', 'cleared'].includes(spec.state)) this._spec = null;
+  }
+
+  _armSpecClearTimer() {
+    clearTimeout(this._specClearTimer);
+    this._specClearTimer = setTimeout(() => this._releaseSpecClearing(), 700);
+    if (this._specClearTimer.unref) this._specClearTimer.unref();
+  }
+
+  _releaseSpecClearing() {
+    clearTimeout(this._specClearTimer);
+    this._specClearing = false;
+    const queued = this._specQueue.splice(0);
+    for (const [response] of queued) this._sendResponseCreate(response);
+  }
+
+  // Taxminiy javobni bekor qiladi: ushlangan ovoz/tool-chaqiruvlar tashlanadi.
+  _discardSpeculative() {
+    const spec = this._spec;
+    if (!spec) return;
+    clearTimeout(this._specTimer);
+    if (spec.state === 'held') {
+      spec.state = 'cleared';
+      spec.held = []; spec.calls = []; spec.doneInfo = null;
+      if (this._realtimeResponseActive) {
+        this._suppressCurrentResponse = true;
+        this._specClearing = true;
+        this._armSpecClearTimer();
+        try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
+      } else {
+        this._spec = null;
+      }
+    } else if (spec.state === 'expected') {
+      spec.state = 'discarded';
+      this._specClearing = true;
+      this._armSpecClearTimer();
+    }
+  }
+
+  // true qaytarsa taxminiy javob qabul qilindi va alohida response.create kerak emas.
+  _adoptSpeculative(options = {}) {
+    const spec = this._spec;
+    if (!spec || !['expected', 'held'].includes(spec.state)) return false;
+    if (options.replaceAudioItem) { this._discardSpeculative(); return false; }
+    clearTimeout(this._specTimer);
+    const wasHeld = spec.state === 'held';
+    spec.state = 'adopted';
+    this.emit('telemetry', 'speculative.adopted', { held: wasHeld, heldChunks: spec.held.length });
+    if (wasHeld) {
+      const chunks = spec.held.splice(0);
+      if (chunks.length) {
+        if (!this._firstAudioObserved) {
+          this._firstAudioObserved = true;
+          this.emit('telemetry', 'assistant.audio.first', {});
+        }
+        this.assistantSpeaking = true;
+        for (const delta of chunks) this._playChunk(Buffer.from(delta, 'base64'));
+      }
+      if (spec.doneInfo) {
+        const info = spec.doneInfo;
+        this.emit('assistant_transcript', info.transcript, { status: info.status, reason: info.reason });
+        this._lastAssistantTranscript = info.transcript;
+        this._rememberConversationTurn('Jarvis', info.transcript);
+      }
+      for (const call of spec.calls.splice(0)) this._handleFunctionCall(call);
+      if (!this._realtimeResponseActive) this._spec = null;
+    } else {
+      // Javob hali yaratilmagan: kelmasa, xavfsizlik uchun odatiy yo'l bilan so'raymiz.
+      const timer = setTimeout(() => {
+        if (this._spec === spec && !spec.created && !this._realtimeResponseActive && !this.closed) {
+          this._spec = null;
+          this._respondWithRealtimeConversation();
+        }
+      }, 2500);
+      if (timer.unref) timer.unref();
+    }
+    return true;
+  }
+
   _sendResponseCreate(response) {
+    if (this._specClearing) { this._specQueue.push([response]); return true; }
     try {
       const message = { type: 'response.create' };
       if (response) message.response = response;
