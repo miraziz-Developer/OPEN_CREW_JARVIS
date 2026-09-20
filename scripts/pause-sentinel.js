@@ -99,7 +99,7 @@ let lastComboAt = 0;
 
 async function pause() {
   log('Pauza qilinmoqda...');
-  speak('Jarvis to\'xtadi');
+  speak('Standing down.');
   try { execSync('launchctl bootout gui/' + UID + '/' + PLIST_LABEL, { timeout: 15000 }); } catch (e) { log('bootout (davom etamiz): ' + e.message); }
   // Ehtiyot uchun: supervisor skriptga "stop" berilmaydi — u argumentni
   // tushunmaydi va aksincha daemonni qayta yoqishi mumkin. Jarayonlar to'g'ridan
@@ -125,7 +125,7 @@ async function resume() {
   }
   log('Uyg\'onish so\'rovi yuborildi; servislar tayyorligi kutilmoqda.');
   const ready = await waitUntilReady(45000);
-  speak(ready ? 'Jarvis yoqildi' : 'Jarvis yoqilmoqda, tayyor bo\'lishi biroz cho\'zildi');
+  speak(ready ? 'Back online.' : 'Coming online. This may take a moment.');
   log(ready ? 'Jarvis servislar tayyor.' : 'Jarvis readiness timeout.');
 }
 
