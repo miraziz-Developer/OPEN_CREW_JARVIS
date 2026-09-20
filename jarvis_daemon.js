@@ -25,6 +25,7 @@ process.chdir(PROJECT_DIR);
 
 const { writeMemory, searchMemory, upsertTurnMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
+const { NativeMic } = require('./core/native-mic');
 const { JarvisRuntime } = require('./core/jarvis-runtime');
 const { VoiceFlightRecorder } = require('./core/voice-flight-recorder');
 const { MissionControl, stableId } = require('./core/mission-control');
@@ -131,6 +132,7 @@ const WAKE_STT_PREROLL_MS = 450;
 const WAKE_STT_MIN_SPEECH_MS = 480;
 
 const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
+const NATIVE_AEC = (env('JARVIS_NATIVE_AEC') || 'true') !== 'false';
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
 // Provider VAD `speech_stopped` hodisasini yo'qotsa idle timer qayta
 // qurollanmay qolishi mumkin. Bu mustaqil watchdog stuck realtime sessiyani
@@ -638,6 +640,26 @@ async function mainLoop() {
     runtime.beginConversation(reason.includes('Fn') ? 'fn-hands-free' : 'wake-word');
     const connectStartedAt = Date.now();
     _activeRealtimeSession = session;
+    // macOS Voice Processing (FaceTime darajasidagi exo bostirish): tayyor bo'lguncha va ishlamay qolsa
+    // oddiy mikrofon + mahalliy AEC yo'li ishlayveradi.
+    let nativeMic = null;
+    let nativeMicLastAt = 0;
+    if (NATIVE_AEC && NativeMic.isSupported()) {
+      nativeMic = new NativeMic();
+      nativeMic.on('data', chunk => {
+        if (session.closed) return;
+        nativeMicLastAt = Date.now();
+        if (!session._nativeAec) { session.enableNativeAec(); inf('🎧 Native AEC (Voice Processing) yoqildi'); }
+        const queued = typeof session._jarvisQueueWakeAudio === 'function' && session._jarvisQueueWakeAudio(Buffer.from(chunk));
+        if (!queued && Date.now() >= (session._jarvisWakeMuteUntil || 0)) session.feedAudio(chunk);
+      });
+      nativeMic.on('exit', info => {
+        session.disableNativeAec('helper-exit');
+        if (!session.closed) wrn('Native AEC to\'xtadi (' + (info.error || info.code) + ') — oddiy mikrofon yo\'liga qaytildi');
+      });
+      nativeMic.on('unavailable', reason => { wrn('Native AEC mavjud emas: ' + reason); });
+      nativeMic.start();
+    }
     state = 'realtime';
     lastHotwordTime = Date.now();
     // Hotword ham, Fn ham foydalanuvchiga darhol bir xil qisqa synthetic chime
@@ -706,6 +728,7 @@ async function mainLoop() {
     };
     const markRealtimeActivity = () => { lastRealtimeActivityAt = Date.now(); };
     staleSessionTimer = setInterval(() => {
+      if (nativeMic && session._nativeAec && Date.now() - nativeMicLastAt > 2000) session.disableNativeAec('no-frames');
       if (finished || activeToolCount > 0) return;
       if (userSpeaking && Date.now() - userSpeechStartedAt >= REALTIME_MAX_USER_SPEECH_MS) {
         runtimeTelemetry.vadWatchdogTimeout();
@@ -732,6 +755,7 @@ async function mainLoop() {
       flightRecorder.endSession(why);
       clearTimeout(idleTimer);
       clearInterval(staleSessionTimer);
+      try { nativeMic?.stop(); } catch (e) {}
       if (_activeRealtimeSession === session) _activeRealtimeSession = null;
       try { session.close(); } catch (e) {}
       state = 'listening';
@@ -1107,9 +1131,9 @@ async function mainLoop() {
           // target RMS'ga kuchaytiradi. Bu yerda oldindan gain berish xona fonini
           // ham "speech" qilib, server VAD'ni speech_started holatida qoldirardi.
           const realtimeChunk = Buffer.from(stepData);
-          const queued = typeof _activeRealtimeSession._jarvisQueueWakeAudio === 'function'
+          const queued = !_activeRealtimeSession._nativeAec && typeof _activeRealtimeSession._jarvisQueueWakeAudio === 'function'
             && _activeRealtimeSession._jarvisQueueWakeAudio(realtimeChunk);
-          if (!queued && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
+          if (!_activeRealtimeSession._nativeAec && !queued && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
             _activeRealtimeSession.feedAudio(realtimeChunk);
           }
         }

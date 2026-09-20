@@ -19,7 +19,7 @@ const { spawn, execFile } = require('child_process');
 const { promisify } = require('util');
 const EventEmitter = require('events');
 const WebSocketClient = require('ws');
-const { DuplexVoiceEngine } = require('../../core/duplex-voice-engine');
+const { DuplexVoiceEngine, rms } = require('../../core/duplex-voice-engine');
 const { PcmPlaybackBuffer } = require('../../core/pcm-playback-buffer');
 const { classifyUserTurn, isRepeatedResponse } = require('../../core/voice-turn-policy');
 const { chooseTranscript, authoritativeTimeoutMs, nativeIsConfident } = require('../../core/stt-recovery');
@@ -114,6 +114,8 @@ const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in na
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
 const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
 const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10) || 15000;
+const NATIVE_BARGE_IN_RMS = parseInt(env('REALTIME_NATIVE_BARGE_IN_RMS'), 10) || 600;
+const NATIVE_MIC_MUTE_GRACE_MS = 150;
 const BARGE_IN_VERIFY_TIMEOUT_MS = parseInt(env('REALTIME_BARGE_IN_VERIFY_MS'), 10) || 3500;
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
@@ -913,6 +915,7 @@ class RealtimeSession extends EventEmitter {
     this._autoResponseOn = true;
     this._dropStaleAudio = false;
     this._duck = null;
+    this._nativeAec = false;
     this._noBargeInUntil = 0;
     this._gateStats = { sent: 0, dropped: 0, maxResidual: 0, since: Date.now() };
     this._trailingSilenceMs = 0;
@@ -2156,7 +2159,7 @@ class RealtimeSession extends EventEmitter {
   feedAudio(pcm16_16k) {
     if (!this.ready || this.closed) return;
     const now = Date.now();
-    const muteUntil = Math.max(this._playbackUntil, this._speakEndedAt) + MIC_MUTE_GRACE_MS;
+    const muteUntil = Math.max(this._playbackUntil, this._speakEndedAt) + (this._nativeAec ? NATIVE_MIC_MUTE_GRACE_MS : MIC_MUTE_GRACE_MS);
     const resampled = resample16to24(pcm16_16k);
     const inAcousticGrace = !this.assistantSpeaking && now < muteUntil;
     // Himoya: audio kelmayapti va karnay jim bo'lsa ham "gapiryapti" holati qolib ketsa (darvoza kar bo'lib qoladi),
@@ -2167,7 +2170,9 @@ class RealtimeSession extends EventEmitter {
       this._syncAutoResponse();
       this.emit('telemetry', 'assistant.speaking.stuck_reset', {});
     }
-    const processed = this.duplex.process(resampled, { assistantSpeaking: this.assistantSpeaking });
+    const processed = this._nativeAec
+      ? this._nativeGate(resampled)
+      : this.duplex.process(resampled, { assistantSpeaking: this.assistantSpeaking });
     this._recordGateStats(processed, now);
     // Gapirish vaqtida moslashtirilgan AEC barge-in'ni saqlaydi. Gap tugagach
     // grace oynasida esa reference tugab qolgan bo'lishi mumkin; shu davrda
@@ -2292,6 +2297,31 @@ class RealtimeSession extends EventEmitter {
     this.emit('telemetry', 'barge_in.resumed', { reason, pausedMs });
   }
 
+  // macOS Voice Processing mikrofoni: exo OS darajasida allaqachon ayirilgan, shuning uchun mahalliy AEC/gate kerak emas.
+  // Jim paytda hamma audio serverga (server VAD + shovqin filtri hal qiladi), JARVIS gapirayotganda esa
+  // faqat aniq baland ovoz barge-in nomzodi bo'ladi (keyin pauza+transkript tekshiruvi ishlaydi).
+  enableNativeAec() {
+    if (this._nativeAec) return;
+    this._nativeAec = true;
+    this.duplex.clearPlayback();
+    this.emit('telemetry', 'native_aec.enabled', {});
+  }
+
+  disableNativeAec(reason) {
+    if (!this._nativeAec) return;
+    this._nativeAec = false;
+    this.emit('telemetry', 'native_aec.disabled', { reason });
+  }
+
+  _nativeGate(audio) {
+    const level = rms(audio);
+    if (this.assistantSpeaking) {
+      const send = level >= NATIVE_BARGE_IN_RMS;
+      return { send, audio, reason: send ? 'barge-in' : 'playback-noise', residualRms: level, correlation: 0, speechThresholdRms: NATIVE_BARGE_IN_RMS };
+    }
+    return { send: true, audio, reason: 'speech', residualRms: level, correlation: 0, speechThresholdRms: 0 };
+  }
+
   _recordGateStats(processed, now) {
     const stats = this._gateStats;
     if (processed.send) stats.sent++; else stats.dropped++;
@@ -2360,7 +2390,7 @@ class RealtimeSession extends EventEmitter {
     const durationMs = Math.ceil((buf.length / (OUT_RATE * 2)) * 1000);
     this._playbackUntil = Math.max(now, this._playbackUntil) + durationMs;
     this._lastAudioQueuedAt = now;
-    this.duplex.queuePlayback(buf);
+    if (!this._nativeAec) this.duplex.queuePlayback(buf);
     try {
       const writable = this.playProc.stdin.write(buf);
       if (!this._playbackStartedForTurn) {
