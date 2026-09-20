@@ -13,10 +13,25 @@ function configured(value) {
   return Boolean(text && !/^(?:\.{3}|changeme|replace[-_ ]?me|your[-_ ])/i.test(text));
 }
 
+const REALTIME_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
+
+// Realtime WS faqat oddiy OpenAI ovozlarini qabul qiladi; Azure Neural nomlari
+// (en-US-Adam:DragonHDLatestNeural va h.k.) faqat Voice Live / TTS uchun.
+function getRealtimeVoice(...candidates) {
+  for (const candidate of candidates) {
+    const v = String(candidate || '').trim().toLowerCase();
+    if (REALTIME_VOICES.includes(v)) return v;
+  }
+  return 'shimmer';
+}
+
 function buildVoiceProviders(env) {
   const providers = [];
   const voiceLiveEndpoint = env('AZURE_VOICELIVE_ENDPOINT');
   const voiceLiveKey = env('AZURE_VOICELIVE_KEY');
+  // Bitta ovoz hamma joyda (Voice Live + TTS) — "ikki xil ovoz" xatosini oldini oladi.
+  const unifiedVoice = env('JARVIS_VOICE') || env('AZURE_VOICELIVE_VOICE') || env('AZURE_SPEECH_VOICE') || 'en-US-OnyxTurboMultilingualNeural';
+
   if (configured(voiceLiveEndpoint) && configured(voiceLiveKey)) {
     const base = websocketEndpoint(voiceLiveEndpoint)
       .replace(/\/voice-live\/realtime(?:\?.*)?$/, '')
@@ -27,7 +42,7 @@ function buildVoiceProviders(env) {
       id: 'voice-live',
       url: `${base}/voice-live/realtime?api-version=${encodeURIComponent(apiVersion)}&model=${encodeURIComponent(model)}`,
       headers: { 'api-key': voiceLiveKey },
-      voice: { type: 'azure-standard', name: env('AZURE_VOICELIVE_VOICE', 'en-US-OnyxTurboMultilingualNeural') }
+      voice: { type: 'azure-standard', name: unifiedVoice }
     });
   }
 
@@ -42,7 +57,7 @@ function buildVoiceProviders(env) {
       id: 'azure-realtime',
       url: `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}`,
       headers: { 'api-key': realtimeKey },
-      voice: env('AZURE_REALTIME_VOICE', 'cedar')
+      voice: getRealtimeVoice(env('AZURE_REALTIME_VOICE'), unifiedVoice)
     });
   }
 

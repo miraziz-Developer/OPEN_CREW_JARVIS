@@ -15,6 +15,7 @@ launchctl unload "${DEST}" 2>/dev/null || true
 # Yangi macOS da o'chirish
 USER_ID=$(id -u)
 launchctl bootout gui/$USER_ID/com.jarvis.openclaw 2>/dev/null || true
+launchctl bootout gui/$USER_ID/com.jarvis.persistent-agent-runner 2>/dev/null || true
 
 # Faylni o'chirish
 if [[ -f "${DEST}" ]]; then
@@ -23,6 +24,8 @@ if [[ -f "${DEST}" ]]; then
 else
   echo "ℹ️  Avtostart allaqachon o'chirilgan."
 fi
+
+rm -f "${HOME}/Library/LaunchAgents/com.jarvis.persistent-agent-runner.plist"
 
 echo "   Hozir ishlatilayotgan Jarvis ni to'xtatish:"
 echo "   launchctl bootout gui/${USER_ID}/com.jarvis.openclaw"

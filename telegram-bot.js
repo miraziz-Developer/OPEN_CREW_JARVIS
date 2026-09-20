@@ -15,6 +15,7 @@ const { writeMemory, searchMemory, readProfile } = require('./skills/memory');
 const { createTelegramPoller } = require('./core/telegram-poller');
 const { analyzeVideoNote, validateVideoNote } = require('./core/video-note-analysis');
 const { createAgentBridge } = require('./core/agent-bridge');
+const { resolveOpenClawEnvironment } = require('./core/openclaw-credentials');
 const { createSkillPlatform } = require('./skills/platform');
 const { RuntimeTelemetry } = require('./core/runtime-telemetry');
 
@@ -65,9 +66,13 @@ console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
 // hostda muntazam EFATAL bilan uziladi. Handler va media metodlarini libraryda
 // qoldiramiz, incoming update'larni esa barqaror native HTTPS poller olib keladi.
 const bot = new TelegramBot(TOKEN, { polling: false });
+const { createOwnerUpdateHandler, createOwnerTaskCommands } = require('./core/telegram-owner');
+const { createGmailTaskNotifier } = require('./core/gmail-task-notifier');
+const ownerId = getEnv('TELEGRAM_CHAT_ID');
+if (!/^[1-9]\d*$/.test(ownerId)) console.error('Telegram locked: configure TELEGRAM_CHAT_ID with the owner private user ID.');
 const telegramPoller = createTelegramPoller({
   token: TOKEN,
-  onUpdate: update => bot.processUpdate(update)
+  onUpdate: createOwnerUpdateHandler({ ownerId, dispatch: update => bot.processUpdate(update) })
 });
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -122,8 +127,12 @@ async function sttFromFile(wavPath, timing = {}) {
 
 const telegramAgentBridge = createAgentBridge({
   chatId: null, token: TOKEN, projectDir: PROJECT_DIR, env: getEnv,
-  azureOpenAiKey: AZURE_OPENAI_KEY,
+  azureOpenAiKey: AZURE_OPENAI_KEY, openClawEnvironment: resolveOpenClawEnvironment({ projectDir: PROJECT_DIR }),
   skillPlatform: createSkillPlatform({ projectDir: PROJECT_DIR, env: getEnv }), runtime: {}, telemetry: runtimeTelemetry
+});
+const ownerTaskCommands = createOwnerTaskCommands({
+  bridge: telegramAgentBridge, notifier: createGmailTaskNotifier({ env: getEnv }),
+  send: (chatId, text) => bot.sendMessage(chatId, text)
 });
 
 function askAgent(message, chatId) {
@@ -474,6 +483,7 @@ bot.onText(/\/cancel/, (msg) => {
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
+  if (await ownerTaskCommands(msg)) return;
   console.log('Telegram message received: chat=' + chatId + ', from=' + (msg.from?.id || 'unknown') + ', type=' + (msg.video_note ? 'video_note' : msg.voice ? 'voice' : msg.text ? 'text' : 'other'));
 
   // Matnli xabar

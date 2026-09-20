@@ -41,6 +41,7 @@ Before typing text into an app, confirm the focused app and target field. After 
 ## Safety and boundaries
 
 - `--safe_mode auto` is required. Do not use `--safe_mode off`.
+- For automatic dependency repair, inspect first and install only one validated package into the current project. Never use `sudo`, global installs, package URLs/paths, lifecycle scripts, or an unbounded `npm install`/`pip install` command.
 - `--auto_run` is permitted only because the task is bounded by this skill and the user requested the local work. Keep the task narrow.
 - Ask for explicit confirmation before deleting files/data, changing system settings or permissions, altering credentials, stopping a service that may be in use, sending/publishing anything, or making a purchase/payment.
 - Never use destructive Docker commands (`rm`, `prune`, volume removal) without explicit confirmation and a named target.

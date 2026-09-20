@@ -67,7 +67,13 @@ function speak(text) {
     fs.writeFileSync(tmpIn, JSON.stringify({ text }), 'utf8');
     const out = execSync('node "' + path.join(PROJECT_DIR, 'skills', 'azure-tts', 'index.js') + '" < "' + tmpIn + '"', {
       cwd: PROJECT_DIR,
-      env: { ...process.env, AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'), AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'uz-UZ-SardorNeural' },
+      env: { 
+        ...process.env, 
+        AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'), 
+        AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'), 
+        AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || env('AZURE_VOICELIVE_VOICE') || 'en-US-AndrewNeural',
+        AZURE_VOICELIVE_VOICE: env('AZURE_VOICELIVE_VOICE') || 'en-US-AndrewNeural'
+      },
       encoding: 'utf8', timeout: 15000
     });
     fs.unlinkSync(tmpIn);

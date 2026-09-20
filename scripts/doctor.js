@@ -95,7 +95,7 @@ async function main() {
   const paused = fs.existsSync(path.join(PROJECT_DIR, '.jarvis-paused'));
   add('state:paused', paused ? 'warn' : 'ok', paused ? 'JARVIS pauzada' : 'faol', paused ? 'Fn tugmasi yoki jarvis start bilan davom ettiring' : null);
 
-  for (const [name, label] of Object.entries({ supervisor: 'com.jarvis.openclaw', sentinel: 'com.jarvis.pausesentinel', gateway: 'ai.openclaw.gateway' })) {
+  for (const [name, label] of Object.entries({ supervisor: 'com.jarvis.openclaw', persistentRunner: 'com.jarvis.persistent-agent-runner', sentinel: 'com.jarvis.pausesentinel', gateway: 'ai.openclaw.gateway' })) {
     const state = launchdState(label);
     add(`launchd:${name}`, state === 'running' ? 'ok' : 'error', state || 'ro‘yxatdan o‘tmagan', './scripts/enable-autostart.sh');
   }
@@ -104,6 +104,7 @@ async function main() {
   checkProcess('voice-daemon', 'jarvis_daemon.js');
   checkProcess('pause-sentinel', 'scripts/pause-sentinel.js');
   checkProcess('dashboard', 'dashboard/server.js');
+  checkProcess('persistent-agent-runner', 'core/persistent-agent-runner.js');
   checkProcess('screen-monitor', 'skills/screen-monitor/index.js', validation.values.SCREEN_MONITOR_ENABLED !== false);
   checkProcess('telegram-bot', 'telegram-bot.js', Boolean(envValues.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN));
 

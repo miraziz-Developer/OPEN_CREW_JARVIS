@@ -62,3 +62,10 @@ test('python wake worker is matched by its scripts path', () => {
   ].join('\n') });
   assert.deepEqual(found.map(item => item.pid), [77]);
 });
+
+test('macOS Python.app executable casing is recognized as a wake worker owner', () => {
+  assert.equal(commandOwnsScript(
+    '/opt/homebrew/Frameworks/Python.framework/Versions/3.11/Resources/Python.app/Contents/MacOS/Python -u /repo/scripts/openwakeword-worker.py',
+    '/repo/scripts/openwakeword-worker.py'
+  ), true);
+});

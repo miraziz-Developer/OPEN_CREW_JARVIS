@@ -29,7 +29,7 @@ function commandOwnsScript(command, scriptPath) {
   // file. Service scripts must be launched by their interpreter; bash remains
   // valid because it owns the supervisor script itself.
   const executable = path.basename(args[0] || '');
-  return /^(?:node|nodejs|python(?:\d+(?:\.\d+)*)?|bash|sh|zsh)$/.test(executable);
+  return /^(?:node|nodejs|python(?:\d+(?:\.\d+)*)?|bash|sh|zsh)$/i.test(executable);
 }
 
 function findMatchingProcesses(scriptPath, options = {}) {

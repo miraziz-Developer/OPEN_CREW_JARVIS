@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const {
   RealtimeSession, needsGroundedAnswer, needsContextGrounding,
-  needsExpertAnswer, collectGrounding, matchDirectFastAction, buildSessionUpdate,
+  needsExpertAnswer, needsBackgroundAgentTask, collectGrounding, matchDirectFastAction, buildSessionUpdate,
   loadInstructions, runFullAgent
 } = require('../skills/realtime-voice');
 
@@ -16,6 +16,7 @@ test('voice instructions default to English, permit explicit translation, and re
   assert.match(instructions, /Do not automatically switch to Uzbek, Russian, or any other language/i);
   assert.doesNotMatch(instructions, /Reply naturally in that same language/i);
   assert.match(instructions, /Talk like an attentive, capable person/i);
+  assert.match(instructions, /Start speaking the first useful answer as soon as it is ready/i);
   assert.match(instructions, /ACTION FIRST/i);
   assert.match(instructions, /call the tool instead of merely explaining/i);
   assert.match(instructions, /never claim success until the tool returns a successful result/i);
@@ -95,6 +96,76 @@ test('transcript gate keeps generic conversation and reasoning on the low-latenc
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(questions.length, 0);
   assert.equal(sent.filter(message => message.type === 'response.create').length, 2);
+});
+
+test('contextual questions start a realtime reply while grounding and expert work run in parallel', async () => {
+  let releaseGrounding;
+  let expertCalls = 0;
+  const session = new RealtimeSession({
+    groundingProvider: () => new Promise(resolve => { releaseGrounding = resolve; }),
+    expertAnswer: async () => { expertCalls++; return 'Verified project status.'; }
+  });
+  const sent = [];
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+
+  session._acceptTranscript('What was the status of that project?');
+  await new Promise(resolve => setImmediate(resolve));
+
+  const response = sent.find(message => message.type === 'response.create');
+  assert.ok(response);
+  assert.equal(response.response.tool_choice, 'auto');
+  assert.equal(expertCalls, 0);
+
+  releaseGrounding('Project context.');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(expertCalls, 1);
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
+
+  session._onMessage({ data: JSON.stringify({ type: 'response.created', response: { id: 'live-1' } }) });
+  session._onMessage({ data: JSON.stringify({ type: 'response.done', response: { status: 'completed' } }) });
+  await new Promise(resolve => setImmediate(resolve));
+
+  const followUp = sent.filter(message => message.type === 'response.create').at(-1);
+  assert.match(followUp.response.instructions, /Verified project status/);
+});
+
+test('explicit complex action starts a background agent while realtime immediately acknowledges it', async () => {
+  let releaseTask;
+  const calls = [];
+  const session = new RealtimeSession({
+    backgroundAgentRunner: (description, sessionKey, onProgress) => {
+      calls.push({ description, sessionKey });
+      onProgress('1/2 step in progress');
+      return new Promise(resolve => { releaseTask = resolve; });
+    }
+  });
+  const sent = [];
+  const events = [];
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+  session.on('tool_call', (description, callId) => events.push(['start', description, callId]));
+  session.on('tool_result', (result, callId) => events.push(['done', result, callId]));
+
+  assert.equal(needsBackgroundAgentTask('Fix the project build error and run the tests'), true);
+  assert.equal(needsBackgroundAgentTask('How do I fix the project build error?'), false);
+  session._acceptTranscript('Fix the project build error and run the tests');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
+  assert.equal(sent[0].response.tool_choice, 'none');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sessionKey, /^agent:main:voice-background-/);
+  assert.equal(events[0][0], 'start');
+
+  releaseTask('Build fixed and tests passed.');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(events.at(-1)[0], 'done');
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
+
+  session._onMessage({ data: JSON.stringify({ type: 'response.done', response: { status: 'completed' } }) });
+  await new Promise(resolve => setImmediate(resolve));
+  const followUp = sent.filter(message => message.type === 'response.create').at(-1);
+  assert.match(followUp.response.instructions, /Build fixed and tests passed/);
 });
 
 test('YouTube search is a direct realtime route and never invokes deep-think', async () => {
@@ -217,6 +288,8 @@ test('Fn is a hands-free conversation trigger and release does not force VAD fin
 
   assert.match(daemonSource, /triggerVoice\('⌨️ Fn hands-free conversation'\)/);
   assert.match(daemonSource, /Fn qo'yib yuborilishi suhbat turnini yopmaydi/);
+  assert.match(daemonSource, /restartFromFn = true/);
+  assert.match(daemonSource, /Fn har doim yangi suhbatni boshlash tugmasi bo'lishi kerak/);
   assert.doesNotMatch(daemonSource, /finishPushToTalkTurn/);
   assert.doesNotMatch(realtimeSource, /finishPushToTalkTurn/);
 });
@@ -253,8 +326,7 @@ test('direct Azure Realtime session payload uses the nested GA audio schema', ()
   assert.equal(event.session.type, 'realtime');
   assert.deepEqual(event.session.output_modalities, ['audio']);
   assert.deepEqual(event.session.audio.input.format, { type: 'audio/pcm', rate: 24000 });
-  assert.equal(event.session.audio.input.turn_detection.create_response, false);
-  assert.equal(event.session.audio.input.turn_detection.silence_duration_ms, 300);
+  assert.equal(event.session.audio.input.turn_detection.silence_duration_ms, 180);
   assert.equal(event.session.audio.output.voice, 'cedar');
   assert.equal(event.session.modalities, undefined);
   assert.equal(event.session.input_audio_format, undefined);
@@ -350,7 +422,7 @@ test('wake suffix preserves and accepts the command before Jarvis', async () => 
 
 test('duplex uses a low-latency normal hangover and retains a conservative media profile', () => {
   const session = new RealtimeSession();
-  assert.equal(session.duplex.hangoverMs, 450);
+  assert.equal(session.duplex.hangoverMs, 330);
   session.ws = { send() {} };
   session._setMediaLikelyPlaying();
   assert.ok(session.duplex.hangoverMs >= 900);
@@ -652,7 +724,7 @@ test('a short or ambiguous native transcript still waits for authoritative STT',
   assert.deepEqual(accepted, ["Musiqani to'xtat"]);
 });
 
-test('contextual turns are grounded with screen and Obsidian before Realtime speaks', async () => {
+test('contextual turns speak immediately and deliver grounded verification as a follow-up', async () => {
   const calls = [];
   const session = new RealtimeSession({
     groundingProvider: async query => {
@@ -677,8 +749,13 @@ test('contextual turns are grounded with screen and Obsidian before Realtime spe
   assert.match(calls[1][2], /OBSIDIAN/);
   const responses = sent.filter(message => message.type === 'response.create');
   assert.equal(responses.length, 1);
-  assert.match(responses[0].response.instructions, /bozorli\.online/);
+  assert.doesNotMatch(responses[0].response.instructions, /bozorli\.online/);
   assert.doesNotMatch(responses[0].response.instructions, /biroz kuting|natijasini kut/i);
+
+  session._onMessage({ data: JSON.stringify({ type: 'response.done', response: { status: 'completed' } }) });
+  await new Promise(resolve => setImmediate(resolve));
+  const followUp = sent.filter(message => message.type === 'response.create').at(-1);
+  assert.match(followUp.response.instructions, /bozorli\.online/);
 });
 
 test('grounding falls back to local Obsidian search when semantic search fails', async () => {
@@ -977,12 +1054,13 @@ test('a newer accepted turn invalidates an older grounded answer', async () => {
   session._flushPlayback = () => {};
 
   session._acceptTranscript('Oldingi loyiha holati qanday?');
+  await new Promise(resolve => setImmediate(resolve));
   session._acceptTranscript('Telegramni och');
   release('OBSIDIAN: eski loyiha');
   await new Promise(resolve => setImmediate(resolve));
 
   const responses = sent.filter(message => message.type === 'response.create');
-  assert.equal(responses.length, 1);
-  assert.match(responses[0].response.instructions, /Telegram ochildi/);
-  assert.doesNotMatch(responses[0].response.instructions, /Eski javob/);
+  assert.equal(responses.length, 2);
+  assert.match(responses.at(-1).response.instructions, /Telegram ochildi/);
+  assert.doesNotMatch(responses.map(response => response.response.instructions).join('\n'), /Eski javob/);
 });

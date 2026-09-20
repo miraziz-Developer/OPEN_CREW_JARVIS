@@ -45,6 +45,21 @@ fi
 
 echo "   Login/restart bo'lganda avtomatik ishga tushadi."
 
+RUNNER_PLIST="com.jarvis.persistent-agent-runner.plist"
+RUNNER_SRC="${PROJECT_DIR}/scripts/${RUNNER_PLIST}"
+RUNNER_DEST="${HOME}/Library/LaunchAgents/${RUNNER_PLIST}"
+RUNNER_LABEL="com.jarvis.persistent-agent-runner"
+if [[ -f "${RUNNER_SRC}" ]]; then
+  launchctl bootout gui/$USER_ID/${RUNNER_LABEL} 2>/dev/null || true
+  node "${PROJECT_DIR}/scripts/render-launchd.js" "${RUNNER_SRC}" "${RUNNER_DEST}" "${PROJECT_DIR}" "${NODE_BIN}"
+  chmod 644 "${RUNNER_DEST}"
+  if launchctl bootstrap gui/$USER_ID "${RUNNER_DEST}" 2>/dev/null; then
+    echo "✅ Persistent agent runner yuklandi!"
+  else
+    echo "⚠️ Persistent runner yuklanmadi. Qo'lda: launchctl bootstrap gui/${USER_ID} ${RUNNER_DEST}"
+  fi
+fi
+
 # ── Pauza sentinel (Fn+Shift bilan to'xtatish/uyg'otish) — alohida,
 # doim ishlab turadigan LaunchAgent, asosiy Jarvis'dan mustaqil ──
 SENTINEL_PLIST="com.jarvis.pausesentinel.plist"

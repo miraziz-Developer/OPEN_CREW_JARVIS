@@ -16,6 +16,7 @@ test('Voice Live is primary and direct realtime is stable fallback', () => {
   assert.deepEqual(providers.map(provider => provider.id), ['voice-live', 'azure-realtime']);
   assert.equal(providers[0].url, 'wss://voice.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime');
   assert.equal(providers[0].voice.name, 'en-US-OnyxTurboMultilingualNeural');
+  assert.equal(providers[1].voice, 'shimmer');
   assert.equal(providers[1].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5');
 });
 

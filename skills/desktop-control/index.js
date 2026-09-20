@@ -12,7 +12,8 @@ const path = require('path');
 const { collectMacOSContext } = require('../../core/macos-context');
 const { WorldModel, verifyExpectation } = require('../../core/world-model');
 const { inspectAccessibility, performAccessibilityAction, findElements } = require('../../core/macos-accessibility');
-const { assessAction } = require('../../core/action-safety-policy');
+const { ActionSafetyPolicy, assessAction } = require('../../core/action-safety-policy');
+const { recordHighRiskCompletion } = require('../../core/autonomous-action-audit');
 
 const { PROJECT_DIR } = require('../../core/paths');
 let ENV = '';
@@ -246,12 +247,14 @@ async function actOnElement(input = {}, action = input.elementAction || 'press')
   throw new Error(`Semantic UI action ${maxAttempts} urinishdan keyin bajarilmadi: ${lastError?.message || lastError}`);
 }
 
-function authorizeDesktopInput(input = {}) {
+function authorizeDesktopInput(input = {}, options = {}) {
   const mutating = new Set(['click_at', 'type_text', 'key_press', 'click_element', 'set_text', 'toggle_element', 'select_menu', 'verified_action']);
   if (!mutating.has(input.action)) return { allowed: true, assessment: assessAction({ kind: 'desktop', description: input.action }) };
   const description = [input.action, input.name, input.text, input.value, input.menu, input.item, JSON.stringify(input.query || {})].filter(Boolean).join(' ');
-  const assessment = assessAction({ kind: 'task', id: input.action, description });
-  return { allowed: !assessment.requiresConfirmation || input.confirmed === true, assessment };
+  const policy = options.policy || new ActionSafetyPolicy({ fullAutonomyProvider: options.fullAutonomyProvider });
+  const authorization = policy.authorize({ kind: 'task', id: input.action, description });
+  if (!authorization.allowed && input.confirmed === true) return { allowed: true, assessment: authorization.assessment, reason: 'explicit-confirmation' };
+  return authorization;
 }
 
 function scroll(input = {}) {
@@ -344,6 +347,7 @@ async function main() {
       case 'verified_action': result = await executeVerified(input.command || {}); break;
       default: result = { status: 'error', message: 'Noma\'lum action: ' + input.action };
     }
+    if (result?.status === 'ok') await recordHighRiskCompletion(safety.assessment, { source: 'desktop', requestId: input.requestId, taskId: input.taskId });
     console.log(JSON.stringify(result));
   } catch (e) {
     console.log(JSON.stringify({ status: 'error', message: e.message || String(e) }));

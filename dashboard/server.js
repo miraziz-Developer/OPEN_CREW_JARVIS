@@ -10,7 +10,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 const { PROJECT_DIR } = require('../core/paths');
 const { findMatchingProcesses } = require('../core/runtime-health');
 
@@ -23,7 +23,15 @@ const mem = require(path.join(PROJECT_DIR, 'skills', 'memory'));
 const tasks = require(path.join(PROJECT_DIR, 'skills', 'tasks'));
 const { loadVoiceTelemetry } = require(path.join(PROJECT_DIR, 'core', 'voice-telemetry'));
 const { RuntimeTelemetry } = require(path.join(PROJECT_DIR, 'core', 'runtime-telemetry'));
+const { createAgentBridge, needsPersistentExecution } = require(path.join(PROJECT_DIR, 'core', 'agent-bridge'));
+const { resolveOpenClawEnvironment } = require(path.join(PROJECT_DIR, 'core', 'openclaw-credentials'));
+const { createSkillPlatform } = require(path.join(PROJECT_DIR, 'skills', 'platform'));
 const runtimeTelemetry = new RuntimeTelemetry({ file: path.join(PROJECT_DIR, '.run', 'telemetry.json') });
+const agentBridge = createAgentBridge({
+  projectDir: PROJECT_DIR, env, azureOpenAiKey: env('AZURE_OPENAI_KEY'),
+  openClawEnvironment: resolveOpenClawEnvironment({ projectDir: PROJECT_DIR }),
+  skillPlatform: createSkillPlatform({ projectDir: PROJECT_DIR, env }), runtime: {}, telemetry: runtimeTelemetry
+});
 
 // Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
 // uchun UTC+8'da mahalliy soat 08:00gacha dashboard "kechagi kun" faylini
@@ -111,6 +119,15 @@ function getRealtimeTasks() {
   return Array.isArray(s) ? s.slice().reverse() : [];
 }
 
+function getAgentTasks() {
+  return agentBridge.checkpoints.list().map(task => ({
+    id: task.id, request: String(task.request || '').slice(0, 500), status: task.status,
+    persistent: Boolean(task.persistent), createdAt: task.createdAt, updatedAt: task.updatedAt,
+    retryCount: task.retryCount || 0, nextRetryAt: task.nextRetryAt || null,
+    steps: (task.steps || []).map(step => ({ index: step.index, status: step.status, executionId: step.executionId || null, startedAt: step.startedAt || null, recoveryCount: step.recoveryCount || 0 }))
+  }));
+}
+
 function getVoiceTelemetry() {
   return loadVoiceTelemetry(path.join(PROJECT_DIR, '.run', 'voice-flight-recorder.jsonl'), { maxLines: 3000 });
 }
@@ -134,28 +151,10 @@ function getProfile() {
 
 // ── /api/chat — dashboard'dan to'g'ridan-to'g'ri Jarvisga yozish ──────────
 function askAgent(message) {
-  const startedAt = Date.now();
-  return new Promise((resolve) => {
-    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
-    const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:dashboard', '--message', englishOnly + message, '--agent', 'main'], {
-      cwd: PROJECT_DIR,
-      env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY') },
-      timeout: 120000
-    });
-    let out = '';
-    proc.stdout.on('data', d => out += d);
-    proc.stderr.on('data', () => {});
-    proc.on('close', code => {
-      const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
-      runtimeTelemetry.latency({ source: 'dashboard-chat', provider: 'openclaw', agent_ms: Date.now() - startedAt, error: code === 0 && clean ? undefined : 'OpenClaw dashboard request failed' });
-      runtimeTelemetry.providerResult('openclaw', code === 0 && clean ? null : 'OpenClaw dashboard request failed');
-      resolve(clean || null);
-    });
-    proc.on('error', error => {
-      runtimeTelemetry.latency({ source: 'dashboard-chat', provider: 'openclaw', agent_ms: Date.now() - startedAt, error });
-      runtimeTelemetry.providerResult('openclaw', error);
-      resolve(null);
-    });
+  return agentBridge.askAgent(message, 'agent:main:dashboard', {
+    source: 'dashboard-chat',
+    persistent: needsPersistentExecution(message),
+    onProgress: () => {}
   });
 }
 
@@ -197,6 +196,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/activity') return json(res, getActivity(parseInt(url.searchParams.get('limit'), 10)));
     if (url.pathname === '/api/tasks') return json(res, getTasks());
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());
+    if (url.pathname === '/api/agent-tasks') return json(res, getAgentTasks());
     if (url.pathname === '/api/runtime') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}));
     if (url.pathname === '/api/voice-telemetry') return json(res, getVoiceTelemetry());
     if (url.pathname === '/api/telemetry') return json(res, getRuntimeTelemetry());

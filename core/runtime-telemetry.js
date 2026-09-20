@@ -13,11 +13,13 @@ function truncateError(error) {
 
 function blankState() {
   return {
-    version: 1,
+    version: 2,
     updatedAt: null,
     vad: { speechStarted: 0, speechStopped: 0, unmatchedSpeechStops: 0, watchdogTimeouts: 0, lastEventAt: null, speakingSince: null, lastTurnDurationMs: null, recentTurnDurationsMs: [] },
     providers: {},
-    latency: { recent: [], summary: {} }
+    latency: { recent: [], summary: {} },
+    openClawAttempts: [],
+    selfHealAttempts: []
   };
 }
 
@@ -47,7 +49,14 @@ class RuntimeTelemetry {
     try {
       const stored = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       const base = blankState();
-      return { ...base, ...stored, vad: { ...base.vad, ...(stored.vad || {}) }, providers: stored.providers || {}, latency: { ...base.latency, ...(stored.latency || {}) } };
+      return {
+        ...base, ...stored,
+        vad: { ...base.vad, ...(stored.vad || {}) },
+        providers: stored.providers || {},
+        latency: { ...base.latency, ...(stored.latency || {}) },
+        openClawAttempts: Array.isArray(stored.openClawAttempts) ? stored.openClawAttempts : [],
+        selfHealAttempts: Array.isArray(stored.selfHealAttempts) ? stored.selfHealAttempts : []
+      };
     } catch (_) { return blankState(); }
   }
 
@@ -144,9 +153,30 @@ class RuntimeTelemetry {
   latency(profile = {}) {
     return this._update(state => {
       const entry = { at: this.now() };
-      for (const key of ['requestId', 'source', 'provider', 'stt_ms', 'agent_ms', 'tts_ms', 'total_ms', 'error']) if (profile[key] !== undefined) entry[key] = profile[key];
+      for (const key of ['requestId', 'taskId', 'source', 'provider', 'stt_ms', 'agent_ms', 'tts_ms', 'total_ms', 'error', 'errorType', 'httpStatus', 'exitCode', 'signal', 'attempt', 'retryable']) if (profile[key] !== undefined) entry[key] = profile[key];
       if (entry.error) entry.error = truncateError(entry.error);
       state.latency.recent = [...state.latency.recent, entry].slice(-this.recentLimit);
+    });
+  }
+
+  openClawAttempt(attempt = {}) {
+    return this._update(state => {
+      const entry = {};
+      for (const key of [
+        'attemptId', 'taskId', 'stepIndex', 'executionId', 'phase',
+        'sessionKey', 'openClawSessionId', 'openClawRunId', 'childPid',
+        'startedAt', 'finishedAt', 'elapsedMs', 'exitCode', 'signal',
+        'timeout', 'stdoutBytes', 'stderrBytes', 'diagnosticSummary'
+      ]) if (attempt[key] !== undefined) entry[key] = attempt[key];
+      state.openClawAttempts = [...state.openClawAttempts, entry].slice(-this.recentLimit);
+    });
+  }
+
+  selfHealAttempt(attempt = {}) {
+    return this._update(state => {
+      const entry = {};
+      for (const key of ['taskId', 'stepIndex', 'attempt', 'classification', 'dependency', 'manager', 'status', 'startedAt', 'finishedAt', 'elapsedMs', 'diagnosticSummary', 'escalationReason']) if (attempt[key] !== undefined) entry[key] = attempt[key];
+      state.selfHealAttempts = [...state.selfHealAttempts, entry].slice(-this.recentLimit);
     });
   }
 

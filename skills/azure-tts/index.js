@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /**
  * JARVIS Azure TTS Skill
- * Azure Cognitive Services Speech English fallback output.
- * Input: { text: "...", voice?: "en-US-GuyNeural" }
- * Chiqish: { status: "ok", audioFile: "/tmp/jarvis_tts_*.wav", format: "audio/wav" }
+ * 
+ * Azure Cognitive Services Speech **neural** voice fallback (unified with realtime voice via JARVIS_VOICE / AZURE_VOICELIVE_VOICE).
+ * Input (stdin JSON): { text: "...", voice?: "en-US-AndrewNeural" or uz-UZ-SardorNeural }
+ * Output (stdout JSON): { status: "ok", audioFile: "/tmp/jarvis_tts_*.wav", format: "audio/wav", sampleRate: 24000 }
+ * 
+ * Uses SSML with prosody for natural rate/pitch. 24kHz PCM WAV for best AEC/echo cancellation compatibility with realtime pipeline.
+ * English neural fallback prevents voice inconsistency when realtime uses SardorNeural for Uzbek.
  */
 
 const axios = require('axios');
@@ -12,7 +16,7 @@ const path = require('path');
 const https = require('https');
 
 // konstantalar
-const DEFAULT_VOICE = process.env.AZURE_SPEECH_VOICE || 'en-US-GuyNeural';
+const DEFAULT_VOICE = process.env.AZURE_SPEECH_VOICE || process.env.AZURE_VOICELIVE_VOICE || 'en-US-AndrewNeural';
 const LANGUAGE      = process.env.AZURE_SPEECH_LANGUAGE || 'en-US';
 const RATE_PERCENT  = Number(process.env.AZURE_SPEECH_RATE_PERCENT ?? -12);
 const PITCH_PERCENT = Number(process.env.AZURE_SPEECH_PITCH_PERCENT ?? -12);

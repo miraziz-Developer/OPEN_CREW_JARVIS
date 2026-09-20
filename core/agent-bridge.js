@@ -2,12 +2,45 @@
 
 const fs = require('fs');
 const https = require('https');
+const crypto = require('crypto');
 const { spawn, execSync } = require('child_process');
 const { ProviderPool } = require('./skill-platform');
 const { er, inf, wrn } = require('./log');
 const { createCheckpointStore } = require('./agent-task-checkpoints');
+const { resolveOpenClawEnvironment } = require('./openclaw-credentials');
+const { extractMissingDependency, runSelfHeal, formatSelfHealEscalation } = require('./self-heal');
+const { boundedCall } = require('./bounded-call');
 
 const ENGLISH_ONLY_INSTRUCTION = '[Language policy: Reply to the user only in natural English, regardless of the language of the request or stored context. Never answer in Uzbek or imitate an Uzbek accent. Preserve names, quoted text, and file contents when necessary.]';
+const RETRY_DELAYS_MS = [5000, 15000, 45000, 135000];
+const RECOVERED_STEP_INSTRUCTION = 'RECOVERY SAFETY: This recovered checkpoint step may have partially executed before the prior worker stopped. Verify the current external and local state before acting. Do not repeat a side-effecting action unless verification shows it is still required. Report what you verified and any uncertainty.';
+
+class OpenClawEmptyResponseError extends Error {
+  constructor(summary = 'OpenClaw returned no usable response') {
+    super(summary);
+    this.name = 'OpenClawEmptyResponseError';
+    this.code = 'OPENCLAW_EMPTY_RESPONSE';
+  }
+}
+
+function checkpointSessionKey(taskId) {
+  return 'agent:main:checkpoint-' + String(taskId || '').trim();
+}
+
+function cleanOpenClawOutput(output) {
+  return String(output || '').split('\n').filter(line => {
+    const value = line.trim();
+    return value && !/^waiting(?:\.{3})?$/i.test(value) && !value.includes('◒');
+  }).join('\n').trim();
+}
+
+function isEmptyOpenClawResponse(clean) {
+  return !clean || /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(clean);
+}
+
+function isOpenClawPolicyFailure(clean) {
+  return /^(?:error:\s*)?(?:tool )?policy removed(?: this content)?\.?$/i.test(String(clean || '').trim());
+}
 
 function buildOpenClawAgentArgs(message, sessionKey) {
   const args = ['agent'];
@@ -19,7 +52,24 @@ function buildOpenClawAgentArgs(message, sessionKey) {
 
 function needsCheckpointedExecution(message) {
   const text = String(message || '');
-  return text.length > 700 || /\b(architecture|architect|strategy|tradeoffs?|design (?:a|an|the)?|multi[ -]?step|roadmap|migration|root cause|debug(?:ging)?|security review|implementation plan|system design|comprehensive|in[- ]depth|plan|research)\b/i.test(text);
+  return text.length > 700 || /\b(architecture|architect|strategy|tradeoffs?|design (?:a|an|the)?|multi[ -]?step|roadmap|migration|root cause|debug(?:ging)?|security review|implementation plan|system design|comprehensive|in[- ]depth|plan|research|analysis)\b/i.test(text);
+}
+
+function needsPersistentExecution(message) {
+  return needsCheckpointedExecution(message) && /\b(keep (?:working|going)|continue|background|long[- ]running|until (?:it is|the work is)|complete (?:the|this)|monitor|research|implement|analysis)\b/i.test(String(message || ''));
+}
+
+function classifyProviderError(error) {
+  const message = String(error?.message || error || 'unknown failure');
+  const dependency = extractMissingDependency(error);
+  const config = message.match(/(?:missing|required|not set|undefined)\s+(?:environment variable|env(?:ironment)? variable|configuration|config)?\s*[:=]?\s*([A-Z][A-Z0-9_]{2,})/i);
+  const policy = /policy|safety|permission|forbidden|unauthori[sz]ed|content removed|invalid request/i.test(message);
+  const emptyResponse = error instanceof OpenClawEmptyResponseError || error?.code === 'OPENCLAW_EMPTY_RESPONSE';
+  if (config || /credential|api[ _-]?key|access token/i.test(message)) return { retryable: false, type: 'missing_config', configKey: config?.[1] || null, message: message.slice(0, 500) };
+  if (dependency) return { retryable: true, type: 'missing_dependency', fixableLocally: true, dependency, message: message.slice(0, 500) };
+  if (/npm (?:install|ci)|pip (?:install|check)|node-gyp|python (?:package|environment)|package manager/i.test(message)) return { retryable: true, type: 'fixable_locally', fixableLocally: true, message: message.slice(0, 500) };
+  const retryable = emptyResponse || (!policy && /timeout|timed out|network|econn|socket|dns|temporar|unavailable|rate limit|5\d\d|failover|exit \d+/i.test(message));
+  return { retryable, type: policy ? 'policy' : retryable ? 'transient' : 'terminal', message: message.slice(0, 500) };
 }
 
 // Telegram/TTS/agent-provider bridge — jarvis_daemon.js va telegram-bot.js
@@ -27,14 +77,44 @@ function needsCheckpointedExecution(message) {
 // xil Telegram/TTS chiqishiga murojaat qiladi; bu shu mantiqning yagona
 // nusxasi (daemon-tomon uchun — dependency'lar options orqali uzatiladi,
 // module-level closure emas, shunda alohida test/qayta ishlatish mumkin).
-function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, skillPlatform, runtime, telemetry } = {}) {
+function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, openClawEnvironment, openClawBaseEnvironment, spawnProcess = spawn, selfHealRunner, skillPlatform, runtime, telemetry } = {}) {
   const openClawTimeoutMs = Math.max(30000, parseInt(env('OPENCLAW_AGENT_TIMEOUT_MS'), 10) || 300000);
   const deepThinkTimeoutMs = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
   const longTaskNoticeMs = Math.min(
     openClawTimeoutMs - 10000,
     Math.max(10000, parseInt(env('AGENT_LONG_TASK_NOTICE_MS'), 10) || openClawTimeoutMs - 30000)
   );
+  const selfHealEnabled = String(env('SELF_HEAL_ENABLED') ?? 'true').toLowerCase() !== 'false';
+  const routineAutonomy = /^(?:true|1|yes|on)$/i.test(String(env('JARVIS_FULL_AUTONOMY') || 'false'));
+  const selfHealMaxAttempts = Math.max(1, Math.min(3, parseInt(env('SELF_HEAL_MAX_ATTEMPTS'), 10) || 2));
+  const selfHealTimeoutMs = Math.max(30000, parseInt(env('SELF_HEAL_TIMEOUT_MS'), 10) || 180000);
+  const selfHealInterpreterPath = env('SELF_HEAL_INTERPRETER_PATH') || '/opt/homebrew/bin/interpreter';
   const checkpoints = createCheckpointStore(projectDir);
+  const approvalToken = Symbol('explicit-checkpoint-approval');
+
+  function assertResumable(task, options) {
+    const persisted = checkpoints.load(task.id);
+    if ([task, persisted].some(value => value && ['cancelled', 'completed'].includes(value.status))) {
+      throw new Error('Terminal task cannot be resumed');
+    }
+    if ([task, persisted].some(value => value && (value.status === 'paused-awaiting-approval' || value.steps?.some(step => step.status === 'paused-awaiting-approval')))
+      && options[approvalToken] !== true) throw new Error('Explicit approval is required to resume a persistent task');
+  }
+
+  async function progress(callback, ...args) {
+    if (!callback) return;
+    try { await boundedCall(() => callback(...args)); }
+    catch (error) { wrn('Task notification failed: ' + error.message); }
+  }
+
+  function recordOpenClawAttempt(attempt, task, step) {
+    if (task) {
+      const target = step || task;
+      target.attempts = [...(target.attempts || []), attempt].slice(-50);
+      checkpoints.save(task);
+    }
+    telemetry?.openClawAttempt(attempt);
+  }
 
   function sendTelegram(text) {
     return new Promise((resolve) => {
@@ -78,14 +158,71 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
   function askOpenClaw(message, sessionKey, options = {}) {
     return new Promise((resolve, reject) => {
       const task = options.task;
-      const proc = spawn('openclaw', buildOpenClawAgentArgs(message, sessionKey), {
+      const step = options.step;
+      const startedAtMs = Date.now();
+      const attempt = {
+        attemptId: crypto.randomUUID(),
+        taskId: task?.id || null,
+        stepIndex: options.stepIndex ?? step?.index ?? null,
+        executionId: options.executionId ?? step?.executionId ?? null,
+        phase: options.phase || 'request',
+        sessionKey: String(sessionKey || ''),
+        openClawSessionId: null,
+        openClawRunId: null,
+        childPid: null,
+        startedAt: new Date(startedAtMs).toISOString(),
+        finishedAt: null,
+        elapsedMs: null,
+        exitCode: null,
+        signal: null,
+        timeout: { triggered: false, message: null },
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        diagnosticSummary: null
+      };
+      const childEnvironment = openClawEnvironment || resolveOpenClawEnvironment({ projectDir, env: openClawBaseEnvironment || process.env });
+      const proc = spawnProcess('openclaw', buildOpenClawAgentArgs(message, sessionKey), {
         cwd: projectDir,
-        env: { ...process.env, AZURE_OPENAI_KEY: azureOpenAiKey, JARVIS_PROJECT_DIR: projectDir },
+        env: childEnvironment,
         timeout: openClawTimeoutMs
       });
+      attempt.childPid = Number.isInteger(proc.pid) ? proc.pid : null;
       let out = '';
       let procErr = '';
       let noticeTimer;
+      let settled = false;
+      const timeoutObserver = setTimeout(() => {
+        attempt.timeout.triggered = true;
+        attempt.timeout.message = `openclaw timed out after ${openClawTimeoutMs}ms`;
+      }, openClawTimeoutMs);
+      timeoutObserver.unref?.();
+
+      function finish(error, code = null, signal = null) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(noticeTimer);
+        clearTimeout(timeoutObserver);
+        const finishedAtMs = Date.now();
+        attempt.finishedAt = new Date(finishedAtMs).toISOString();
+        attempt.elapsedMs = finishedAtMs - startedAtMs;
+        attempt.exitCode = Number.isInteger(code) ? code : null;
+        attempt.signal = signal || null;
+        attempt.stdoutBytes = Buffer.byteLength(out);
+        attempt.stderrBytes = Buffer.byteLength(procErr);
+        if (!attempt.timeout.triggered && signal === 'SIGTERM' && attempt.elapsedMs >= openClawTimeoutMs) {
+          attempt.timeout.triggered = true;
+          attempt.timeout.message = `openclaw timed out after ${openClawTimeoutMs}ms`;
+        }
+        attempt.diagnosticSummary = attempt.timeout.triggered
+          ? attempt.timeout.message
+          : error instanceof OpenClawEmptyResponseError
+            ? 'OpenClaw returned no usable response'
+            : error
+              ? String(error.message || error).replace(/\s+/g, ' ').trim().slice(0, 300)
+              : 'OpenClaw completed successfully';
+        recordOpenClawAttempt(attempt, task, step);
+        if (error) reject(error); else resolve(cleanOpenClawOutput(out));
+      }
       if (task && typeof options.onLongRunning === 'function') {
         noticeTimer = setTimeout(async () => {
           if (task.status !== 'running') return;
@@ -93,72 +230,129 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
           checkpoints.save(task);
           const notice = 'This is taking longer than expected. Would you like me to keep going, or give you what I have so far?';
           wrn('openclaw long-task notice: ' + task.id);
-          await options.onLongRunning(notice, task);
+          await progress(options.onLongRunning, notice, task);
         }, longTaskNoticeMs);
         noticeTimer.unref?.();
       }
-      proc.stdout.on('data', d => out += d); proc.stderr.on('data', d => procErr += d);
-      proc.on('error', error => { clearTimeout(noticeTimer); reject(error); });
-      proc.on('close', (code) => {
-        clearTimeout(noticeTimer);
-        const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
-        const emptyPayload = /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(clean);
-        if (code !== 0 || !clean || emptyPayload || clean.includes("couldn't generate") || clean.includes('tool policy removed')) {
-          reject(new Error((procErr || clean || `openclaw exit ${code}`).slice(0, 300)));
-          return;
-        }
-        resolve(clean);
+      proc.stdout.on('data', d => { out += d; });
+      proc.stderr.on('data', d => { procErr += d; });
+      proc.on('error', error => finish(error));
+      proc.on('close', (code, signal) => {
+        const clean = cleanOpenClawOutput(out);
+        if (attempt.timeout.triggered) finish(new Error(attempt.timeout.message), code, signal);
+        else if (code !== 0) finish(new Error((procErr || clean || `openclaw exit ${code}`).slice(0, 300)), code, signal);
+        else if (isEmptyOpenClawResponse(clean)) finish(new OpenClawEmptyResponseError(), code, signal);
+        else if (clean.includes("couldn't generate") || isOpenClawPolicyFailure(clean)) finish(new Error((procErr || clean).slice(0, 300)), code, signal);
+        else finish(null, code, signal);
       });
     });
   }
 
   async function askCheckpointedAgent(message, sessionKey, options = {}) {
-    const task = {
-      id: checkpoints.createId(message, sessionKey), sessionKey: String(sessionKey || ''),
+    if (options.task) assertResumable(options.task, options);
+    const task = options.task || {
+      id: checkpoints.createId(message, sessionKey), sessionKey: null,
       request: String(message || '').slice(0, 8000), status: 'planning',
-      createdAt: new Date().toISOString(), steps: []
+      createdAt: new Date().toISOString(), persistent: Boolean(options.persistent), steps: []
     };
-    checkpoints.save(task);
+    if (!task.sessionKey || task.persistent) task.sessionKey = checkpointSessionKey(task.id);
+    if (!options.task) checkpoints.save(task);
     let steps = [];
-    try {
+    if (!task.steps?.length) try {
       const plan = await askOpenClaw(
         'Break this request into 2 to 6 independently completable steps. Return JSON only as {"steps":["..."]}. Do not execute the work yet.\n\n' + message,
-        sessionKey
+        task.sessionKey,
+        { task, stepIndex: 0, executionId: task.id, phase: 'planning' }
       );
       steps = JSON.parse(plan).steps;
     } catch (error) {
       wrn('Checkpoint plan unavailable; preserving the request as one step: ' + error.message);
     }
-    if (!Array.isArray(steps) || !steps.length) steps = [String(message || '')];
-    task.steps = steps.slice(0, 6).map((text, index) => ({ index: index + 1, text: String(text).slice(0, 2000), status: 'pending' }));
+    if (!task.steps?.length) {
+      if (!Array.isArray(steps) || !steps.length) steps = [String(message || '')];
+      task.steps = steps.slice(0, 6).map((text, index) => ({ index: index + 1, text: String(text).slice(0, 2000), status: 'pending', executionId: null, startedAt: null, recoveryCount: 0 }));
+    }
     task.status = 'running';
     checkpoints.save(task);
 
     const results = [];
     for (const step of task.steps) {
+      if (step.status === 'completed') { results.push(`Step ${step.index}: ${step.result || ''}`); continue; }
+      const recovered = step.status === 'running';
       step.status = 'running';
       step.startedAt = new Date().toISOString();
+      step.executionId = checkpoints.createId(`${task.id}:${step.index}`, sessionKey);
+      step.attempts = step.attempts || [];
+      step.recoveryCount = Number(step.recoveryCount || 0) + (recovered ? 1 : 0);
       checkpoints.save(task);
-      await options.onProgress?.(`${step.index}/${task.steps.length} step in progress: ${step.text}`, task, step);
+      await progress(options.onProgress, `${step.index}/${task.steps.length} step in progress: ${step.text}`, task, step);
       try {
-        const result = await askOpenClaw(
-          `Complete checkpoint ${step.index}/${task.steps.length}: ${step.text}\n\nOriginal request:\n${message}`,
-          sessionKey,
-          { task, onLongRunning: options.onLongRunning }
-        );
+        let result;
+        while (true) {
+          try {
+            result = await askOpenClaw(
+              `${recovered ? RECOVERED_STEP_INSTRUCTION + '\n\n' : ''}Complete checkpoint ${step.index}/${task.steps.length}: ${step.text}\n\nOriginal request:\n${message}`,
+              task.sessionKey,
+              { task, step, phase: 'step', onLongRunning: options.onLongRunning }
+            );
+            break;
+          } catch (error) {
+            const classification = classifyProviderError(error);
+            const count = (step.selfHealAttempts || []).filter(attempt => attempt.diagnosticSummary !== 'confirmation_required').length;
+            if (!selfHealEnabled || !classification.fixableLocally) throw error;
+            if (!classification.dependency) {
+              error.selfHealExhausted = true;
+              error.selfHealEscalation = formatSelfHealEscalation(classification, { escalationReason: 'unsafe_or_ambiguous_dependency' });
+              throw error;
+            }
+            if (count >= selfHealMaxAttempts) {
+              error.selfHealExhausted = true;
+              error.selfHealEscalation = formatSelfHealEscalation(classification, { escalationReason: 'attempt_limit_reached' });
+              throw error;
+            }
+            const startedAtMs = Date.now();
+            await progress(options.onProgress, `${step.index}/${task.steps.length} automatic repair attempted: inspecting ${classification.dependency.name}.`, task, step);
+            let outcome;
+            try {
+              const approvedCommand = options[approvalToken] === true && options.approvedStep === step.index ? options.approvedCommand : undefined;
+              delete options.approvedCommand;
+              outcome = await runSelfHeal({ projectDir, dependency: classification.dependency, interpreterPath: selfHealInterpreterPath, timeoutMs: selfHealTimeoutMs, interpreterRunner: selfHealRunner, spawnProcess, routineAutonomy, approvedCommand });
+            } catch (healError) { outcome = { status: 'failed', escalationReason: 'repair_failed', error: healError }; }
+            const record = { attempt: count + 1, at: new Date(startedAtMs).toISOString(), classification: classification.type, dependency: classification.dependency.name, manager: outcome.plan?.manager || null, status: outcome.status, inspection: outcome.inspectionSummary || null, action: outcome.plan?.command || null, diagnosticSummary: String(outcome.installSummary || outcome.error?.message || outcome.escalationReason || '').slice(0, 300) };
+            step.selfHealAttempts = [...(step.selfHealAttempts || []), record].slice(-selfHealMaxAttempts);
+            telemetry?.selfHealAttempt({ taskId: task.id, stepIndex: step.index, attempt: record.attempt, classification: record.classification, dependency: record.dependency, manager: record.manager, status: record.status, startedAt: record.at, finishedAt: new Date().toISOString(), elapsedMs: Date.now() - startedAtMs, diagnosticSummary: record.diagnosticSummary, escalationReason: outcome.escalationReason });
+            checkpoints.save(task);
+            if (outcome.status === 'repaired') {
+              await progress(options.onProgress, `${step.index}/${task.steps.length} automatic repair attempted: ${classification.dependency.name} installed, retrying the same step.`, task, step);
+              continue;
+            }
+            error.selfHealEscalation = formatSelfHealEscalation(classification, outcome);
+            if (outcome.escalationReason === 'confirmation_required') {
+              task.pendingApproval = { stepIndex: step.index, command: outcome.plan.command };
+              error.requiresApproval = true;
+            }
+            throw error;
+          }
+        }
         step.status = 'completed';
         step.finishedAt = new Date().toISOString();
         step.result = result.slice(0, 12000);
         results.push(`Step ${step.index}: ${result}`);
         checkpoints.save(task);
-        await options.onProgress?.(`${step.index}/${task.steps.length} step complete, continuing.`, task, step);
+        await progress(options.onProgress, `${step.index}/${task.steps.length} step complete, continuing.`, task, step);
       } catch (error) {
-        step.status = 'failed';
+        const classification = classifyProviderError(error);
+        const repairEscalated = error.requiresApproval === true;
+        step.status = repairEscalated ? 'paused-awaiting-approval' : classification.retryable && !error.selfHealExhausted ? 'retrying' : 'blocked';
         step.finishedAt = new Date().toISOString();
         step.error = String(error.message || error).slice(0, 500);
-        task.status = 'partial';
+        step.escalation = error.selfHealEscalation || (classification.type === 'missing_config' ? formatSelfHealEscalation(classification) : null);
+        task.status = repairEscalated ? 'paused-awaiting-approval' : classification.retryable && !error.selfHealExhausted && task.persistent ? 'retrying' : classification.retryable && !error.selfHealExhausted ? 'paused' : 'blocked';
         task.finishedAt = new Date().toISOString();
+        task.lastError = classification;
+        if (repairEscalated) task.pauseReason = step.escalation || 'Explicit approval is required before this checkpoint can resume';
         checkpoints.save(task);
+        if (!results.length && step.escalation) return step.escalation;
         return results.length
           ? 'I could not finish every step. Here is the completed work so far:\n\n' + results.join('\n\n')
           : null;
@@ -169,8 +363,14 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
       const finalReply = await askOpenClaw(
         'Synthesize these completed checkpoint results into the final response. Clearly distinguish completed work from recommendations and do not claim unfinished work.\n\n' +
         `Original request:\n${message}\n\nCheckpoint results:\n${results.join('\n\n')}`,
-        sessionKey,
-        { task, onLongRunning: options.onLongRunning }
+        task.sessionKey,
+        {
+          task,
+          stepIndex: task.steps.length + 1,
+          executionId: checkpoints.createId(`${task.id}:synthesis`, task.sessionKey),
+          phase: 'synthesis',
+          onLongRunning: options.onLongRunning
+        }
       );
       task.status = 'completed';
       task.finishedAt = new Date().toISOString();
@@ -178,7 +378,9 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
       checkpoints.save(task);
       return finalReply;
     } catch (error) {
-      task.status = 'partial';
+      const classification = classifyProviderError(error);
+      task.status = classification.retryable && task.persistent ? 'retrying' : 'blocked';
+      task.lastError = classification;
       task.finishedAt = new Date().toISOString();
       task.synthesisError = String(error.message || error).slice(0, 500);
       checkpoints.save(task);
@@ -191,6 +393,7 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
       id: 'openclaw', priority: 0, timeoutMs: openClawTimeoutMs + 5000,
       invoke: (message, context) => needsCheckpointedExecution(message)
         ? askCheckpointedAgent(message, context.sessionKey, {
+          persistent: Boolean(context.persistent) || needsPersistentExecution(message),
           onProgress: context.onProgress || (text => sendTelegram('⏳ ' + text)),
           onLongRunning: context.onLongRunning || (text => sendTelegram('⏳ ' + text))
         })
@@ -220,7 +423,7 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
     const startedAt = Date.now();
     try {
       inf(`openclaw timeout=${openClawTimeoutMs}ms; deep-think timeout=${deepThinkTimeoutMs}ms`);
-      const response = await agentProviders.invoke(message, { sessionKey, onProgress: options.onProgress, onLongRunning: options.onLongRunning });
+      const response = await agentProviders.invoke(message, { sessionKey, persistent: options.persistent, onProgress: options.onProgress, onLongRunning: options.onLongRunning });
       telemetry?.latency({ requestId: options.requestId, source: options.source || 'agent', provider: response.provider, agent_ms: Date.now() - startedAt });
       console.log(JSON.stringify({ event: 'response_latency', requestId: options.requestId, source: options.source || 'agent', provider: response.provider, stt_ms: null, agent_ms: Date.now() - startedAt, tts_ms: null, total_ms: Date.now() - startedAt }));
       return response.value;
@@ -232,7 +435,43 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ski
     }
   }
 
-  return { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, askCheckpointedAgent, agentProviders, askAgent, openClawTimeoutMs, deepThinkTimeoutMs };
+  async function resumePersistentTask(task, options = {}) {
+    assertResumable(task, options);
+    task.status = 'running';
+    task.finishedAt = null;
+    checkpoints.save(task);
+    return askCheckpointedAgent(task.request, task.sessionKey, { ...options, task, persistent: true });
+  }
+
+  async function approvePersistentTask(taskId, options = {}) {
+    if (typeof options.approved !== 'boolean') throw new Error('Explicit approval is required to resume a persistent task');
+    const task = checkpoints.load(taskId);
+    if (!task) throw new Error('Persistent task not found');
+    if (task.status !== 'paused-awaiting-approval') throw new Error('Persistent task is not awaiting approval');
+    if (!options.approved) {
+      task.status = 'cancelled';
+      task.finishedAt = new Date().toISOString();
+      task.pauseReason = 'Owner rejected the pending action';
+      delete task.pendingApproval;
+      checkpoints.save(task);
+      return 'Task cancelled; no pending action was executed.';
+    }
+    const pending = task.pendingApproval;
+    task.approvedAt = new Date().toISOString();
+    task.approvalSource = String(options.source || 'explicit-user-approval').slice(0, 100);
+    task.pauseReason = null;
+    delete task.pendingApproval;
+    task.status = 'retrying';
+    checkpoints.save(task);
+    return resumePersistentTask(task, { ...options, [approvalToken]: true, approvedCommand: pending?.command, approvedStep: pending?.stepIndex });
+  }
+
+  return { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, askCheckpointedAgent, resumePersistentTask, approvePersistentTask, checkpoints, agentProviders, askAgent, openClawTimeoutMs, deepThinkTimeoutMs };
 }
 
-module.exports = { createAgentBridge, buildOpenClawAgentArgs, ENGLISH_ONLY_INSTRUCTION, needsCheckpointedExecution };
+module.exports = {
+  createAgentBridge, buildOpenClawAgentArgs, checkpointSessionKey,
+  OpenClawEmptyResponseError, ENGLISH_ONLY_INSTRUCTION,
+  needsCheckpointedExecution, needsPersistentExecution,
+  classifyProviderError, RETRY_DELAYS_MS, RECOVERED_STEP_INSTRUCTION
+};

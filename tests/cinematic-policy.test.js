@@ -47,6 +47,20 @@ test('confirmation grant is explicit, scoped, expiring and one-shot', () => {
   assert.equal(policy.handleUtterance('confirm').matched, false);
 });
 
+test('full autonomy permits only routine actions and never bypasses high-risk confirmation', () => {
+  const autonomy = new ActionSafetyPolicy({ fullAutonomyProvider: () => true });
+  const routine = { kind: 'task', description: 'Update the local project configuration' };
+  const highRisk = { kind: 'task', description: 'Send an email to Ada' };
+  assert.equal(autonomy.authorize(routine).reason, 'full-autonomy-routine-action');
+  assert.equal(autonomy.authorize(highRisk).allowed, false);
+  assert.equal(autonomy.authorize(highRisk).assessment.category, 'external-communication');
+});
+
+test('routine mutation returns to confirmation when full autonomy is disabled', () => {
+  const policy = new ActionSafetyPolicy({ fullAutonomyProvider: () => false });
+  assert.equal(policy.authorize({ kind: 'task', description: 'Install project dependencies' }).allowed, false);
+});
+
 test('privacy and focus suppress non-urgent interruptions while progress stays bounded', () => {
   const policy = new InteractionPolicy({ progressAfterMs: 1800, progressRepeatMs: 12000 });
   assert.equal(policy.notification({ urgency: 1 }, { privacyMode: true }).reason, 'privacy-mode');

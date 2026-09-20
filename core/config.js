@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const { EMAIL } = require('./gmail-task-notifier');
 
 const PLACEHOLDER = /^(?:\.{3}|changeme|replace[-_ ]?me|your[-_ ])/i;
 
@@ -21,6 +22,19 @@ const CONFIG_SCHEMA = Object.freeze({
   OPENCLAW_AGENT_TIMEOUT_MS: { type: 'integer', default: 300000, min: 30000, max: 900000 },
   DEEP_THINK_TIMEOUT_MS: { type: 'integer', default: 240000, min: 30000, max: 900000 },
   AGENT_LONG_TASK_NOTICE_MS: { type: 'integer', default: 270000, min: 10000, max: 870000 },
+  AGENT_PERSISTENT_RETRY_MS: { type: 'integer', default: 300000, min: 60000, max: 3600000 },
+  AGENT_PERSISTENT_RECOVERY_WINDOW_MS: { type: 'integer', default: 2592000000, min: 1800000, max: 2592000000 },
+  AGENT_PERSISTENT_PROGRESS_MS: { type: 'integer', default: 180000, min: 60000, max: 3600000 },
+  AGENT_PERSISTENT_RUNNER_SCAN_MS: { type: 'integer', default: 30000, min: 10000, max: 300000 },
+  AGENT_PERSISTENT_STALE_RUNNING_MS: { type: 'integer', default: 600000, min: 300000, max: 3600000 },
+  SELF_HEAL_ENABLED: { type: 'boolean', default: true },
+  SELF_HEAL_MAX_ATTEMPTS: { type: 'integer', default: 2, min: 1, max: 3 },
+  SELF_HEAL_TIMEOUT_MS: { type: 'integer', default: 180000, min: 30000, max: 900000 },
+  SELF_HEAL_INTERPRETER_PATH: { type: 'string', default: '/opt/homebrew/bin/interpreter' },
+  GMAIL_TASK_NOTIFICATIONS_ENABLED: { type: 'boolean', default: false },
+  GMAIL_OWNER_RECIPIENT: { type: 'string' },
+  GMAIL_TASK_PROGRESS_MS: { type: 'integer', default: 21600000, min: 60000, max: 604800000 },
+  VOICE_AGENT_HANDOFF_MS: { type: 'integer', default: 60000, min: 30000, max: 300000 },
   DEEP_THINK_MAX_TOKENS: { type: 'integer', default: 1200, min: 64, max: 32768 },
   AZURE_TERRA_ENDPOINT: { type: 'url' },
   AZURE_TERRA_KEY: { type: 'secret' },
@@ -53,6 +67,12 @@ const CONFIG_SCHEMA = Object.freeze({
   REALTIME_IDLE_MS: { type: 'integer', default: 20000, min: 5000, max: 300000 },
   REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 1024, min: 64, max: 4096 },
   REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS: { type: 'integer', default: 256, min: 64, max: 1024 },
+  // Low-latency conversational profile. Keep enough margin for natural
+  // intra-sentence pauses while releasing a completed turn promptly.
+  REALTIME_VAD_SILENCE_MS: { type: 'integer', default: 180, min: 120, max: 2000 },
+  REALTIME_NORMAL_DUPLEX_HANGOVER_MS: { type: 'integer', default: 330, min: 270, max: 5000 },
+  REALTIME_PLAYBACK_PREBUFFER_MS: { type: 'integer', default: 40, min: 0, max: 1000 },
+  REALTIME_PLAYBACK_MAX_WAIT_MS: { type: 'integer', default: 80, min: 0, max: 2000 },
   REALTIME_BARGE_IN_CONFIRM_MS: { type: 'integer', default: 420, min: 100, max: 1000 },
   REALTIME_BARGE_IN_MAX_GAP_MS: { type: 'integer', default: 80, min: 0, max: 300 },
   REALTIME_WAKE_PREROLL_MS: { type: 'integer', default: 1800, min: 400, max: 5000 },
@@ -64,7 +84,7 @@ const CONFIG_SCHEMA = Object.freeze({
   MIC_FILTER_ENABLED: { type: 'boolean', default: true },
   MIC_HIGHPASS_HZ: { type: 'number', default: 80, min: 20, max: 500 },
   MIC_LOWPASS_HZ: { type: 'number', default: 7600, min: 3000, max: 7900 },
-  MIC_MUTE_GRACE_MS: { type: 'integer', default: 1500, min: 0, max: 10000 },
+  MIC_MUTE_GRACE_MS: { type: 'integer', default: 650, min: 0, max: 10000 },
   DUPLEX_ECHO_THRESHOLD: { type: 'number', default: 0.72, min: 0.1, max: 0.99 },
   DUPLEX_BARGE_IN_RMS: { type: 'number', default: 900, min: 10, max: 10000 },
   DUPLEX_NOISE_FLOOR: { type: 'number', default: 80, min: 0, max: 5000 },
@@ -76,12 +96,15 @@ const CONFIG_SCHEMA = Object.freeze({
   RESPONSE_DEDUP_MS: { type: 'integer', default: 15000, min: 1000, max: 120000 },
   CONVERSATION_FOLLOWUP_MS: { type: 'integer', default: 60000, min: 5000, max: 120000 },
   ACTION_CONFIRMATION_TTL_MS: { type: 'integer', default: 30000, min: 5000, max: 120000 },
+  JARVIS_FULL_AUTONOMY: { type: 'boolean', default: false },
   TURN_JOURNAL_MAX_BYTES: { type: 'integer', default: 8388608, min: 65536, max: 1073741824 },
   TURN_JOURNAL_RETENTION_FILES: { type: 'integer', default: 5, min: 1, max: 30 },
   JARVIS_PRIVACY_MODE: { type: 'boolean', default: false },
   JARVIS_FOCUS_MODE: { type: 'boolean', default: false },
   JARVIS_MEETING_MODE: { type: 'boolean', default: false },
   OPENWAKEWORD_ENABLED: { type: 'boolean', default: true },
+  OPENWAKEWORD_RESTART_BASE_MS: { type: 'integer', default: 2000, min: 1000, max: 60000 },
+  OPENWAKEWORD_RESTART_MAX_MS: { type: 'integer', default: 30000, min: 1000, max: 300000 },
   OPENWAKEWORD_MODELS: { type: 'string', default: 'hey_jarvis' },
   OPENWAKEWORD_THRESHOLD: { type: 'number', default: 0.18, min: 0.01, max: 0.99 },
   // >1 intentionally disables the single-frame strong-score bypass while
@@ -219,6 +242,9 @@ function validateConfig(input, options = {}) {
   if (terraPartial) errors.push({ key: 'AZURE_TERRA_ENDPOINT', code: 'conditional', message: 'Terra endpoint va key birga berilishi kerak' });
   if (values.WHISPER_WAKE_ENABLED && (!values.WHISPER_WAKE_BINARY || !values.WHISPER_WAKE_MODEL)) {
     errors.push({ key: 'WHISPER_WAKE_BINARY', code: 'conditional', message: 'WHISPER_WAKE_ENABLED=true uchun binary va model path berilishi kerak' });
+  }
+  if (values.GMAIL_TASK_NOTIFICATIONS_ENABLED && !EMAIL.test(values.GMAIL_OWNER_RECIPIENT || '')) {
+    errors.push({ key: 'GMAIL_OWNER_RECIPIENT', code: 'conditional', message: 'GMAIL_TASK_NOTIFICATIONS_ENABLED=true uchun owner email berilishi kerak' });
   }
   if (values.REALTIME_ENABLED && !values.AZURE_VOICELIVE_ENDPOINT && !values.AZURE_REALTIME_ENDPOINT) {
     warnings.push({ key: 'REALTIME_ENABLED', code: 'fallback', message: 'Voice provider sozlanmagan; Speech TTS fallback ishlatiladi' });

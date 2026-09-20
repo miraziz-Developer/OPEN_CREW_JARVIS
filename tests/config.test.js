@@ -24,6 +24,10 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.REALTIME_ENABLED, false);
   assert.equal(result.values.REALTIME_MAX_RESPONSE_TOKENS, 1024);
   assert.equal(result.values.REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS, 256);
+  assert.equal(result.values.REALTIME_VAD_SILENCE_MS, 180);
+  assert.equal(result.values.REALTIME_NORMAL_DUPLEX_HANGOVER_MS, 330);
+  assert.equal(result.values.REALTIME_PLAYBACK_PREBUFFER_MS, 40);
+  assert.equal(result.values.REALTIME_PLAYBACK_MAX_WAIT_MS, 80);
   assert.equal(result.values.DASHBOARD_PORT, 7890);
   assert.equal(result.values.JARVIS_VOICE_STYLE, 'cinematic-robot');
   assert.equal(result.values.REALTIME_TRANSCRIPTION_LANGUAGE, '');
@@ -38,6 +42,12 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.OPENCLAW_AGENT_TIMEOUT_MS, 300000);
   assert.equal(result.values.DEEP_THINK_TIMEOUT_MS, 240000);
   assert.equal(result.values.AGENT_LONG_TASK_NOTICE_MS, 270000);
+  assert.equal(result.values.SELF_HEAL_ENABLED, true);
+  assert.equal(result.values.SELF_HEAL_MAX_ATTEMPTS, 2);
+  assert.equal(result.values.SELF_HEAL_TIMEOUT_MS, 180000);
+  assert.equal(result.values.AGENT_PERSISTENT_RECOVERY_WINDOW_MS, 2592000000);
+  assert.equal(result.values.GMAIL_TASK_NOTIFICATIONS_ENABLED, false);
+  assert.equal(result.values.GMAIL_TASK_PROGRESS_MS, 21600000);
   assert.equal(result.values.DEEP_THINK_MAX_TOKENS, 1200);
   assert.equal(result.values.AZURE_TERRA_DEPLOYMENT, 'gpt-5.6-terra');
   assert.equal(result.values.AZURE_VOICELIVE_MODEL, 'gpt-realtime');
@@ -48,6 +58,7 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.TURN_STALE_TIMEOUT_MS, 600000);
   assert.equal(result.values.CONVERSATION_FOLLOWUP_MS, 60000);
   assert.equal(result.values.ACTION_CONFIRMATION_TTL_MS, 30000);
+  assert.equal(result.values.JARVIS_FULL_AUTONOMY, false);
   assert.equal(result.values.TURN_JOURNAL_MAX_BYTES, 8388608);
   assert.equal(result.values.TURN_JOURNAL_RETENTION_FILES, 5);
   assert.equal(result.values.JARVIS_PRIVACY_MODE, false);
@@ -59,10 +70,19 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.OPENWAKEWORD_CONFIRM_THRESHOLD, 0.06);
   assert.equal(result.values.OPENWAKEWORD_CONFIRM_WINDOW_FRAMES, 4);
   assert.equal(result.values.OPENWAKEWORD_INPUT_GAIN, 3);
+  assert.equal(result.values.REALTIME_INPUT_GAIN, 3);
+  assert.equal(result.values.OPENWAKEWORD_RESTART_BASE_MS, 2000);
+  assert.equal(result.values.OPENWAKEWORD_RESTART_MAX_MS, 30000);
   assert.equal(result.values.OPENWAKEWORD_MODELS, 'hey_jarvis');
   assert.equal(result.values.WHISPER_WAKE_ENABLED, false);
   assert.equal(result.values.WHISPER_WAKE_WINDOW_MS, 3000);
   assert.equal(result.values.AZURE_SPEECH_KEY, 'speech-secret-value');
+});
+
+test('config parses the full autonomy flag', () => {
+  const result = validateConfig({ ...valid, JARVIS_FULL_AUTONOMY: 'true' });
+  assert.equal(result.ok, true);
+  assert.equal(result.values.JARVIS_FULL_AUTONOMY, true);
 });
 
 test('config rejects placeholders and out of range values', () => {
@@ -84,6 +104,14 @@ test('config redaction never exposes secret values', () => {
   assert.equal(safe.AZURE_OPENAI_KEY, '<redacted>');
   assert.equal(safe.OPENCLAW_GATEWAY_TOKEN, '<redacted>');
   assert.equal(safe.AZURE_SPEECH_REGION, 'southeastasia');
+});
+
+test('enabled Gmail task notifications require a valid owner recipient', () => {
+  const missingOwner = validateConfig({ ...valid, GMAIL_TASK_NOTIFICATIONS_ENABLED: 'true' });
+  assert.equal(missingOwner.ok, false);
+  assert.equal(missingOwner.errors.at(-1).key, 'GMAIL_OWNER_RECIPIENT');
+  const configured = validateConfig({ ...valid, GMAIL_TASK_NOTIFICATIONS_ENABLED: 'true', GMAIL_OWNER_RECIPIENT: 'owner@example.com' });
+  assert.equal(configured.ok, true);
 });
 
 test('new provider secrets are redacted and partial credential pairs fail', () => {

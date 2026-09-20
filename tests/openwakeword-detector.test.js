@@ -19,3 +19,8 @@ test('wake worker protocol remains compatible with legacy score-only events', ()
   });
   assert.equal(parseWakeWorkerLine('SCORE hey_jarvis 0.1'), null);
 });
+
+test('wake worker parser ignores malformed detections', () => {
+  assert.equal(parseWakeWorkerLine('DETECT hey_jarvis nope'), null);
+  assert.equal(parseWakeWorkerLine('READY'), null);
+});

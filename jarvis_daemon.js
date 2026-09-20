@@ -38,12 +38,14 @@ const { HotwordDetector } = require('./core/hotword-detector');
 const { OpenWakeWordDetector } = require('./core/openwakeword-detector');
 const { WhisperWakeDetector } = require('./core/whisper-wake-detector');
 const { findWakeRecognition, extractAddressedCommand } = require('./core/wake-word-policy');
+const { VoiceLiveWake } = require('./core/voicelive-wake');
 const { TurnJournal } = require('./core/turn-journal');
 const { ConversationContext } = require('./core/conversation-context');
 const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
 const { detectWakeSoundMs, playWakeSound, playSystemSound, playTaskDoneSound } = require('./core/voice-sounds');
 const { createAgentBridge } = require('./core/agent-bridge');
+const { resolveOpenClawEnvironment } = require('./core/openclaw-credentials');
 const { conversationIdleDelay } = require('./core/voice-turn-policy');
 const { createWakeAudioHandoff } = require('./core/wake-audio-handoff');
 const { VoiceTelemetry, VOICE_MILESTONES } = require('./utils/telemetry');
@@ -254,7 +256,9 @@ const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
 // TELEGRAM / TTS / AGENT BRIDGE (core/agent-bridge.js)
 // ════════════════════════════════════════════
 const { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders, askAgent } = createAgentBridge({
-  chatId: CHAT_ID, token: TOKEN, projectDir: PROJECT_DIR, env, azureOpenAiKey: AZURE_OPENAI_KEY, skillPlatform, runtime, telemetry: runtimeTelemetry
+  chatId: CHAT_ID, token: TOKEN, projectDir: PROJECT_DIR, env, azureOpenAiKey: AZURE_OPENAI_KEY,
+  openClawEnvironment: resolveOpenClawEnvironment({ projectDir: PROJECT_DIR }),
+  skillPlatform, runtime, telemetry: runtimeTelemetry
 });
 
 // ════════════════════════════════════════════
@@ -418,6 +422,7 @@ function applyGain(pcm16, gain) {
 let _sttPool = null;
 let _detector = null;
 let _whisperWakeDetector = null;
+  let _voiceLiveWake = null;
 let _clap = null;
 let _sox = null;
 let _soxStream = null;
@@ -483,6 +488,40 @@ async function mainLoop() {
     _whisperWakeDetector.start();
   }
 
+  // If Azure VoiceLive is configured, create a lightweight wake worker that
+  // keeps a transcription/VAD-only session open and emits transcripts.
+  try {
+    const vlProvider = VOICE_PROVIDERS.find(p => p.id === 'voice-live');
+    const wakeEnabled = (env('AZURE_VOICELIVE_WAKE_ENABLED') || 'true') !== 'false';
+    if (vlProvider && wakeEnabled) {
+      _voiceLiveWake = new VoiceLiveWake({
+        provider: vlProvider,
+        prefixPaddingMs: parseInt(env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10),
+        silenceMs: parseInt(env('AZURE_VOICELIVE_WAKE_SILENCE_MS') || '200', 10),
+        model: env('AZURE_VOICELIVE_MODEL') || undefined,
+        voice: vlProvider.voice,
+        inputRate: parseInt(env('MIC_CAPTURE_RATE') || String(16000), 10)
+      });
+      _voiceLiveWake.on('ready', () => ok('VoiceLive wake worker ready'));
+      _voiceLiveWake.on('error', e => wrn('VoiceLive wake worker error: ' + (e && e.message ? e.message : String(e))));
+      _voiceLiveWake.on('transcript', ({ text }) => {
+        try {
+          const recognized = text || '';
+          if (!recognized) return;
+          const candidate = findWakeRecognition([{ status: 'ok', text: recognized }]);
+          if (candidate && state === 'listening' && Date.now() - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
+            triggerVoice('🔥 HOTWORD (voicelive): "' + candidate.text + '"', {
+              addressedWake: true,
+              initialTranscript: candidate.text.replace(/^(?:jarvis\s*)/i, '').trim(),
+              playAck: true
+            });
+          }
+        } catch (e) { wrn('VoiceLive wake transcript handler failed: ' + (e && e.message ? e.message : String(e))); }
+      });
+      _voiceLiveWake.start();
+    }
+  } catch (e) { wrn('VoiceLive wake init failed: ' + (e && e.message ? e.message : String(e))); }
+
   // Start sox for continuous raw PCM
   _sox = startMicProcess();
   _soxStream = _sox.stdout;
@@ -505,6 +544,7 @@ async function mainLoop() {
   // Sessiya ochilgach server VAD tabiiy pauzalarda turnlarni o'zi ajratadi.
   let fnPressed = false;
   let lastFnDownAt = 0;
+  let restartFromFn = false;
   // Mac mikrofonining real tinch RMS'i sinovda 100–200 oralig'ida chiqdi.
   // 40 dan boshlash shovqinni nutq deb olib, uzluksiz STT segment yuborardi.
   let ambientEnergy = ENERGY_MIN_STT;
@@ -699,6 +739,12 @@ async function mainLoop() {
       runtime.heartbeat('voice-daemon', { state, ...runtimeIdentity() });
       nextStepTime = Date.now();
       inf('Realtime suhbat yakunlandi: ' + why);
+      if (restartFromFn) {
+        restartFromFn = false;
+        // close() callbacklari tugab state listening holatiga o'tgach yangi
+        // session ochiladi. Shu sabab Fn stuck realtime sessiyani tiklaydi.
+        setTimeout(() => triggerVoice('⌨️ Fn hands-free conversation'), 0);
+      }
     };
 
     session.on('ready', () => {
@@ -950,6 +996,7 @@ async function mainLoop() {
   // qular edi. Fn DOWN hands-free suhbatni shu yer orqali ochadi.
   function triggerVoice(reason, trigger = {}) {
     if (state !== 'listening') return false;
+    inf('[triggerVoice] ' + reason + ' @' + new Date().toISOString() + ' trigger=' + JSON.stringify(trigger).slice(0,200));
     // Lokal model va STT fallback parallel tinglaydi. Ulardan biri trigger
     // qilishi bilan ikkinchisining yarim yig'ilgan segmentini tashlaymiz;
     // aks holda realtime tugagach eski “Hey Jarvis” keyingi nutqqa qo'shiladi.
@@ -998,7 +1045,18 @@ async function mainLoop() {
           if (fnPressed || Date.now() - lastFnDownAt < 250) continue;
           fnPressed = true;
           lastFnDownAt = Date.now();
-          triggerVoice('⌨️ Fn hands-free conversation');
+          if (state === 'realtime' && _activeRealtimeSession) {
+            // Fn har doim yangi suhbatni boshlash tugmasi bo'lishi kerak. Idle
+            // timer/VAD sessionni hali yopmagan bo'lsa, u keyingi Fn'ni oldin
+            // jim rad etardi. Faol agent vazifasini esa hech qachon bekor
+            // qilmaymiz; bunday holatda mavjud sessiya saqlanadi.
+            if (_activeRealtimeSession._runningTasks?.size) {
+              inf('Fn qabul qilindi: faol vazifa bor, mavjud realtime suhbat saqlanadi');
+            } else {
+              restartFromFn = true;
+              _activeRealtimeSession.close();
+            }
+          } else triggerVoice('⌨️ Fn hands-free conversation');
         } else if (event === 'UP') {
           fnPressed = false;
           // Fn qo'yib yuborilishi suhbat turnini yopmaydi. Mikrofon realtime
@@ -1026,6 +1084,7 @@ async function mainLoop() {
   const runtimeHeartbeat = setInterval(() => {
     runtime.heartbeat('voice-daemon', { state, realtime: Boolean(_activeRealtimeSession), ...runtimeIdentity() });
     runtime.heartbeat('microphone', { status: _sox && !_sox.killed ? 'streaming' : 'stopped' });
+    if (_detector?.health) runtime.heartbeat('openwakeword', _detector.health());
   }, 5000);
   runtimeHeartbeat.unref();
   if (shouldSendStartupNotice()) sendTelegram('🚀 JARVIS v5.0 is online.');
@@ -1053,6 +1112,14 @@ async function mainLoop() {
           if (!queued && now >= (_activeRealtimeSession._jarvisWakeMuteUntil || 0)) {
             _activeRealtimeSession.feedAudio(realtimeChunk);
           }
+        }
+        // While idle (listening), also feed the lightweight VoiceLive wake worker
+        // so the cloud model can provide robust multilingual wake detection.
+        if (state === 'listening' && _voiceLiveWake) {
+          try {
+            const sent = _voiceLiveWake.feedAudio(stepData);
+            if (!sent) wrn('VoiceLive wake worker did not accept audio (ws not ready or queue full)');
+          } catch (e) { wrn('VoiceLive wake feedAudio error: ' + (e && e.message ? e.message : String(e))); }
         }
       }
 
@@ -1088,7 +1155,7 @@ async function mainLoop() {
           // Whisper is an opt-in local transcript fallback, never a parallel
           // command STT. Feed it only while idle/listening; once a realtime
           // conversation begins Azure Realtime owns STT, VAD and barge-in.
-          _whisperWakeDetector?.feedChunk(stepData);
+          if (_whisperWakeDetector && (!_detector || !_detector.ready)) _whisperWakeDetector.feedChunk(stepData);
 
           if (detected && (now - lastHotwordTime > HOTWORD_COOLDOWN_MS)) {
               const wakeModel = detected.model || 'hey_jarvis';
@@ -1273,6 +1340,7 @@ function cleanup() {
 }
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
+process.on('SIGHUP', () => inf('SIGHUP qabul qilindi: keyingi action safety tekshiruvi .env dan yangi autonomy holatini o‘qiydi.'));
 
 // ════════════════════════════════════════════
 // ENTRY
