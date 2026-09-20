@@ -107,3 +107,17 @@ test('the fallback provider never uses speculative responses', () => {
   msg(session, { type: 'conversation.item.input_audio_transcription.completed', transcript: 'What is the capital of France?' });
   assert.equal(sent.filter(m => m.type === 'response.create').length, 1);
 });
+
+test('gate-closed silence is fed to the server only while its VAD still thinks the user is speaking', () => {
+  const { session, sent } = liveSession();
+  const appends = () => sent.filter(m => m.type === 'input_audio_buffer.append');
+  session._feedTrailingSilence(960);
+  assert.equal(appends().length, 0);
+  msg(session, { type: 'input_audio_buffer.speech_started' });
+  session._feedTrailingSilence(960);
+  assert.equal(appends().length, 1);
+  assert.ok(Buffer.from(appends()[0].audio, 'base64').every(byte => byte === 0));
+  msg(session, { type: 'input_audio_buffer.speech_stopped' });
+  session._feedTrailingSilence(960);
+  assert.equal(appends().length, 1);
+});

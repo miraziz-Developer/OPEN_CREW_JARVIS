@@ -112,6 +112,7 @@ const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in na
 // 'explicit' (standart): oddiy savollarga realtime model darhol o'zi javob beradi; sekin ask_expert faqat aniq
 // chuqur tahlil so'ralganda. 'always' — eski xulq (jiddiy savol har doim ask_expert'ga, ~10+ s).
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
+const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
 const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
 // Voice Live'da Azure Speech transkripsiyasi ~0.2 s (gpt-4o-transcribe ~1 s) — o'lchangan.
@@ -904,6 +905,8 @@ class RealtimeSession extends EventEmitter {
     this._lastAssistantTranscript = '';
     this._suppressCurrentResponse = false;
     this._spec = null;
+    this._serverSpeechOpen = false;
+    this._trailingSilenceMs = 0;
     this._specClearing = false;
     this._specQueue = [];
     this._specTimer = null;
@@ -1104,10 +1107,13 @@ class RealtimeSession extends EventEmitter {
           this._sttTurn = { chunks: this._sttPreRoll.splice(0), bytes: this._sttPreRollBytes };
           this._sttPreRollBytes = 0;
         }
+        this._serverSpeechOpen = true;
+        this._trailingSilenceMs = 0;
         this.emit('user_speaking');
         this.emit('telemetry', 'vad.speech_started', {});
         break;
       case 'input_audio_buffer.speech_stopped':
+        this._serverSpeechOpen = false;
         this.emit('telemetry', 'vad.speech_stopped', {});
         this._beginSpeculative();
         if (this._authoritativeTranscribe && this._sttTurn) {
@@ -2166,7 +2172,8 @@ class RealtimeSession extends EventEmitter {
       }
       this._bargeInEvidenceAt = now;
     }
-    if (!processed.send) return;
+    if (!processed.send) { this._feedTrailingSilence(resampled.length); return; }
+    this._trailingSilenceMs = 0;
     // Server transkripti kechiksa ham daemon sessiyani tirik tutishi uchun
     // faqat echo/noise filtridan o'tgan haqiqiy audio activity yuboriladi.
     this.emit('audio_activity', {
@@ -2177,6 +2184,16 @@ class RealtimeSession extends EventEmitter {
       speechThresholdRms: processed.speechThresholdRms
     });
     this._sendInputAudio(processed.audio);
+  }
+
+  // Mahalliy shovqin darvozasi gap tugagach audio yuborishni to'xtatadi, server VAD esa jimlikni faqat
+  // kelayotgan audiodan biladi (server shovqin filtri kechikishi bilan 330 ms yetmaydi) — shuning uchun
+  // gap tugamaganini ko'rsa, speech_stopped kelguncha jimlik yuboramiz.
+  _feedTrailingSilence(bytes24k) {
+    if (!this._serverSpeechOpen || this.assistantSpeaking || this.closed) return;
+    if (this._trailingSilenceMs >= TRAILING_SILENCE_MAX_MS) return;
+    this._trailingSilenceMs += bytes24k / 48;
+    this._sendInputAudio(Buffer.alloc(bytes24k));
   }
 
   _sendInputAudio(audio) {
