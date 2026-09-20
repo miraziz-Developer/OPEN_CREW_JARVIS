@@ -106,13 +106,16 @@ const VOICE_STYLE = env('JARVIS_VOICE_STYLE', 'cinematic-robot');
 // Empty lets the Realtime provider detect the language for multilingual turns.
 const TRANSCRIPTION_LANGUAGE = env('REALTIME_TRANSCRIPTION_LANGUAGE', '');
 const TRANSCRIPTION_MODEL = env('REALTIME_TRANSCRIPTION_MODEL', 'gpt-4o-transcribe');
-// Voice Live'da Azure Speech transkripsiyasi ~0.2 s (gpt-4o-transcribe ~1 s) — o'lchangan.
-// Zaxira azure-realtime faqat OpenAI modellarini qabul qiladi.
 const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in natural English by default. Do not switch languages because of the user's language, accent, isolated foreign words, quoted text, transcription errors, or background audio. Translate into or speak in another language only when the user explicitly requested that named language; otherwise answer in English. Sound warm, attentive, and unforced, with natural wording and varied sentence length. Use complete sentences, always finish the thought, and never cut a sentence short; be concise for simple turns, but include enough detail when the question needs it. If the user requested an action, use the appropriate available tool instead of only describing or promising the action, and never claim completion before a successful tool result. Never invent missing facts, and do not use markdown.";
 // Taxminiy javob: server ovoz tugashi bilanoq javob boshlaydi (Azure playground kabi), JARVIS esa
 // transkriptni tekshirib qabul qiladi yoki bekor qiladi. Ovoz va tool-chaqiruvlar qaror chiqquncha ushlab turiladi.
+// 'explicit' (standart): oddiy savollarga realtime model darhol o'zi javob beradi; sekin ask_expert faqat aniq
+// chuqur tahlil so'ralganda. 'always' — eski xulq (jiddiy savol har doim ask_expert'ga, ~10+ s).
+const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
 const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
+// Voice Live'da Azure Speech transkripsiyasi ~0.2 s (gpt-4o-transcribe ~1 s) — o'lchangan.
+// Zaxira azure-realtime faqat OpenAI modellarini qabul qiladi.
 const VOICE_LIVE_TRANSCRIPTION_MODEL = env('REALTIME_VOICE_LIVE_TRANSCRIPTION_MODEL', 'azure-speech');
 // Jarvis gapirib bo'lgach, mikrofon yana necha ms kutib turadi (xona
 // akustikasi/karnay ovozi pasayishi uchun) — real foydalanishda 500ms
@@ -355,7 +358,7 @@ function loadLegacyInstructions() {
       "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
       "Keep the register low and full, with crisp consonants, measured rhythm, restrained emotion, and a subtle synthetic edge. Do not imitate any real actor or copyrighted character. " +
       "TOOLS: use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or any multi-step task; " +
-      "use see_screen when the user asks about what is visible; use recall_memory for older personal context; use ask_expert for serious analysis. " +
+      "use see_screen when the user asks about what is visible; use recall_memory for older personal context; use ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). " +
       "Call fast tools silently and speak only their result. A run_task may receive one brief acknowledgement, then report the actual result when available. " +
       "MEMORY: treat the recent activity and user profile below as facts you already remember. Use them naturally without saying that you read a memory file. " +
     "o'zing to'g'ridan-to'g'ri javob ber.\n\n" +
@@ -382,6 +385,7 @@ function loadLegacyInstructions() {
     "soat 13:07\" deb TAKRORLAYSIZ — bu 3-4 marta ketma-ket takrorlanib, judayam yomon eshitiladi. TO'G'RI: bunday holatda " +
     "sukut saqlang yoki faqat \"xo'p\" deng, raqamni qayta aytmang. " +
     "Maqsad: kino JARVIS kabi — lo'nda, aniq, keraksiz so'zsiz.\n\n" +
+    (EXPERT_ROUTING === 'always' ? (
     "MUHIM — JIDDIY SAVOLGA O'ZINGIZ JAVOB BERMANG: siz ovoz uchun optimallashtirilgan modelsiz — qisqa " +
     "suhbatda tez va tabiiysiz, lekin ko'p bosqichli FIKRLASHDA sekin va suvli bo'lib qolasiz (real o'lchov: " +
     "bir xil rejalashtirish savoliga siz 15.7 soniya sarfladingiz, `ask_expert` esa 3.5 soniyada aniqroq javob " +
@@ -394,7 +398,10 @@ function loadLegacyInstructions() {
     "  • biror mavzuni tushuntirish (\"bu nima\", \"qanday ishlaydi\")\n" +
     "O'ZINGIZ javob beradigan holatlar FAQAT shular: salomlashish, qisqa suhbat, hazil, tasdiq (\"xo'p\", \"ha\"), " +
     "va allaqachon bilgan qisqa fakt (soat nechchi — buni fast_action beradi). Ikkilansangiz — `ask_expert` " +
-    "chaqiring, bu deyarli har doim to'g'ri qaror. Javob qaytgach uni qayta yozmang, tabiiy ohangda o'qib bering.\n\n" +
+    "chaqiring, bu deyarli har doim to'g'ri qaror. Javob qaytgach uni qayta yozmang, tabiiy ohangda o'qib bering.\n\n"
+    ) : (
+    "ANSWER DIRECTLY AND FAST: you are a realtime voice model — for conversation, explanations, opinions, comparisons, advice, \"why\"/\"how\" questions, and everyday reasoning, answer yourself immediately in a few natural sentences, exactly like a quick, knowledgeable person. Never make the user wait for a normal question. Call `ask_expert` ONLY when the user explicitly asks for deep, careful, or long analysis (for example \"think this through\", \"analyze in depth\", \"make a detailed plan\", \"do a full comparison\"); it takes many seconds, so never use it for ordinary questions.\n\n"
+    )) +
     "MUHIM — FUNKSIYA CHAQIRISHDAN OLDIN JIM BO'LING: `see_screen`, `recall_memory`, `fast_action` kabi TEZ " +
     "funksiyalarni chaqirayotganda, oldindan \"hozir qarayman\", \"bir oz eslab ko'ray\", \"hozir izlab ko'raman\", " +
     "\"bir zum\" kabi HECH QANDAY oraliq gap AYTMANG. Bu funksiyalar bir-ikki soniyada tugaydi — oraliq gap esa " +
@@ -440,7 +447,7 @@ function loadInstructions() {
     "Never add unnecessary greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
     "Use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
-    "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert for serious analysis. Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
+    "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
     "Call fast tools silently and speak only their result. For a long run_task, one brief acknowledgement is acceptable, but never claim success until the tool returns a successful result. If a tool fails or only partially completes the work, say that plainly. " +
     "Independent run_task calls may run in parallel; report each result when it finishes. Preserve confirmation requirements for destructive, external, or sensitive actions. " +
     "MEMORY: treat recent activity and the user profile below as facts you already remember. Use them naturally without mentioning memory files. " +
@@ -553,14 +560,15 @@ function buildTools() {
   tools.push({
     type: 'function',
     name: 'ask_expert',
-    description: "Foydalanuvchi CHINDAN FIKRLASH talab qiladigan savol bersa — tahlil, maslahat, taqqoslash, " +
-      "rejalashtirish, sabab-oqibat, hisob-kitob, \"nima qilsam yaxshi\", \"nega bunday\", \"qaysi biri afzal\" — " +
-      "shuni chaqiring. Savolni TO'LIQ, kerakli kontekst bilan birga bering (foydalanuvchi aytgan raqamlar, " +
-      "cheklovlar, vaziyat) — chunki ekspert sizning suhbatingizni ko'rmaydi. Javob qaytgach, uni O'Z SO'ZINGIZ " +
-      "bilan qayta aytib bermang — deyarli o'zgartirmasdan, tabiiy ohangda o'qib bering. " +
-      "Qachon KERAK EMAS: oddiy suhbat, salomlashish, qisqa faktik savol (soat nechchi, ob-havo), " +
-      "kompyuterda amal bajarish (buning uchun run_task yoki fast_action). " +
-      "MUHIM: chaqirishdan oldin \"o'ylab ko'ray\" kabi hech narsa demang — jim chaqiring.",
+    description: EXPERT_ROUTING === 'always'
+      ? "Foydalanuvchi CHINDAN FIKRLASH talab qiladigan savol bersa — tahlil, maslahat, taqqoslash, " +
+        "rejalashtirish, sabab-oqibat, hisob-kitob — shuni chaqiring. Savolni TO'LIQ, kerakli kontekst bilan bering. " +
+        "Javob qaytgach, uni deyarli o'zgartirmasdan, tabiiy ohangda o'qib bering. Oddiy suhbat uchun kerak emas. " +
+        "Chaqirishdan oldin hech narsa demang."
+      : "SLOW (many seconds). Call ONLY when the user explicitly asks for deep, careful or long analysis, a detailed plan, " +
+        "or a full comparison. NEVER call it for ordinary conversation, explanations, opinions, advice, or quick reasoning — " +
+        "answer those yourself right away. Give the FULL question with all needed context (the expert cannot see the conversation). " +
+        "Read the result back naturally without rewriting it.",
     parameters: {
       type: 'object',
       properties: { question: { type: 'string', description: "To'liq savol + barcha kerakli kontekst (ekspert suhbatni ko'rmaydi)" } },
