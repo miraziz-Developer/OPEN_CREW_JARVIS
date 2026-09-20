@@ -116,6 +116,8 @@ const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_P
 const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10) || 15000;
 const NATIVE_BARGE_IN_RMS = parseInt(env('REALTIME_NATIVE_BARGE_IN_RMS'), 10) || 600;
 const NATIVE_MIC_MUTE_GRACE_MS = 150;
+const NATIVE_BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_NATIVE_BARGE_IN_CONFIRM_MS'), 10) || 250;
+const NATIVE_PREROLL_BYTES = 24000 * 2 * 1.2;
 const BARGE_IN_VERIFY_TIMEOUT_MS = parseInt(env('REALTIME_BARGE_IN_VERIFY_MS'), 10) || 3500;
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
@@ -916,6 +918,8 @@ class RealtimeSession extends EventEmitter {
     this._dropStaleAudio = false;
     this._duck = null;
     this._nativeAec = false;
+    this._nativePreRoll = [];
+    this._nativePreRollBytes = 0;
     this._noBargeInUntil = 0;
     this._gateStats = { sent: 0, dropped: 0, maxResidual: 0, since: Date.now() };
     this._trailingSilenceMs = 0;
@@ -2161,7 +2165,8 @@ class RealtimeSession extends EventEmitter {
     const now = Date.now();
     const muteUntil = Math.max(this._playbackUntil, this._speakEndedAt) + (this._nativeAec ? NATIVE_MIC_MUTE_GRACE_MS : MIC_MUTE_GRACE_MS);
     const resampled = resample16to24(pcm16_16k);
-    const inAcousticGrace = !this.assistantSpeaking && now < muteUntil;
+    const userTakingTurn = this._nativeAec && (this._serverSpeechOpen || this._bargeInConfirmed || this._duck);
+    const inAcousticGrace = !this.assistantSpeaking && now < muteUntil && !userTakingTurn;
     // Himoya: audio kelmayapti va karnay jim bo'lsa ham "gapiryapti" holati qolib ketsa (darvoza kar bo'lib qoladi),
     // uni qayta tiklaymiz.
     if (this.assistantSpeaking && this._lastAudioQueuedAt && now > this._playbackUntil + 1500 && now - this._lastAudioQueuedAt > 2500) {
@@ -2194,6 +2199,20 @@ class RealtimeSession extends EventEmitter {
         }
       }
     }
+    if (this._nativeAec) {
+      // JARVIS gapirayotganda barcha kadrlarni qisqa muddat saqlaymiz: barge-in tasdiqlanganda gapingizning
+      // boshi (past ovozli bo'g'inlar bilan) to'liq serverga ketadi.
+      if (this.assistantSpeaking && !this._bargeInConfirmed) {
+        this._nativePreRoll.push(Buffer.from(resampled));
+        this._nativePreRollBytes += resampled.length;
+        while (this._nativePreRollBytes > NATIVE_PREROLL_BYTES && this._nativePreRoll.length > 1) {
+          this._nativePreRollBytes -= this._nativePreRoll.shift().length;
+        }
+      } else if (!this.assistantSpeaking) {
+        this._nativePreRoll = [];
+        this._nativePreRollBytes = 0;
+      }
+    }
     if (this.assistantSpeaking) {
       const chunkMs = pcm16_16k.length / (IN_RATE * 2) * 1000;
       if (!processed.send || processed.reason !== 'barge-in') {
@@ -2209,9 +2228,14 @@ class RealtimeSession extends EventEmitter {
         this._bargeInGapMs = 0;
         this._bargeInCandidate.push(Buffer.from(processed.audio));
         this._bargeInCandidateMs += chunkMs;
-        if (this._bargeInCandidateMs < BARGE_IN_CONFIRM_MS) return;
+        const confirmMs = this._nativeAec ? NATIVE_BARGE_IN_CONFIRM_MS : BARGE_IN_CONFIRM_MS;
+        if (this._bargeInCandidateMs < confirmMs) return;
 
-        const candidate = Buffer.concat(this._bargeInCandidate);
+        const candidate = this._nativeAec && this._nativePreRoll.length
+          ? Buffer.concat(this._nativePreRoll)
+          : Buffer.concat(this._bargeInCandidate);
+        this._nativePreRoll = [];
+        this._nativePreRollBytes = 0;
         this._bargeInCandidate = [];
         this._bargeInCandidateMs = 0;
         // Provider VAD'ni kutish sezilarli kechikish beradi. Mahalliy AEC gate
@@ -2222,8 +2246,8 @@ class RealtimeSession extends EventEmitter {
         this._bargeInConfirmed = true;
         this._bargeInEvidenceAt = now;
         this.emit('telemetry', 'barge_in.confirmed', {
-          confirmationMs: BARGE_IN_CONFIRM_MS,
-          source: 'local-duplex'
+          confirmationMs: this._nativeAec ? NATIVE_BARGE_IN_CONFIRM_MS : BARGE_IN_CONFIRM_MS,
+          source: this._nativeAec ? 'native-aec' : 'local-duplex'
         });
         this._sendInputAudio(candidate);
         return;
@@ -2278,6 +2302,8 @@ class RealtimeSession extends EventEmitter {
       try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
     }
     this._flushPlayback();
+    this.assistantSpeaking = false;
+    this._syncAutoResponse();
     this._bargeInConfirmed = true;
     this._bargeInEvidenceAt = Date.now();
     this.emit('telemetry', 'barge_in.committed', { reason });
@@ -2293,7 +2319,7 @@ class RealtimeSession extends EventEmitter {
     try { this.playProc?.kill('SIGCONT'); } catch (e) {}
     this._resetBargeInCandidate();
     // Pauza paytida AEC namunasi mikrofon bilan sinxronligini yo'qotgan: qisqa muddat yangi barge-in qabul qilinmasin.
-    this._noBargeInUntil = Date.now() + 1500;
+    this._noBargeInUntil = Date.now() + (this._nativeAec ? 300 : 1500);
     this.emit('telemetry', 'barge_in.resumed', { reason, pausedMs });
   }
 
@@ -2316,6 +2342,10 @@ class RealtimeSession extends EventEmitter {
   _nativeGate(audio) {
     const level = rms(audio);
     if (this.assistantSpeaking) {
+      if (this._duck || this._bargeInConfirmed || this._serverSpeechOpen) {
+        // Foydalanuvchi navbatni oldi: past ovozli bo'g'inlar tashlanmasin.
+        return { send: true, audio, reason: 'barge-in', residualRms: level, correlation: 0, speechThresholdRms: NATIVE_BARGE_IN_RMS };
+      }
       const send = level >= NATIVE_BARGE_IN_RMS;
       return { send, audio, reason: send ? 'barge-in' : 'playback-noise', residualRms: level, correlation: 0, speechThresholdRms: NATIVE_BARGE_IN_RMS };
     }

@@ -81,3 +81,52 @@ test('with native AEC the playback reference is not queued, and disabling restor
   assert.equal(queued, 1);
   session.close();
 });
+
+test('once the user takes the turn during native AEC, quiet syllables are still sent', () => {
+  const session = new RealtimeSession();
+  const quiet = Buffer.alloc(640); for (let i = 0; i < quiet.length; i += 2) quiet.writeInt16LE(i % 4 ? 30 : -30, i);
+  session.enableNativeAec();
+  session.assistantSpeaking = true;
+  assert.equal(session._nativeGate(quiet).send, false);
+  session._bargeInConfirmed = true;
+  assert.equal(session._nativeGate(quiet).send, true);
+  session._bargeInConfirmed = false;
+  session._serverSpeechOpen = true;
+  assert.equal(session._nativeGate(quiet).send, true);
+  session.close();
+});
+
+test('native barge-in sends the buffered pre-roll (including quiet syllables) when it is confirmed', () => {
+  const session = new RealtimeSession();
+  const sent = [];
+  session.ready = true;
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session.playProc = { kill() {} };
+  session.enableNativeAec();
+  session.assistantSpeaking = true;
+  const loud = Buffer.alloc(3200); for (let i = 0; i < loud.length; i += 2) loud.writeInt16LE(i % 4 ? 4000 : -4000, i);
+  const quiet = Buffer.alloc(1280); for (let i = 0; i < quiet.length; i += 2) quiet.writeInt16LE(i % 4 ? 20 : -20, i);
+  session.feedAudio(loud);   // 100 ms
+  session.feedAudio(quiet);  // 40 ms dip below threshold: must stay in the pre-roll
+  session.feedAudio(loud);   // 200 ms of qualifying speech, confirmation needs 250 ms
+  session.feedAudio(loud);   // reaches confirmation
+  assert.ok(session._duck);
+  const appended = sent.filter(m => m.type === 'input_audio_buffer.append');
+  assert.equal(appended.length, 1);
+  // 16 kHz -> 24 kHz (x1.5): 3 loud chunks + the quiet dip are all included
+  assert.equal(Buffer.from(appended[0].audio, 'base64').length, (3200 * 3 + 1280) * 1.5);
+  session.close();
+});
+
+test('committing a barge-in marks JARVIS as no longer speaking so the user is heard immediately', () => {
+  const session = new RealtimeSession();
+  session.ws = { send() {} };
+  session.playProc = { kill() {} };
+  session._flushPlayback = () => {};
+  session.assistantSpeaking = true;
+  session._realtimeResponseActive = true;
+  session._beginDuck();
+  session._commitBargeIn('accepted');
+  assert.equal(session.assistantSpeaking, false);
+  session.close();
+});
