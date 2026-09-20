@@ -113,6 +113,7 @@ const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in na
 // chuqur tahlil so'ralganda. 'always' — eski xulq (jiddiy savol har doim ask_expert'ga, ~10+ s).
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
 const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
+const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10) || 15000;
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
 const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
@@ -1481,6 +1482,11 @@ class RealtimeSession extends EventEmitter {
       if (this.closed || serial !== this._groundedTurnSerial) return;
       answer = prepareSpokenAnswer(answer);
       if (!answer) return;
+      // Kech kelgan fon javobi (o'lchangan: 48 s) suhbat allaqachon ketgach kutilmaganda gap boshlab yubormasin.
+      if (Date.now() - startedAt > GROUNDING_FOLLOWUP_MAX_MS) {
+        this.emit('telemetry', 'grounding.follow_up.dropped', { durationMs: Date.now() - startedAt });
+        return;
+      }
       this._backgroundResearch = { serial, question, answer: answer.slice(0, 7000) };
       this.emit('context_hydration_done', { question, groundingBytes: grounding.length, answer });
       this.emit('telemetry', 'grounding.completed', { durationMs: Date.now() - startedAt, groundingBytes: grounding.length, background: true });

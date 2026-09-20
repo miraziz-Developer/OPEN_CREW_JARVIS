@@ -2,6 +2,8 @@
 
 // Testlar jonli .env sozlamalariga bog'liq bo'lmasin.
 process.env.REALTIME_BARGE_IN_CONFIRM_MS = '420';
+process.env.REALTIME_VAD_SILENCE_MS = '180';
+process.env.REALTIME_NORMAL_DUPLEX_HANGOVER_MS = '330';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
