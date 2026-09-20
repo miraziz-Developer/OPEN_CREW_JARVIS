@@ -200,7 +200,9 @@ function resample16to24(pcm16) {
 function buildSessionUpdate(provider, options) {
   // Allow session-level tuning via env vars so behavior can match Playground
   const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
-  const SESSION_INTERRUPT = (env('AZURE_VOICELIVE_INTERRUPT_RESPONSE') || 'true') === 'true';
+  // Server o'zi javobni kesmasin: xona aks-sadosi server VAD'dan o'tsa javob o'rtada uzilardi (logda 20% turn_detected).
+  // Haqiqiy barge-in'ni mahalliy exo-filtr (duplex) tasdiqlaydi.
+  const SESSION_INTERRUPT = (env('AZURE_VOICELIVE_INTERRUPT_RESPONSE') || 'false') === 'true';
 
   const speculative = Boolean(options.speculative) && provider.id === 'voice-live' && !options.startMediaAware;
   const turnDetection = options.startMediaAware
