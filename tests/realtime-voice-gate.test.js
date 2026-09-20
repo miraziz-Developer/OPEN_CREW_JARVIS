@@ -1,5 +1,8 @@
 'use strict';
 
+// Testlar jonli .env sozlamalariga bog'liq bo'lmasin.
+process.env.REALTIME_BARGE_IN_CONFIRM_MS = '420';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
