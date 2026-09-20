@@ -254,20 +254,29 @@ test('GA v1 output audio and transcript events use the existing playback pipelin
   assert.deepEqual(played, [Buffer.from('pcm')]);
 });
 
-test('confirmed server speech_started cancels the response and flushes local playback once', () => {
+test('confirmed server speech_started pauses playback; the accepted turn then cancels the response and flushes once', () => {
   const session = new RealtimeSession();
   const sent = [];
+  const signals = [];
   let flushes = 0;
   session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session.playProc = { kill: signal => signals.push(signal) };
   session.assistantSpeaking = true;
+  session._realtimeResponseActive = true;
   session._bargeInEvidenceAt = Date.now();
   session._flushPlayback = () => { flushes++; };
 
   session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
   session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
 
+  assert.deepEqual(signals, ['SIGSTOP']);
+  assert.equal(sent.some(message => message.type === 'response.cancel'), false);
+  assert.equal(flushes, 0);
+
+  session._commitBargeIn('accepted');
   assert.deepEqual(sent.filter(message => message.type === 'response.cancel'), [{ type: 'response.cancel' }]);
   assert.equal(flushes, 1);
+  session.close();
 });
 
 test('server speech_started without local barge-in evidence preserves playback', () => {
@@ -909,6 +918,7 @@ test('completed provider response remains marked interrupted after confirmed bar
   session.on('turn_done', data => completed.push(data));
 
   session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+  session._commitBargeIn('accepted');
   session._onMessage({ data: JSON.stringify({
     type: 'response.done',
     response: { status: 'completed' }
@@ -931,10 +941,15 @@ test('server VAD cannot cancel playback without locally confirmed barge-in', () 
   assert.equal(flushed, 0);
 
   session._bargeInEvidenceAt = Date.now();
+  session._realtimeResponseActive = true;
   session._onMessage({ data: JSON.stringify({ type: 'input_audio_buffer.speech_started' }) });
+  assert.equal(sent.some(message => message.type === 'response.cancel'), false);
+  assert.ok(session._duck);
 
+  session._commitBargeIn('accepted');
   assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
   assert.equal(flushed, 1);
+  session.close();
 });
 
 test('provider VAD acknowledgement does not cancel an already locally interrupted response twice', () => {
@@ -987,9 +1002,12 @@ test('playback requires sustained local speech before forwarding barge-in audio'
   assert.equal(processed, 5);
   assert.equal(appended.length, 1);
   assert.equal(Buffer.from(appended[0].audio, 'base64').length, 24000);
-  assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
-  assert.equal(flushed, 1);
+  // Barge-in tasdiqlanganda karnay pauza qilinadi; javob transkript tekshirilgunicha bekor qilinmaydi.
+  assert.ok(session._duck);
+  assert.equal(sent.filter(message => message.type === 'response.cancel').length, 0);
+  assert.equal(flushed, 0);
   assert.ok(session._bargeInEvidenceAt > 0);
+  session.close();
 });
 
 test('a playback-noise chunk resets an unconfirmed barge-in candidate', () => {
@@ -1031,9 +1049,10 @@ test('a brief energy dip does not lose a natural barge-in onset', () => {
   session.feedAudio(Buffer.alloc(3840, 1)); // 120ms
   session.feedAudio(Buffer.alloc(7680, 1)); // 240ms; accumulated active speech reaches 420ms
 
-  assert.equal(sent.filter(message => message.type === 'response.cancel').length, 1);
+  assert.ok(session._duck);
   assert.equal(sent.filter(message => message.type === 'input_audio_buffer.append').length, 1);
   assert.ok(session._bargeInEvidenceAt > 0);
+  session.close();
 });
 
 test('external Azure TTS PCM is queued as playback reference', () => {

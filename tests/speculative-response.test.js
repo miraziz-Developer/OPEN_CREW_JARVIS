@@ -146,3 +146,78 @@ test('server auto-response is switched off while JARVIS speaks and back on when 
   msg(session, { type: 'response.done', response: { status: 'completed' } });
   assert.deepEqual(updates(), [false, true]);
 });
+
+test('late audio from a barge-in-cancelled response cannot re-enter the speaking state', () => {
+  const { session, played } = liveSession();
+  msg(session, { type: 'response.created', response: { id: 'r1' } });
+  msg(session, audio('one'));
+  assert.equal(session.assistantSpeaking, true);
+  session._responseInterrupted = true;
+  session._dropStaleAudio = true;
+  msg(session, { type: 'response.done', response: { status: 'cancelled' } });
+  assert.equal(session.assistantSpeaking, false);
+  msg(session, audio('late'));
+  assert.equal(session.assistantSpeaking, false);
+  assert.deepEqual(played, ['one']);
+  msg(session, { type: 'response.created', response: { id: 'r2' } });
+  msg(session, audio('fresh'));
+  assert.deepEqual(played, ['one', 'fresh']);
+});
+
+test('a stuck speaking flag with no audio flowing is reset so the gate can hear the user again', () => {
+  const { session, sent } = liveSession();
+  session.assistantSpeaking = true;
+  session._autoResponseOn = false;
+  session._playbackUntil = Date.now() - 5000;
+  session._lastAudioQueuedAt = Date.now() - 6000;
+  session.feedAudio(Buffer.alloc(640));
+  assert.equal(session.assistantSpeaking, false);
+  assert.ok(sent.some(m => m.type === 'session.update' && m.session.turn_detection.create_response === true));
+});
+
+function duckedSession() {
+  const ctx = liveSession();
+  ctx.signals = [];
+  ctx.session.playProc = { kill: signal => ctx.signals.push(signal), stdin: { writable: true, write() { return true; } } };
+  ctx.session.assistantSpeaking = true;
+  ctx.session._realtimeResponseActive = true;
+  ctx.session._lastAssistantTranscript = "Glad to hear it! If there's anything you'd like to chat about, just let me know.";
+  return ctx;
+}
+
+test('a false barge-in caused by JARVIS echo resumes the reply instead of killing it', () => {
+  const { session, sent, signals } = duckedSession();
+  let flushed = 0;
+  session._flushPlayback = () => { flushed++; };
+  session._beginDuck();
+  assert.deepEqual(signals, ['SIGSTOP']);
+  msg(session, { type: 'conversation.item.input_audio_transcription.completed', transcript: 'Glad to hear it.' });
+  assert.deepEqual(signals, ['SIGSTOP', 'SIGCONT']);
+  assert.equal(session._duck, null);
+  assert.equal(sent.some(m => m.type === 'response.cancel'), false);
+  assert.equal(flushed, 0);
+  assert.ok(session._noBargeInUntil > Date.now());
+});
+
+test('a real interruption cancels the paused reply and the new answer waits for the cancelled response to clear', () => {
+  const { session, sent, signals } = duckedSession();
+  let flushed = 0;
+  session._flushPlayback = () => { flushed++; };
+  session._beginDuck();
+  msg(session, { type: 'conversation.item.input_audio_transcription.completed', transcript: 'Wait, what is the capital of Italy?' });
+  assert.deepEqual(signals, ['SIGSTOP', 'SIGCONT']);
+  assert.equal(sent.filter(m => m.type === 'response.cancel').length, 1);
+  assert.equal(flushed, 1);
+  assert.equal(sent.filter(m => m.type === 'response.create').length, 0);
+  msg(session, { type: 'response.done', response: { status: 'cancelled' } });
+  assert.equal(sent.filter(m => m.type === 'response.create').length, 1);
+});
+
+test('an unverified pause is committed after the verify timeout', () => {
+  const { session, sent } = duckedSession();
+  session._flushPlayback = () => {};
+  session._beginDuck();
+  session._commitBargeIn('timeout');
+  assert.equal(session._duck, null);
+  assert.equal(sent.filter(m => m.type === 'response.cancel').length, 1);
+});

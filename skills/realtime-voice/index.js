@@ -114,6 +114,7 @@ const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in na
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
 const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
 const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10) || 15000;
+const BARGE_IN_VERIFY_TIMEOUT_MS = parseInt(env('REALTIME_BARGE_IN_VERIFY_MS'), 10) || 3500;
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
 const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
@@ -910,6 +911,10 @@ class RealtimeSession extends EventEmitter {
     this._spec = null;
     this._serverSpeechOpen = false;
     this._autoResponseOn = true;
+    this._dropStaleAudio = false;
+    this._duck = null;
+    this._noBargeInUntil = 0;
+    this._gateStats = { sent: 0, dropped: 0, maxResidual: 0, since: Date.now() };
     this._trailingSilenceMs = 0;
     this._specClearing = false;
     this._specQueue = [];
@@ -1094,10 +1099,8 @@ class RealtimeSession extends EventEmitter {
         // residual emas deb tasdiqlagan audio bo'lsa qo'lda barge-in qilamiz.
         const confirmedBargeIn = this.assistantSpeaking &&
           Date.now() - this._bargeInEvidenceAt <= 1200;
-        if (confirmedBargeIn && !this._responseInterrupted) {
-          this._responseInterrupted = true;
-          try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
-          this._flushPlayback();
+        if (confirmedBargeIn && !this._responseInterrupted && !this._duck) {
+          this._beginDuck();
           this.emit('telemetry', 'barge_in.confirmed', {});
         } else if (confirmedBargeIn) {
           // Lokal duplex gate playback'ni allaqachon kesgan. Provider VAD
@@ -1160,6 +1163,7 @@ class RealtimeSession extends EventEmitter {
       }
       case 'response.created':
         this._responseInterrupted = false;
+        this._dropStaleAudio = false;
         this._realtimeResponseActive = true;
         this._onSpeculativeResponseCreated();
         this.emit('telemetry', 'provider.response.created', {
@@ -1183,6 +1187,8 @@ class RealtimeSession extends EventEmitter {
       case 'response.audio.delta':
       case 'response.output_audio.delta':
         if (this._suppressCurrentResponse) break;
+        // Barge-in bilan bekor qilingan javobning kechikib kelgan audio bo'laklari gapirish holatini qayta yoqmasin.
+        if (this._dropStaleAudio) break;
         if (this._spec?.state === 'held') { this._spec.held.push(msg.delta); break; }
         if (!this._firstAudioObserved) {
           this._firstAudioObserved = true;
@@ -1310,6 +1316,7 @@ class RealtimeSession extends EventEmitter {
       this._addressedWakePending = false;
       if (!this.userTranscript) {
         this._discardSpeculative();
+        if (this._duck) this._resumeBargeIn('wake-only');
         this.emit('turn_suppressed', 'wake-only', text);
         return false;
       }
@@ -1317,6 +1324,7 @@ class RealtimeSession extends EventEmitter {
     const confirmation = this._actionSafety.handleUtterance(this.userTranscript);
     if (confirmation.matched) {
       this._discardSpeculative();
+      if (this._duck) this._commitBargeIn('confirmation');
       const pending = this._pendingConfirmedAction;
       this._pendingConfirmedAction = null;
       this.emit('user_transcript', this.userTranscript);
@@ -1334,6 +1342,8 @@ class RealtimeSession extends EventEmitter {
     });
     if (!policy.accept) {
       this.emit('turn_suppressed', policy.reason, this.userTranscript);
+      // Aks-sado yoki mazmunsiz gap sabab to'xtatilgan bo'lsa — JARVIS javobini davom ettiradi.
+      if (this._duck) this._resumeBargeIn(policy.reason);
       const speculativeInFlight = Boolean(this._spec && ['expected', 'held'].includes(this._spec.state));
       this._discardSpeculative();
       // Rad etilgan turn (aks-sado/shovqin) JARVISning hozir aytayotgan haqiqiy javobini bekor qilmasin
@@ -1346,6 +1356,8 @@ class RealtimeSession extends EventEmitter {
       return false;
     }
 
+    // Haqiqiy foydalanuvchi gapi — to'xtatilgan javobni endi to'liq bekor qilamiz.
+    if (this._duck) this._commitBargeIn('accepted');
     this._explicitUserTurnPending = false;
     this._firstTextObserved = false;
     this._firstAudioObserved = false;
@@ -2147,7 +2159,16 @@ class RealtimeSession extends EventEmitter {
     const muteUntil = Math.max(this._playbackUntil, this._speakEndedAt) + MIC_MUTE_GRACE_MS;
     const resampled = resample16to24(pcm16_16k);
     const inAcousticGrace = !this.assistantSpeaking && now < muteUntil;
+    // Himoya: audio kelmayapti va karnay jim bo'lsa ham "gapiryapti" holati qolib ketsa (darvoza kar bo'lib qoladi),
+    // uni qayta tiklaymiz.
+    if (this.assistantSpeaking && this._lastAudioQueuedAt && now > this._playbackUntil + 1500 && now - this._lastAudioQueuedAt > 2500) {
+      this.assistantSpeaking = false;
+      this._resetBargeInCandidate();
+      this._syncAutoResponse();
+      this.emit('telemetry', 'assistant.speaking.stuck_reset', {});
+    }
     const processed = this.duplex.process(resampled, { assistantSpeaking: this.assistantSpeaking });
+    this._recordGateStats(processed, now);
     // Gapirish vaqtida moslashtirilgan AEC barge-in'ni saqlaydi. Gap tugagach
     // grace oynasida esa reference tugab qolgan bo'lishi mumkin; shu davrda
     // qolgan xona aks-sadosini serverga umuman yubormaymiz.
@@ -2178,6 +2199,7 @@ class RealtimeSession extends EventEmitter {
         return;
       }
 
+      if (now < this._noBargeInUntil) return;
       if (!this._bargeInConfirmed) {
         this._bargeInGapMs = 0;
         this._bargeInCandidate.push(Buffer.from(processed.audio));
@@ -2191,9 +2213,7 @@ class RealtimeSession extends EventEmitter {
         // nutqni tasdiqlashi bilan karnayni to'xtatamiz; server event keyinroq
         // faqat turn lifecycle'ni davom ettiradi. _flushPlayback candidate
         // state'ni reset qilgani uchun confirmed/evidence undan KEYIN yoziladi.
-        this._responseInterrupted = true;
-        try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
-        this._flushPlayback();
+        this._beginDuck();
         this._bargeInConfirmed = true;
         this._bargeInEvidenceAt = now;
         this.emit('telemetry', 'barge_in.confirmed', {
@@ -2222,6 +2242,64 @@ class RealtimeSession extends EventEmitter {
   // Mahalliy shovqin darvozasi gap tugagach audio yuborishni to'xtatadi, server VAD esa jimlikni faqat
   // kelayotgan audiodan biladi (server shovqin filtri kechikishi bilan 330 ms yetmaydi) — shuning uchun
   // gap tugamaganini ko'rsa, speech_stopped kelguncha jimlik yuboramiz.
+  // Barge-in: karnayni darhol PAUZA qilamiz (SIGSTOP), javobni esa transkript tekshirilguncha bekor qilmaymiz.
+  _beginDuck() {
+    if (this._duck) return;
+    const duck = { at: Date.now(), timer: null };
+    duck.timer = setTimeout(() => { if (this._duck === duck) this._commitBargeIn('timeout'); }, BARGE_IN_VERIFY_TIMEOUT_MS);
+    if (duck.timer.unref) duck.timer.unref();
+    this._duck = duck;
+    try { this.playProc?.kill('SIGSTOP'); } catch (e) {}
+    this.emit('telemetry', 'barge_in.paused', {});
+  }
+
+  _commitBargeIn(reason) {
+    const duck = this._duck;
+    if (!duck) return;
+    clearTimeout(duck.timer);
+    this._duck = null;
+    try { this.playProc?.kill('SIGCONT'); } catch (e) {}
+    this._responseInterrupted = true;
+    this._dropStaleAudio = true;
+    if (this._realtimeResponseActive) {
+      this._specClearing = true;
+      this._armSpecClearTimer();
+      try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
+    }
+    this._flushPlayback();
+    this._bargeInConfirmed = true;
+    this._bargeInEvidenceAt = Date.now();
+    this.emit('telemetry', 'barge_in.committed', { reason });
+  }
+
+  _resumeBargeIn(reason) {
+    const duck = this._duck;
+    if (!duck) return;
+    clearTimeout(duck.timer);
+    this._duck = null;
+    const pausedMs = Date.now() - duck.at;
+    if (this._playbackUntil > duck.at) this._playbackUntil += pausedMs;
+    try { this.playProc?.kill('SIGCONT'); } catch (e) {}
+    this._resetBargeInCandidate();
+    // Pauza paytida AEC namunasi mikrofon bilan sinxronligini yo'qotgan: qisqa muddat yangi barge-in qabul qilinmasin.
+    this._noBargeInUntil = Date.now() + 1500;
+    this.emit('telemetry', 'barge_in.resumed', { reason, pausedMs });
+  }
+
+  _recordGateStats(processed, now) {
+    const stats = this._gateStats;
+    if (processed.send) stats.sent++; else stats.dropped++;
+    stats.maxResidual = Math.max(stats.maxResidual, Math.round(processed.residualRms || 0));
+    if (now - stats.since < 5000) return;
+    if (stats.sent || this.assistantSpeaking) {
+      this.emit('telemetry', 'gate.stats', {
+        sent: stats.sent, dropped: stats.dropped, maxResidualRms: stats.maxResidual,
+        thresholdRms: processed.speechThresholdRms, assistantSpeaking: this.assistantSpeaking
+      });
+    }
+    this._gateStats = { sent: 0, dropped: 0, maxResidual: 0, since: now };
+  }
+
   _feedTrailingSilence(bytes24k) {
     if (!this._serverSpeechOpen || this.assistantSpeaking || this.closed) return;
     if (this._trailingSilenceMs >= TRAILING_SILENCE_MAX_MS) return;
@@ -2312,6 +2390,7 @@ class RealtimeSession extends EventEmitter {
   }
 
   _stopPlayback() {
+    if (this._duck) { clearTimeout(this._duck.timer); this._duck = null; }
     if (this._externalPlayProc) {
       this._externalPlaybackCancelled = true;
       try { this._externalPlayProc.kill('SIGKILL'); } catch (e) {}
