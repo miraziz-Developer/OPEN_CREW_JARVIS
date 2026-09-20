@@ -33,3 +33,8 @@ test('Foundry full realtime WebSocket endpoint is normalized without duplicating
 
   assert.equal(providers[0].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5');
 });
+test('OpenAI voices are passed to Voice Live natively while Azure neural voices keep the azure-standard shape', () => {
+  const base = { AZURE_VOICELIVE_ENDPOINT: 'https://voice.services.ai.azure.com/', AZURE_VOICELIVE_KEY: 'k' };
+  assert.equal(buildVoiceProviders(from({ ...base, JARVIS_VOICE: 'alloy' }))[0].voice, 'alloy');
+  assert.deepEqual(buildVoiceProviders(from({ ...base, JARVIS_VOICE: 'en-US-AndrewNeural' }))[0].voice, { type: 'azure-standard', name: 'en-US-AndrewNeural' });
+});

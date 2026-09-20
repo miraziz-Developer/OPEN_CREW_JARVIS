@@ -42,7 +42,10 @@ function buildVoiceProviders(env) {
       id: 'voice-live',
       url: `${base}/voice-live/realtime?api-version=${encodeURIComponent(apiVersion)}&model=${encodeURIComponent(model)}`,
       headers: { 'api-key': voiceLiveKey },
-      voice: { type: 'azure-standard', name: unifiedVoice }
+      // OpenAI ovozlari (alloy, ...) Voice Live ichida native ~0.3 s; Azure neural ovozlar alohida TTS bosqichi bilan ~0.9 s.
+      voice: REALTIME_VOICES.includes(String(unifiedVoice).trim().toLowerCase())
+        ? String(unifiedVoice).trim().toLowerCase()
+        : { type: 'azure-standard', name: unifiedVoice }
     });
   }
 
