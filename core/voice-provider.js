@@ -25,6 +25,22 @@ function getRealtimeVoice(...candidates) {
   return 'shimmer';
 }
 
+// Azure neural ovoz: pitch/rate .env dagi AZURE_SPEECH_PITCH_PERCENT / AZURE_SPEECH_RATE_PERCENT dan
+// (Fn+Shift xabarlarini aytadigan azure-tts skill bilan bir xil "viqorli" ohang). 0/bo'sh — o'zgarishsiz.
+function percent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number !== 0 ? `${number > 0 ? '+' : ''}${number}%` : undefined;
+}
+
+function azureVoice(name, env) {
+  const voice = { type: 'azure-standard', name };
+  const pitch = percent(env('AZURE_SPEECH_PITCH_PERCENT'));
+  const rate = percent(env('AZURE_SPEECH_RATE_PERCENT'));
+  if (pitch) voice.pitch = pitch;
+  if (rate) voice.rate = rate;
+  return voice;
+}
+
 function buildVoiceProviders(env) {
   const providers = [];
   const voiceLiveEndpoint = env('AZURE_VOICELIVE_ENDPOINT');
@@ -45,7 +61,7 @@ function buildVoiceProviders(env) {
       // OpenAI ovozlari (alloy, ...) Voice Live ichida native ~0.3 s; Azure neural ovozlar alohida TTS bosqichi bilan ~0.9 s.
       voice: REALTIME_VOICES.includes(String(unifiedVoice).trim().toLowerCase())
         ? String(unifiedVoice).trim().toLowerCase()
-        : { type: 'azure-standard', name: unifiedVoice }
+        : azureVoice(unifiedVoice, env)
     });
   }
 

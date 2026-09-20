@@ -38,3 +38,15 @@ test('OpenAI voices are passed to Voice Live natively while Azure neural voices 
   assert.equal(buildVoiceProviders(from({ ...base, JARVIS_VOICE: 'alloy' }))[0].voice, 'alloy');
   assert.deepEqual(buildVoiceProviders(from({ ...base, JARVIS_VOICE: 'en-US-AndrewNeural' }))[0].voice, { type: 'azure-standard', name: 'en-US-AndrewNeural' });
 });
+
+test('Voice Live neural voice carries the configured pitch and rate, and stays plain when unset', () => {
+  const base = { AZURE_VOICELIVE_ENDPOINT: 'https://voice.services.ai.azure.com/', AZURE_VOICELIVE_KEY: 'k', JARVIS_VOICE: 'en-US-OnyxTurboMultilingualNeural' };
+  assert.deepEqual(
+    buildVoiceProviders(from({ ...base, AZURE_SPEECH_PITCH_PERCENT: '-12', AZURE_SPEECH_RATE_PERCENT: '-12' }))[0].voice,
+    { type: 'azure-standard', name: 'en-US-OnyxTurboMultilingualNeural', pitch: '-12%', rate: '-12%' }
+  );
+  assert.deepEqual(
+    buildVoiceProviders(from({ ...base, AZURE_SPEECH_PITCH_PERCENT: '0' }))[0].voice,
+    { type: 'azure-standard', name: 'en-US-OnyxTurboMultilingualNeural' }
+  );
+});
