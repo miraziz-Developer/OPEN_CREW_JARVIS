@@ -68,11 +68,37 @@ console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
 const bot = new TelegramBot(TOKEN, { polling: false });
 const { createOwnerUpdateHandler, createOwnerTaskCommands } = require('./core/telegram-owner');
 const { createGmailTaskNotifier } = require('./core/gmail-task-notifier');
-const ownerId = getEnv('TELEGRAM_CHAT_ID');
-if (!/^[1-9]\d*$/.test(ownerId)) console.error('Telegram locked: configure TELEGRAM_CHAT_ID with the owner private user ID.');
+let ownerId = getEnv('TELEGRAM_CHAT_ID');
+const { createPairing } = require('./core/telegram-pairing');
+const pairing = createPairing({ file: path.join(__dirname, '.run', 'telegram-pair-code.json'), envFile: path.join(__dirname, '.env') });
+const buildOwnerHandler = id => createOwnerUpdateHandler({ ownerId: id, dispatch: update => bot.processUpdate(update) });
+const isPaired = () => /^[1-9]\d*$/.test(ownerId);
+let ownerHandler = buildOwnerHandler(ownerId);
+if (!isPaired()) {
+  const state = pairing.ensureCode();
+  console.error('Telegram locked: no owner yet. Pair from your private Telegram chat with the bot: /pair ' + state.code +
+    ' (code valid ~15 min, stored in .run/telegram-pair-code.json).');
+}
 const telegramPoller = createTelegramPoller({
   token: TOKEN,
-  onUpdate: createOwnerUpdateHandler({ ownerId, dispatch: update => bot.processUpdate(update) })
+  onUpdate: update => {
+    if (!isPaired()) {
+      const result = pairing.attempt(update?.message);
+      if (result.ok) {
+        ownerId = result.ownerId;
+        ownerHandler = buildOwnerHandler(ownerId);
+        console.log('Telegram owner paired.');
+        bot.sendMessage(ownerId, 'Paired. This chat now controls JARVIS. Restarting my services once so everything picks it up.').catch(() => {});
+        // Daemon, mission runner va boshqalar TELEGRAM_CHAT_ID ni yangi o'qishi uchun bir martalik qayta ishga tushirish.
+        setTimeout(() => {
+          try { require('child_process').spawn('bash', [path.join(__dirname, 'scripts', 'restart-daemon.sh')], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
+          try { require('child_process').spawn('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/com.jarvis.mission-runner`], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
+        }, 2500);
+      }
+      return false;
+    }
+    return ownerHandler(update);
+  }
 });
 
 // ── Helpers ──────────────────────────────────────────────────

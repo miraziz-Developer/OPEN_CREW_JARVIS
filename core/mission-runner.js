@@ -15,7 +15,10 @@ const MEMORY_KINDS = new Set(['mission.completed', 'mission.blocked', 'mission.f
 
 function telegramNotifier(env) {
   return text => new Promise(resolve => {
-    const token = env('TELEGRAM_BOT_TOKEN'), chatId = env('TELEGRAM_CHAT_ID');
+    // .env ni har safar yangidan o'qiymiz: egasi ulangandan keyin qayta ishga tushirish shart emas.
+    let fresh = {};
+    try { fresh = require('./config').parseEnv(fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8')); } catch (_) {}
+    const token = (fresh.TELEGRAM_BOT_TOKEN) || env('TELEGRAM_BOT_TOKEN'), chatId = fresh.TELEGRAM_CHAT_ID || env('TELEGRAM_CHAT_ID');
     if (!token || !chatId) return resolve(false);
     const payload = JSON.stringify({ chat_id: chatId, text: String(text).slice(0, 3500) });
     const req = https.request(`https://api.telegram.org/bot${token}/sendMessage`, {
