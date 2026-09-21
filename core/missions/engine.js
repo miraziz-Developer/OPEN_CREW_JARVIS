@@ -13,7 +13,7 @@ const PLAN_SYSTEM =
   "with a real browser that is ALREADY signed in to the user's Google and LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it); gui = visual desktop UI when no API or accessibility exists; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
   "autogpt = AutoGPT, an autonomous think-act loop with web search and file output for open-ended research or writing that ends in a written deliverable; think = pure reasoning or writing, no side effects.\n" +
   "Rules: 3-6 criteria a reviewer could check from evidence; use the FEWEST tasks that make sense (one to three for a simple goal, at most 8 for a large one): " +
-  "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; each job application or outreach message must be its own task (one job or one recipient per task); prefer read-only inspection first; higher priority number runs first; never include secrets; " +
+  "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; each job application or outreach message must be its own task (one job or one recipient per task); prefer read-only inspection first; higher priority number runs first — SEQUENCE the plan: think through the whole job end to end, list tasks in the exact order they must run, give them strictly decreasing priorities (10, 9, 8, …) in that order, and in each later task's prompt name the files or results the earlier tasks produce and where (absolute paths) so no task depends on guessing; never include secrets; " +
   "never plan irreversible, external or costly actions unless the goal explicitly asks for them. For job hunting: research, shortlisting and drafting are separate tasks from actually applying or messaging recruiters, so the approval gate can ask the user first.";
 
 const REFLECT_SYSTEM =
@@ -304,7 +304,7 @@ class GoalEngine {
     let verdict;
     try {
       verdict = await this.llm.completeJson({
-        system: REFLECT_SYSTEM, model: this.model, effort: 'medium', maxOutputTokens: 4000, hard: true,
+        system: REFLECT_SYSTEM, model: this.model, effort: 'medium', maxOutputTokens: 4000,
         user: `Goal: ${mission.goal}\nSuccess criteria:\n- ${mission.criteria.join('\n- ')}\n\nAll tasks are finished or failed:\n${this._digest(mission)}\n\n` +
           'There is no task that just ran. Decide whether the goal is achieved (with evidence from the results above) or add the new tasks still needed.'
       });
