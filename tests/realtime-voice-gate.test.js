@@ -467,7 +467,7 @@ test('run_task starts the full agent with configured credentials instead of cras
   assert.equal(invocation.command, 'openclaw');
   assert.deepEqual(invocation.args, [
     'agent', '--session-key', 'agent:main:test-task',
-    '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\nOpen the requested song', '--agent', 'main'
+    '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\nOpen the requested song', '--agent', 'main', '--thinking', 'off'
   ]);
   assert.ok(Object.hasOwn(invocation.options.env, 'AZURE_OPENAI_KEY'));
   assert.equal(invocation.options.env.JARVIS_PROJECT_DIR.endsWith('OPEN_CREW_JARVIS'), true);

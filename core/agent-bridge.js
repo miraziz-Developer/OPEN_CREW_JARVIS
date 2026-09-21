@@ -42,11 +42,18 @@ function isOpenClawPolicyFailure(clean) {
   return /^(?:error:\s*)?(?:tool )?policy removed(?: this content)?\.?$/i.test(String(clean || '').trim());
 }
 
+function fastThinkingArgs(message) {
+  return !needsCheckpointedExecution(message) && (process.env.AGENT_FAST_THINKING || 'off') !== 'default' ? ['--thinking', 'off'] : [];
+}
+
 function buildOpenClawAgentArgs(message, sessionKey) {
   const args = ['agent'];
   const key = String(sessionKey || '').trim();
   if (key) args.push('--session-key', key);
   args.push('--message', ENGLISH_ONLY_INSTRUCTION + '\n\n' + String(message || ''), '--agent', 'main');
+  // Oddiy vazifalarda "thinking" ni o'chirish ~40% tezroq (19s → 11s o'lchangan);
+  // murakkab (reja/tahlil/tadqiqot) vazifalarda chuqur fikrlash saqlanadi.
+  args.push(...fastThinkingArgs(message));
   return args;
 }
 
@@ -493,7 +500,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
 }
 
 module.exports = {
-  createAgentBridge, buildOpenClawAgentArgs, checkpointSessionKey,
+  createAgentBridge, buildOpenClawAgentArgs, fastThinkingArgs, checkpointSessionKey,
   OpenClawEmptyResponseError, ENGLISH_ONLY_INSTRUCTION,
   needsCheckpointedExecution, needsPersistentExecution,
   classifyProviderError, RETRY_DELAYS_MS, RECOVERED_STEP_INSTRUCTION

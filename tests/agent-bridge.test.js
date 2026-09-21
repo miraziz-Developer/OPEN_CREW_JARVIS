@@ -16,13 +16,13 @@ const { createCheckpointStore } = require('../core/agent-task-checkpoints');
 test('agent bridge forwards an explicit session key to OpenClaw', () => {
   assert.deepEqual(buildOpenClawAgentArgs('Davom et', 'agent:main:jarvis-project-alpha'), [
     'agent', '--session-key', 'agent:main:jarvis-project-alpha',
-    '--message', ENGLISH_ONLY_INSTRUCTION + '\n\nDavom et', '--agent', 'main'
+    '--message', ENGLISH_ONLY_INSTRUCTION + '\n\nDavom et', '--agent', 'main', '--thinking', 'off'
   ]);
 });
 
 test('agent bridge preserves one-shot behavior without a session key', () => {
   assert.deepEqual(buildOpenClawAgentArgs('Salom'), [
-    'agent', '--message', ENGLISH_ONLY_INSTRUCTION + '\n\nSalom', '--agent', 'main'
+    'agent', '--message', ENGLISH_ONLY_INSTRUCTION + '\n\nSalom', '--agent', 'main', '--thinking', 'off'
   ]);
 });
 

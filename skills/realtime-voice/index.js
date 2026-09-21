@@ -33,6 +33,7 @@ const { createAgentBridge, needsPersistentExecution } = require('../../core/agen
 const { createSkillPlatform } = require('../platform');
 
 const { PROJECT_DIR } = require('../../core/paths');
+const { fastThinkingArgs } = require('../../core/agent-bridge');
 const { ambientBlock } = require('../../core/ambient-context');
 const execFileAsync = promisify(execFile);
 let ENV = '';
@@ -504,7 +505,7 @@ function loadInstructions() {
     "When a mission needs approval, say plainly what it wants to do and ask; on yes call mission_control approve, on no call reject. " +
     "A single quick job of a few minutes still uses run_task or fast_action. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
-    "Use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
+    "Never start run_task or a mission from a garbled, half-heard or vague request (e.g. 'start your other class', 'let's start the work'): ask one short question instead, because the speech recognizer mishears. Use web_open for play/search/open-site requests (seconds); use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
     "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
     "Call fast tools silently and speak only their result. For a long run_task, one brief acknowledgement is acceptable, but never claim success until the tool returns a successful result. If a tool fails or only partially completes the work, say that plainly. " +
     "Independent run_task calls may run in parallel; report each result when it finishes. Preserve confirmation requirements for destructive, external, or sensitive actions. " +
@@ -705,6 +706,22 @@ function buildTools() {
     parameters: { type: 'object', properties: {}, required: [] }
   });
 
+  tools.push({
+    type: 'function',
+    name: 'web_open',
+    description: "INSTANT web actions (1-3 seconds, no agent): play a song/video on YouTube (youtube_play), YouTube search, Google search, Maps search, or open a URL. " +
+      "ALWAYS prefer this over run_task for 'play X', 'search for X', 'open site X'. Use run_task only if the page needs clicking, logging in or forms.",
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['youtube_play', 'youtube_search', 'google', 'maps', 'url'] },
+        query: { type: 'string', description: 'search text or song/video name' },
+        url: { type: 'string', description: 'for kind=url only' }
+      },
+      required: ['kind']
+    }
+  });
+
   if (fastActionIds.length) {
     tools.push({
       type: 'function',
@@ -744,7 +761,7 @@ const RUN_TASK_TIMEOUT_MS = OPENCLAW_AGENT_TIMEOUT_MS;
 function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onProgress, bridge = VOICE_AGENT_BRIDGE) {
   if (bridge !== VOICE_AGENT_BRIDGE || spawnAgent !== spawn) {
     return new Promise((resolve) => {
-      const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n' + description, '--agent', 'main'], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR }, timeout: RUN_TASK_TIMEOUT_MS });
+      const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n' + description, '--agent', 'main', ...fastThinkingArgs(description)], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR }, timeout: RUN_TASK_TIMEOUT_MS });
       if (typeof onProc === 'function') onProc(proc);
       let out = ''; proc.stdout.on('data', d => out += d);
       proc.on('close', () => resolve(out.trim() || 'Kechirasiz, bajara olmadim.'));
@@ -756,7 +773,7 @@ function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onPro
   /* c8 ignore start */
   return new Promise((resolve) => {
     const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
-    const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', englishOnly + description, '--agent', 'main'], {
+    const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', englishOnly + description, '--agent', 'main', ...fastThinkingArgs(description)], {
       cwd: PROJECT_DIR,
       env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR },
       timeout: RUN_TASK_TIMEOUT_MS
@@ -1099,6 +1116,7 @@ class RealtimeSession extends EventEmitter {
     // English speech stays on one Realtime voice to minimize response latency.
     this._speakText = typeof options.speakText === 'function'
       ? options.speakText : null;
+    this._webOpener = typeof options.webOpener === 'function' ? options.webOpener : args => require('../../core/web-actions').openWeb(args);
     this._fastActionRunner = typeof options.fastActionRunner === 'function'
       ? options.fastActionRunner : require('../fast-actions').runFastAction;
     this._communicationRunner = typeof options.communicationRunner === 'function'
@@ -2108,6 +2126,7 @@ class RealtimeSession extends EventEmitter {
   async _handleFunctionCall(msg) {
     if (msg.name === 'note_pronunciation') { this._handleNotePronunciation(msg); return; }
     if (msg.name === 'fast_action') { this._handleFastAction(msg); return; }
+    if (msg.name === 'web_open') { this._handleWebOpen(msg); return; }
     if (msg.name === 'see_screen') { this._handleSeeScreen(msg); return; }
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
@@ -2269,6 +2288,23 @@ class RealtimeSession extends EventEmitter {
   // jarvis_daemon.js'dagi mavjud rtTaskStarted/rtTaskCompleted kuzatuvi
   // (dashboard "JONLI VAZIFALAR" paneli) buni ham avtomatik ko'rsatadi,
   // qo'shimcha ulash shart emas.
+  async _handleWebOpen(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    this.emit('tool_call', 'web_open: ' + (args.kind || '') + ' ' + String(args.query || args.url || '').slice(0, 60), msg.call_id);
+    let output;
+    try {
+      const target = await this._webOpener(args);
+      if (target.media) this._setMediaLikelyPlaying();
+      output = target.said;
+    } catch (e) { output = 'Error: ' + e.message + '. Fall back to run_task if still needed.'; }
+    this.emit('tool_result', output, msg.call_id);
+    try {
+      this.ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: msg.call_id, output: output.slice(0, 500) } }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
   async _handleFastAction(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}

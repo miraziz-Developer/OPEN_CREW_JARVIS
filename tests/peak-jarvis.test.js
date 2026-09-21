@@ -45,3 +45,18 @@ test('watchdog heals with cooldown then notifies once', async () => {
   t = 200; await wd.runOnce(); t = 400; await wd.runOnce(); await wd.runOnce();
   assert.equal(heals, 2); assert.equal(notes.length, 1);
 });
+
+test('web actions resolve YouTube play via yt-dlp and fall back to search', async () => {
+  const { resolveWebTarget } = require('../core/web-actions');
+  const ok = await resolveWebTarget({ kind: 'youtube_play', query: 'Billie Jean' }, { exec: async () => 'Zi_XLOBDo_Y\n' });
+  assert.match(ok.url, /watch\?v=Zi_XLOBDo_Y/);
+  const fb = await resolveWebTarget({ kind: 'youtube_play', query: 'Billie Jean' }, { exec: async () => { throw new Error('x'); } });
+  assert.match(fb.url, /results\?search_query=Billie%20Jean/);
+  await assert.rejects(resolveWebTarget({ kind: 'url', url: 'javascript:alert(1)' }));
+});
+
+test('simple agent tasks run with thinking off, complex ones keep it', () => {
+  const { buildOpenClawAgentArgs } = require('../core/agent-bridge');
+  assert.ok(buildOpenClawAgentArgs('open my downloads folder', 'k').includes('off'));
+  assert.ok(!buildOpenClawAgentArgs('research and analysis of the best CRM strategy', 'k').includes('--thinking'));
+});
