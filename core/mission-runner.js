@@ -31,10 +31,10 @@ function telegramNotifier(env) {
     // .env ni har safar yangidan o'qiymiz: egalar o'zgarganda qayta ishga tushirish shart emas.
     let fresh = {};
     try { fresh = require('./config').parseEnv(fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8')); } catch (_) {}
-    const token = (fresh.TELEGRAM_BOT_TOKEN) || env('TELEGRAM_BOT_TOKEN');
+    const botKey = (fresh.TELEGRAM_BOT_TOKEN) || env('TELEGRAM_BOT_TOKEN');
     const owners = parseOwnerIds(fresh.TELEGRAM_CHAT_ID || env('TELEGRAM_CHAT_ID'), fresh.TELEGRAM_OWNER_IDS || env('TELEGRAM_OWNER_IDS'));
-    if (!token || !owners.length) return false;
-    const results = await Promise.all(owners.map(owner => post(token, owner, text)));
+    if (!botKey || !owners.length) return false;
+    const results = await Promise.all(owners.map(owner => post(botKey, owner, text)));
     return results.some(Boolean);
   };
 }
