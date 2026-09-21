@@ -1,0 +1,7 @@
+brew "node"
+brew "python@3.12"
+brew "python@3.11"
+brew "sox"
+brew "uv"
+brew "yt-dlp"
+brew "whisper-cpp"

@@ -393,7 +393,8 @@ async function refreshHud(){
     const d = await jget("/api/hud"), el = $("hud"), a = d.ambient && d.ambient.current;
     const u = d.usage || {}, esc = t => String(t==null?"":t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
     const cost = Number(u.cost_usd||u.cost||0).toFixed(2);
-    el.innerHTML = "<div>Ekran: "+(a?esc(a.app)+(a.title?" — "+esc(a.title):""):"—")+"</div>"+
+    const c = d.conversation, st = c ? esc(c.mode || "—") : "uxlayapti";
+    el.innerHTML = "<div>Holat: <b>"+st+"</b></div><div>Ekran: "+(a?esc(a.app)+(a.title?" — "+esc(a.title):""):"—")+"</div>"+
       "<div>Bugungi xarajat: $"+cost+"</div>"+
       "<div>Ovoz: "+Math.round(u.voice_seconds||0)+" s</div>";
   }catch(e){}

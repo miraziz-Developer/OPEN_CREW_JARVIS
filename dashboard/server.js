@@ -135,6 +135,7 @@ function getHud() {
   return {
     at: Date.now(),
     ambient: readJsonSafe(path.join(PROJECT_DIR, '.run', 'ambient-context.json'), null),
+    conversation: (readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}).conversation) || null,
     usage: sharedMeter().totals(),
     telemetry
   };

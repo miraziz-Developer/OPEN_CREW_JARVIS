@@ -60,3 +60,8 @@ test('simple agent tasks run with thinking off, complex ones keep it', () => {
   assert.ok(buildOpenClawAgentArgs('open my downloads folder', 'k').includes('off'));
   assert.ok(!buildOpenClawAgentArgs('research and analysis of the best CRM strategy', 'k').includes('--thinking'));
 });
+
+test('voice model is offered web_open, file_op and undo_last', () => {
+  const names = require('../skills/realtime-voice').buildTools().map(t => t.name);
+  for (const n of ['web_open', 'file_op', 'undo_last']) assert.ok(names.includes(n), n);
+});

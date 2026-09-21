@@ -1,9 +1,31 @@
+# 🤖 JARVIS — Mac uchun shaxsiy AI-yordamchi (ovoz + avtonom missiyalar)
 
-## 🚀 Quick Install (1-click)
+> Azure Voice Live (tez, chuqur Onyx ovozi, gap bo'lish) + doim eshitish ("Jarvis") + soatlab/kunlab mustaqil ishlaydigan missiya dvigateli (BabyAGI, AutoGPT, Open Interpreter, Browser-use) + Telegram + Obsidian xotira.
 
-\`\`\`bash
+## 🚀 O'rnatish (bitta buyruq, macOS)
+
+```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_JARVIS/main/install.sh)
-\`\`\`
+```
+
+Skript o'zi: Homebrew paketlari → Node/Python muhitlari → `.env` (faqat kalitlarni so'raydi) → wake-word → ishchilar → native AEC → launchd xizmatlari → `doctor` tekshiruvi. Qayta ishga tushirish xavfsiz.
+Kerak bo'ladigan narsalar: Azure (Voice Live, OpenAI, Speech) kalitlari; ixtiyoriy — Telegram bot tokeni. Macdagi ruxsatlarni (Mikrofon, Accessibility, Automation, Screen Recording) bir marta o'zingiz berasiz.
+
+Keyin: "Jarvis" deng. Holat: `npm run doctor` · Loglar: `logs/daemon-YYYYMMDD.log` · Panel: http://localhost:7890
+
+## 🧭 Nima qila oladi
+| Soha | Tafsilot |
+|---|---|
+| Ovoz | ~0.5–0.9 s birinchi audio, gap bo'lish (barge-in), "stop/boldi", doim eshitish, shaxsiy wake modeli |
+| Tez amallar | `web_open` (YouTube/Google/Maps ~2 s), `fast_action`, `file_op` + **undo** (fayl/ovoz) |
+| Missiyalar | Uzoq maqsadlar: reja → bajarish → tekshirish → takror; doimiy ruxsatlar, qat'iy xavfsizlik chegaralari |
+| Telegram | Qisqa, tushunarli xabarlar; ikki egasi; tasdiqlash |
+| Xotira | Obsidian + semantik qidiruv, ekran/ilova konteksti, ertalabki brifing |
+| Ishonchlilik | Watchdog o'zini tiklaydi, xarajat nazorati (faqat xabar beradi), kunlik zaxira |
+
+Chuqurroq: [docs/autonomy.md](docs/autonomy.md). `.env.example` — barcha sozlamalar (sirlar bo'sh). Google (Gmail/Calendar): `node scripts/google-oauth-setup.js --client-file …`.
+
+---
 
 # 🤖 JARVIS — O'zbek tilidagi Jarvis-darajali AI-yordamchi
 
@@ -47,8 +69,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_
 ### Bitta buyruq bilan to'liq o'rnatish
 
 ```bash
-cd ~/projects/OPEN_CREW_JARVIS
-./setup.sh
+bash install.sh   # (setup.sh — eski, faqat LaunchAgent va health)
 ```
 
 Bu skript avtomatik ravishda `.env` yaratadi, kalitlar to'g'rligini tekshiradi, OpenClaw config validatsiyasini o'tkazadi, macOS LaunchAgent o'rnatadi, gateway health-check qiladi va "Jarvis tayyor" ovozli tasdiq beradi.

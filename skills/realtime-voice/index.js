@@ -34,6 +34,7 @@ const { createSkillPlatform } = require('../platform');
 
 const { PROJECT_DIR } = require('../../core/paths');
 const { fastThinkingArgs } = require('../../core/agent-bridge');
+const { sharedUndo, fileOps, captureSetting } = require('../../core/undo');
 const { ambientBlock } = require('../../core/ambient-context');
 const execFileAsync = promisify(execFile);
 let ENV = '';
@@ -458,6 +459,29 @@ function loadLegacyInstructions() {
 }
 
 // Sessiya boshida ochiq missiyalar haqida qisqa xabardorlik ("ko'prik" ikki tomonni ham ko'rib turadi).
+// Jonli o'z-o'zini bilish: haqiqiy mavjud asboblar/ishchilardan yig'iladi (eskirmaydi).
+function selfKnowledgeBlock() {
+  try {
+    const tools = buildTools().map(t => t.name);
+    const has = n => tools.includes(n);
+    const exists = rel => fs.existsSync(path.join(PROJECT_DIR, rel));
+    const can = [];
+    if (has('web_open')) can.push('open/play/search web pages instantly');
+    if (has('file_op')) can.push('move/copy/write/trash files (undoable)');
+    if (has('undo_last')) can.push('undo your last file or volume change');
+    if (has('start_mission')) can.push('run long autonomous missions in the background (hours/days)');
+    if (has('see_screen')) can.push('look at the screen on request');
+    if (has('recall_memory')) can.push('search long-term memory');
+    const workers = ['babyagi:.venv-babyagi', 'autogpt:.venv-autogpt', 'browser:.venv-workers', 'interpreter:.venv-workers'].filter(w => exists(w.split(':')[1])).map(w => w.split(':')[0]);
+    const cannot = [];
+    if (!exists(path.join('.run', 'google-oauth.json')) && !fs.existsSync(path.join(process.env.HOME || '', '.jarvis', 'google-oauth.json'))) cannot.push('read Gmail or Calendar (Google is not connected yet)');
+    cannot.push('act on other devices; see the screen continuously (only on request or ambient app name)');
+    return '\n\nYOUR REAL ABILITIES RIGHT NOW (generated from the live system; do not claim more): ' + can.join('; ') + '.' +
+      (workers.length ? ' Mission workers installed: ' + workers.join(', ') + '.' : '') +
+      ' You currently CANNOT: ' + cannot.join('; ') + '. If asked for something outside this, say so plainly.\n';
+  } catch (e) { return ''; }
+}
+
 function missionsBlock() {
   try {
     const dir = path.join(PROJECT_DIR, '.run', 'missions', 'missions');
@@ -505,7 +529,7 @@ function loadInstructions() {
     "When a mission needs approval, say plainly what it wants to do and ask; on yes call mission_control approve, on no call reject. " +
     "A single quick job of a few minutes still uses run_task or fast_action. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
-    "Never start run_task or a mission from a garbled, half-heard or vague request (e.g. 'start your other class', 'let's start the work'): ask one short question instead, because the speech recognizer mishears. Use web_open for play/search/open-site requests (seconds); use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
+    "Never start run_task or a mission from a garbled, half-heard or vague request (e.g. 'start your other class', 'let's start the work'): ask one short question instead, because the speech recognizer mishears. Use web_open for play/search/open-site requests (seconds); use file_op for simple file move/rename/create/save/delete (undoable; say 'undo' handling via undo_last); use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
     "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
     "Call fast tools silently and speak only their result. For a long run_task, one brief acknowledgement is acceptable, but never claim success until the tool returns a successful result. If a tool fails or only partially completes the work, say that plainly. " +
     "Independent run_task calls may run in parallel; report each result when it finishes. Preserve confirmation requirements for destructive, external, or sensitive actions. " +
@@ -513,7 +537,7 @@ function loadInstructions() {
     "Resolve references such as 'that task' from recent context; if ambiguity could cause a wrong action, ask one concise clarification. " +
     "During the same live session, treat each new utterance as a natural follow-up without requiring the user to say Jarvis again; preserve context and resolve short follow-ups such as 'yana-chi?' or 'what about tomorrow?'. " +
     "Never invent a remembered fact. Adapt subtly to urgency or mood audible in the user's voice without explicitly commenting on emotion." +
-    missionsBlock() + ambientBlock(path.join(PROJECT_DIR, '.run', 'ambient-context.json')) + recentContextBlock() + profileSummaryBlock()
+    selfKnowledgeBlock() + missionsBlock() + ambientBlock(path.join(PROJECT_DIR, '.run', 'ambient-context.json')) + recentContextBlock() + profileSummaryBlock()
   );
 }
 
@@ -720,6 +744,27 @@ function buildTools() {
       },
       required: ['kind']
     }
+  });
+
+  tools.push({
+    type: 'function',
+    name: 'file_op',
+    description: "Instant, UNDOABLE file operations inside the user's home folder: mkdir, move (also rename), copy, write (text), trash (delete = move to Trash). " +
+      "Use for simple 'move/rename/create/save/delete this file' requests instead of run_task. Anything outside ~ or in Library/.ssh is refused.",
+    parameters: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['mkdir', 'move', 'copy', 'write', 'trash'] },
+        path: { type: 'string' }, dest: { type: 'string', description: 'for move/copy' }, content: { type: 'string', description: 'for write' }
+      },
+      required: ['op', 'path']
+    }
+  });
+  tools.push({
+    type: 'function',
+    name: 'undo_last',
+    description: "Take back the assistant's own last file operation or volume change. Call when the user says undo, take that back, revert, or 'no, put it back'.",
+    parameters: { type: 'object', properties: {}, required: [] }
   });
 
   if (fastActionIds.length) {
@@ -1116,6 +1161,7 @@ class RealtimeSession extends EventEmitter {
     // English speech stays on one Realtime voice to minimize response latency.
     this._speakText = typeof options.speakText === 'function'
       ? options.speakText : null;
+    this._undoStack = options.undoStack || sharedUndo;
     this._webOpener = typeof options.webOpener === 'function' ? options.webOpener : args => require('../../core/web-actions').openWeb(args);
     this._fastActionRunner = typeof options.fastActionRunner === 'function'
       ? options.fastActionRunner : require('../fast-actions').runFastAction;
@@ -1944,6 +1990,7 @@ class RealtimeSession extends EventEmitter {
     const callId = 'direct-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
     this.emit('tool_call', 'fast_action: ' + id, callId);
     if (/^media:/.test(id)) this._setMediaLikelyPlaying();
+    await captureSetting(id, { stack: this._undoStack });
     let result;
     try { result = await this._fastActionRunner(id); }
     catch (e) { result = { status: 'error', message: e.message }; }
@@ -2127,6 +2174,7 @@ class RealtimeSession extends EventEmitter {
     if (msg.name === 'note_pronunciation') { this._handleNotePronunciation(msg); return; }
     if (msg.name === 'fast_action') { this._handleFastAction(msg); return; }
     if (msg.name === 'web_open') { this._handleWebOpen(msg); return; }
+    if (msg.name === 'file_op' || msg.name === 'undo_last') { this._handleFileTool(msg); return; }
     if (msg.name === 'see_screen') { this._handleSeeScreen(msg); return; }
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
@@ -2288,6 +2336,27 @@ class RealtimeSession extends EventEmitter {
   // jarvis_daemon.js'dagi mavjud rtTaskStarted/rtTaskCompleted kuzatuvi
   // (dashboard "JONLI VAZIFALAR" paneli) buni ham avtomatik ko'rsatadi,
   // qo'shimcha ulash shart emas.
+  async _handleFileTool(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    this.emit('tool_call', msg.name + ': ' + (args.op || '') + ' ' + String(args.path || '').slice(0, 60), msg.call_id);
+    let output;
+    try {
+      if (msg.name === 'undo_last') output = (await this._undoStack.undoLast()).message;
+      else {
+        const ops = fileOps({ stack: this._undoStack });
+        const fn = { mkdir: () => ops.mkdir(args.path), move: () => ops.move(args.path, args.dest), copy: () => ops.copy(args.path, args.dest), write: () => ops.write(args.path, args.content), trash: () => ops.trash(args.path) }[args.op];
+        if (!fn) throw new Error('unknown op');
+        output = fn();
+      }
+    } catch (e) { output = 'Error: ' + e.message; }
+    this.emit('tool_result', output, msg.call_id);
+    try {
+      this.ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: msg.call_id, output: output.slice(0, 500) } }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
   async _handleWebOpen(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -2320,6 +2389,7 @@ class RealtimeSession extends EventEmitter {
     // Musiqa/video ijro qiluvchi action'lar ham mikrofonga "sizib kirish"
     // xavfini tug'diradi — run_task'dagi bilan bir xil himoya.
     if (/^media:/.test(id)) this._setMediaLikelyPlaying();
+    await captureSetting(id, { stack: this._undoStack });
     let result;
     // Ilgari bu yer to'g'ridan-to'g'ri modulni chaqirardi, deterministik
     // router (_runDirectFastAction) ishlatadigan inject qilinadigan

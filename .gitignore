@@ -84,3 +84,9 @@ reports/
 .venv-autogpt/
 encryption_key.json
 funztionz.db
+
+# ─── Shaxsiy / holat fayllari ───
+/job-search/
+.*-state.json
+.run/
+.venv-*/
