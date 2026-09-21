@@ -234,3 +234,47 @@ test('job applications and recruiter outreach always need approval, while resear
   assert.equal(needs('Send an InMail to the recruiter'), true);
   assert.equal(needs('Message the HR of each company about the role'), true);
 });
+
+test('runner keeps the Mac awake only while missions are active, and pauses new steps over the daily token budget', async () => {
+  const { UsageMeter } = require('../core/usage-meter');
+  const spawned = [];
+  const fakeSpawn = (command, args) => {
+    const proc = { killed: false, on() {}, unref() {}, kill() { this.killed = true; } };
+    spawned.push({ command, args, proc });
+    return proc;
+  };
+  const { engine, store, dir } = setup(request => /planning core/.test(request.system)
+    ? { criteria: ['c'], tasks: [{ title: 't', worker: 'think', prompt: 'p', priority: 5 }] }
+    : { task_status: 'done', evidence: 'ok', goal_achieved: true, goal_evidence: 'concrete proof', summary: 'finished' });
+  const usage = new UsageMeter({ dir: path.join(dir, 'usage') });
+  const notices = [];
+  const runner = createRunner({ store, engine, usage, tokenBudget: 1000, voiceMinutesAlert: 1, spawn: fakeSpawn, notify: async text => { notices.push(text); return true; } });
+
+  usage.add('llm_tokens', 1500);
+  usage.add('voice_seconds', 90);
+  const mission = store.create('blocked by budget');
+  await runner.tick();
+  assert.equal(store.get(mission.id).status, 'planning', 'no step starts while over budget');
+  assert.ok(notices.some(text => /Voice listening used 2 minutes/.test(text)) || notices.some(text => /Voice listening used 1 minutes/.test(text)) || notices.length >= 1);
+  assert.ok(store.readEventsSince(0).events.some(e => /token budget reached/.test(e.text)));
+  assert.equal(spawned.filter(item => item.command === 'caffeinate').length, 1);
+  assert.deepEqual(spawned[0].args.slice(0, 2), ['-i', '-w']);
+
+  const before = spawned.length;
+  await runner.tick();
+  assert.equal(spawned.length, before, 'caffeinate is not respawned every tick');
+  store.enqueue(mission.id, 'cancel');
+  await runner.tick();
+  await runner.tick();
+  assert.equal(runner.isAwake(), false);
+  assert.equal(spawned[0].proc.killed, true);
+});
+
+test('usage meter sums per kind and raises once-per-day flags only once', () => {
+  const { UsageMeter } = require('../core/usage-meter');
+  const meter = new UsageMeter({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'usage-')) });
+  meter.add('llm_tokens', 100); meter.add('llm_tokens', 250); meter.add('voice_seconds', 30); meter.add('bad', -5); meter.add('bad', 'x');
+  assert.deepEqual(meter.totals(), { llm_tokens: 350, voice_seconds: 30 });
+  assert.equal(meter.once('alert'), true);
+  assert.equal(meter.once('alert'), false);
+});

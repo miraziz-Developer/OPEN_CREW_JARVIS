@@ -13,7 +13,7 @@ const PLAN_SYSTEM =
   "with a real browser that is ALREADY signed in to the user's Google and LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it); gui = visual desktop UI when no API or accessibility exists; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
   "autogpt = AutoGPT, an autonomous think-act loop with web search and file output for open-ended research or writing that ends in a written deliverable; think = pure reasoning or writing, no side effects.\n" +
   "Rules: 3-6 criteria a reviewer could check from evidence; use the FEWEST tasks that make sense (one to three for a simple goal, at most 8 for a large one): " +
-  "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; prefer read-only inspection first; higher priority number runs first; never include secrets; " +
+  "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; each job application or outreach message must be its own task (one job or one recipient per task); prefer read-only inspection first; higher priority number runs first; never include secrets; " +
   "never plan irreversible, external or costly actions unless the goal explicitly asks for them. For job hunting: research, shortlisting and drafting are separate tasks from actually applying or messaging recruiters, so the approval gate can ask the user first.";
 
 const REFLECT_SYSTEM =
@@ -80,6 +80,7 @@ class GoalEngine {
     // Missiyani boshlash oddiy lokal amallarni (fayl, o'rnatish, hisobot) ruxsat etadi; tashqi xabar, o'chirish, to'lov, parol —
     // doim tasdiq bilan. 'strict' rejimida hammasi tasdiqli.
     this.routineAutonomy = options.routineAutonomy !== false;
+    this.standing = options.standing || null;   // StandingApprovals (doimiy ruxsatlar)
   }
 
   _log(mission, kind, text) {
@@ -169,8 +170,14 @@ class GoalEngine {
   _needsApproval(task) {
     if (task.approved) return null;
     const text = sanitizeForRisk(`${task.title}. ${task.prompt}`);
-    if (OUTREACH_RISK.test(text)) return 'external-communication (job application or outreach)';
     const assessment = this.assess({ kind: 'task', description: text });
+    const outreach = OUTREACH_RISK.test(text);
+    if (outreach || assessment.requiresConfirmation) {
+      // Doimiy ruxsat (kunlik limit ichida) mos kelsa so'ramaymiz; xavfli toifalar hech qachon qoplanmaydi.
+      const rule = this.standing?.consume(text, outreach && !assessment.externalSideEffect ? { ...assessment, category: 'external-communication' } : assessment);
+      if (rule) { task.approved = true; task.approvedBy = `standing:${rule.id}`; return null; }
+    }
+    if (outreach) return 'external-communication (job application or outreach)';
     if (!assessment.requiresConfirmation) return null;
     if (assessment.autonomousEligible && (this.routineAutonomy || this.fullAutonomy())) return null;
     return assessment.category || 'risky action';

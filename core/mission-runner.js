@@ -46,6 +46,11 @@ function createRunner(options = {}) {
   const concurrency = options.concurrency || 2;
   const notify = options.notify || (async () => false);
   const remember = options.remember || (() => {});
+  const usage = options.usage || null;
+  const tokenBudget = options.tokenBudget || 0;            // kunlik LLM token chegarasi (0 — cheksiz)
+  const voiceMinutesAlert = options.voiceMinutesAlert || 0; // kunlik ovoz daqiqalari ogohlantirishi
+  const spawnFn = options.spawn || require('child_process').spawn;
+  let awake = null;
   const live = new Map();            // missionId -> in-memory mission (buyruqlar shu obyektga qo'llanadi)
   const log = options.log || (() => {});
   let eventOffset = store.eventsOffset();
@@ -79,13 +84,46 @@ function createRunner(options = {}) {
     }
   }
 
+  // Missiya ishlayotganda Mac uyquga ketmasin (soatlab/kunlab ishlaydigan vazifalar uchun). Runner tugasa `caffeinate` ham tugaydi.
+  function ensureAwake(need) {
+    if (need && !awake) {
+      try {
+        awake = spawnFn('caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' });
+        awake.on?.('exit', () => { awake = null; });
+        awake.on?.('error', () => { awake = null; });
+        awake.unref?.();
+      } catch (_) { awake = null; }
+    } else if (!need && awake) {
+      try { awake.kill('SIGTERM'); } catch (_) {}
+      awake = null;
+    }
+  }
+
+  async function checkUsage() {
+    if (!usage) return { overBudget: false };
+    const totals = usage.totals();
+    if (voiceMinutesAlert && (totals.voice_seconds || 0) / 60 >= voiceMinutesAlert && usage.once('voice-alert')) {
+      try { await notify(`Voice listening used ${Math.round((totals.voice_seconds || 0) / 60)} minutes of cloud audio today (alert at ${voiceMinutesAlert}).`); } catch (_) {}
+    }
+    const overBudget = Boolean(tokenBudget && (totals.llm_tokens || 0) >= tokenBudget);
+    if (overBudget && usage.once('token-budget')) {
+      const text = `Daily mission token budget reached (${Math.round((totals.llm_tokens || 0) / 1000)}k of ${Math.round(tokenBudget / 1000)}k). Missions are paused until tomorrow; raise MISSION_DAILY_TOKEN_BUDGET to continue now.`;
+      store.appendEvent({ kind: 'mission.blocked', missionId: null, n: 0, text });
+    }
+    return { overBudget };
+  }
+
   function heartbeat() {
     try { fs.writeFileSync(path.join(store.dir, 'runner.json'), JSON.stringify({ pid: process.pid, at: Date.now(), running: [...live.keys()] })); } catch (_) {}
   }
 
   async function tick() {
     applyInbox();
-    for (const mission of store.list({ active: true })) {
+    const { overBudget } = await checkUsage();
+    const active = store.list({ active: true });
+    ensureAwake(active.length > 0 || live.size > 0);
+    for (const mission of active) {
+      if (overBudget) break;
       if (live.has(mission.id) || live.size >= concurrency) continue;
       live.set(mission.id, mission);
       engine.step(mission)
@@ -108,16 +146,21 @@ function createRunner(options = {}) {
     }
   }
 
-  return { tick, run, recover, stop() { stopped = true; }, live };
+  return { tick, run, recover, stop() { stopped = true; ensureAwake(false); }, live, isAwake: () => Boolean(awake) };
 }
 
 function main() {
   const dir = path.join(PROJECT_DIR, '.run', 'missions');
   const store = new MissionStore({ dir });
-  const engine = new GoalEngine({ store, llm, workers: createWorkers(), routineAutonomy: llm.env('MISSION_AUTONOMY', 'routine') !== 'strict' });
+  const { StandingApprovals } = require('./missions/standing');
+  const engine = new GoalEngine({ store, llm, workers: createWorkers(), routineAutonomy: llm.env('MISSION_AUTONOMY', 'routine') !== 'strict',
+    standing: new StandingApprovals({ file: path.join(dir, 'standing-approvals.json') }) });
   const runner = createRunner({
     store, engine, concurrency: Math.max(1, parseInt(llm.env('MISSION_CONCURRENCY'), 10) || 2),
     notify: telegramNotifier(llm.env),
+    usage: require('./usage-meter').sharedMeter(),
+    tokenBudget: parseInt(llm.env('MISSION_DAILY_TOKEN_BUDGET'), 10) || 3000000,
+    voiceMinutesAlert: parseInt(llm.env('DAILY_VOICE_MINUTES_ALERT'), 10) || 240,
     remember: event => require('../skills/memory').writeMemory(`Mission ${event.n}`, event.text, ['mission', event.kind.replace('mission.', '')]),
     log: message => console.log(`[${new Date().toISOString()}] ${message}`)
   });

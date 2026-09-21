@@ -1,6 +1,8 @@
 'use strict';
 
+const path = require('path');
 const { OPEN } = require('./store');
+const { StandingApprovals, SCOPES } = require('./standing');
 
 const ACTIONS = new Set(['pause', 'resume', 'cancel', 'approve', 'reject', 'note']);
 
@@ -8,8 +10,12 @@ const ACTIONS = new Set(['pause', 'resume', 'cancel', 'approve', 'reject', 'note
  * Ovozli sessiya uchun missiya API'si: har chaqiruv millisekundlarda qaytadi (fayl yozish), shuning uchun
  * ovozli suhbat hech qachon uzoq missiyani kutib qolmaydi.
  */
-function createMissionApi(store) {
+function createMissionApi(store, options = {}) {
+  const standing = options.standing || new StandingApprovals({ file: path.join(store.dir, 'standing-approvals.json') });
   return {
+    standing,
+    standingScopes: Object.keys(SCOPES),
+
     start(goal, options = {}) {
       const hours = Number(options.hours);
       const mission = store.create(goal, { source: 'voice', maxHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 14) : 72 });
@@ -27,6 +33,22 @@ function createMissionApi(store) {
         return last ? `No active missions. Last one: ${store.describe(last)}` : 'No missions yet.';
       }
       return open.slice(-4).map(mission => store.describe(mission)).join(' | ');
+    },
+
+    grantStanding(options = {}) {
+      const rule = standing.grant(options);
+      return `Standing permission ${rule.id} granted: ${rule.scopes.join(', ')}, up to ${rule.perDay} per day for ${Math.round((rule.expiresAt - Date.now()) / 86400000)} days. Payments, deletions, passwords and permission changes are never covered.`;
+    },
+
+    listStanding() {
+      const rules = standing.list();
+      if (!rules.length) return 'No standing permissions are active.';
+      return rules.map(rule => `${rule.id}: ${rule.scopes.join(', ')}, ${rule.perDay}/day, ${rule.usage.count} used today, expires in ${Math.max(0, Math.round((rule.expiresAt - Date.now()) / 86400000))} days`).join(' | ');
+    },
+
+    revokeStanding(id) {
+      const count = standing.revoke(String(id || 'all'));
+      return count ? `Revoked ${count} standing permission${count > 1 ? 's' : ''}.` : 'No matching standing permission.';
     },
 
     control(idOrNumber, action, payload = {}) {

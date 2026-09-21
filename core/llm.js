@@ -59,6 +59,7 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort }) {
         try {
           const parsed = JSON.parse(data);
           if (parsed.error) return reject(new Error(parsed.error.message || 'LLM xatosi'));
+          try { require('./usage-meter').sharedMeter().add('llm_tokens', parsed.usage?.total_tokens); } catch (_) {}
           const text = extractOutputText(parsed);
           if (!text) return reject(new Error('bo\'sh LLM javobi'));
           resolve(text);

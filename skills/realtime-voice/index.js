@@ -676,6 +676,26 @@ function buildTools() {
 
   tools.push({
     type: 'function',
+    name: 'standing_approval',
+    description: "Manage standing permissions so the user is not asked every time for a repeated outward action, within a daily limit and expiry. " +
+      "grant: only when the user explicitly says you may keep doing something without asking (for example 'you can apply to matching jobs up to 10 a day for a week'); " +
+      "the system then asks the user to say confirm. Scopes: job-applications, recruiter-messages, external-messages. " +
+      "Payments, deletions, passwords and permission changes can never be covered. list: show active ones. revoke: cancel one by id or all.",
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['grant', 'list', 'revoke'] },
+        scopes: { type: 'array', items: { type: 'string', enum: ['job-applications', 'recruiter-messages', 'external-messages'] } },
+        per_day: { type: 'number', description: 'Maximum approved tasks per day (default 10)' },
+        days: { type: 'number', description: 'How many days it stays valid (default 7)' },
+        id: { type: 'string', description: 'For revoke: the permission id or all' }
+      },
+      required: ['action']
+    }
+  });
+
+  tools.push({
+    type: 'function',
     name: 'cancel_task',
     description: "ONLY for quick run_task jobs running right now (\"stop that task\"). If the user means a background mission or long goal, call mission_control instead. " +
       "Foydalanuvchi bajarilayotgan vazifani TO'XTATISHNI so'rasa (\"to'xtat\", \"bekor qil\", \"kerak emas\", " +
@@ -1732,6 +1752,7 @@ class RealtimeSession extends EventEmitter {
       if (!this._missions) output = 'Missions are not available in this session.';
       else if (msg.name === 'start_mission') output = this._missions.start(String(args.goal || ''), { hours: args.hours });
       else if (msg.name === 'mission_status') output = this._missions.status(args.mission);
+      else if (msg.name === 'standing_approval') output = this._standingApproval(args);
       else output = this._missions.control(args.mission, String(args.action || ''), { text: args.text });
     } catch (error) { output = 'Mission error: ' + String(error.message || error).slice(0, 200); }
     this.emit('telemetry', 'mission.tool', { name: msg.name });
@@ -1739,6 +1760,22 @@ class RealtimeSession extends EventEmitter {
       this.ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: msg.call_id, output: String(output).slice(0, 1500) } }));
       this._sendResponseCreate();
     } catch (e) {}
+  }
+
+  // Doimiy ruxsat: ro'yxat/bekor qilish darhol; BERISH esa faqat foydalanuvchi ovozda "confirm" deganidan keyin (kod majburlaydi).
+  _standingApproval(args) {
+    if (args.action === 'list') return this._missions.listStanding();
+    if (args.action === 'revoke') return this._missions.revokeStanding(args.id);
+    const scopes = (Array.isArray(args.scopes) ? args.scopes : []).filter(scope => this._missions.standingScopes.includes(scope));
+    if (!scopes.length) return 'Say which kind of permission: job applications, recruiter messages or external messages.';
+    const perDay = Number(args.per_day) || 10;
+    const days = Number(args.days) || 7;
+    const summary = `Grant standing permission: ${scopes.join(', ')} up to ${perDay} per day for ${days} days without asking each time`;
+    const authorization = this._actionSafety.authorize({ kind: 'task', description: `${summary} (permission change)` });
+    this._pendingConfirmedAction = () => this._deliverSpokenAnswer(this._missions.grantStanding({ scopes, perDay, days }));
+    if (!authorization.allowed) this._deliverSpokenAnswer(confirmationPrompt(summary, authorization.assessment));
+    else this._pendingConfirmedAction();
+    return 'Waiting for the user to say confirm; nothing is granted until then.';
   }
 
   // Fon missiyasi natijasini (tugadi/to'siq/tasdiq kerak) gapirish navbatiga qo'yadi; JARVIS gapirmayotgan paytda aytiladi.
@@ -2074,7 +2111,7 @@ class RealtimeSession extends EventEmitter {
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
     if (msg.name === 'ask_expert') { this._handleAskExpert(msg); return; }
-    if (['start_mission', 'mission_status', 'mission_control'].includes(msg.name)) { this._handleMissionTool(msg); return; }
+    if (['start_mission', 'mission_status', 'mission_control', 'standing_approval'].includes(msg.name)) { this._handleMissionTool(msg); return; }
     if (msg.name !== 'run_task') return;
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -2591,6 +2628,11 @@ class RealtimeSession extends EventEmitter {
 
   _recordGateStats(processed, now) {
     const stats = this._gateStats;
+    if (this._usageBytes >= 24000 * 2 * 20) {
+      // Serverga yuborilgan ovoz sekundlari (Azure xarajati uchun) — taxminan har 20 s da yoziladi.
+      try { require('../../core/usage-meter').sharedMeter().add('voice_seconds', this._usageBytes / 48000); } catch (_) {}
+      this._usageBytes = 0;
+    }
     if (processed.send) stats.sent++; else stats.dropped++;
     stats.maxResidual = Math.max(stats.maxResidual, Math.round(processed.residualRms || 0));
     if (now - stats.since < 5000) return;
@@ -2612,6 +2654,7 @@ class RealtimeSession extends EventEmitter {
 
   _sendInputAudio(audio) {
     if (!audio?.length) return false;
+    this._usageBytes = (this._usageBytes || 0) + audio.length;
     try {
       this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: audio.toString('base64') }));
       return true;
