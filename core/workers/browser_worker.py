@@ -29,7 +29,17 @@ async def main() -> None:
         return
 
     llm = ChatOpenAI(model=model, api_key=key, base_url=base, temperature=1, add_schema_to_system_prompt=True, dont_force_structured_output=True)
-    profile = BrowserProfile(headless=bool(request.get("headless", True)), user_data_dir=None, keep_alive=False)
+    # Standart: JARVIS Chrome profili (hozirgi Chrome akkauntingiz sessiyasi, scripts/chrome-profile-sync.py) va haqiqiy Chrome.
+    # Playwright'ning soxta keychain'i o'chiriladi, aks holda Chrome cookie'larni ocholmay yo'qotadi.
+    profile_dir = os.path.expanduser(os.environ.get("JARVIS_CHROME_DIR", "~/Library/Application Support/JarvisChrome"))
+    if request.get("use_profile", True) and os.path.isdir(profile_dir):
+        profile = BrowserProfile(
+            headless=bool(request.get("headless", False)), user_data_dir=profile_dir, profile_directory="Default",
+            channel="chrome", keep_alive=False,
+            ignore_default_args=["--use-mock-keychain", "--password-store=basic", "--enable-automation"],
+        )
+    else:
+        profile = BrowserProfile(headless=bool(request.get("headless", True)), user_data_dir=None, keep_alive=False)
     agent = Agent(task=task, llm=llm, browser_profile=profile, use_vision=False, enable_signal_handler=False,
                   generate_gif=False, max_failures=4, use_judge=False)
     history = await agent.run(max_steps=int(request.get("max_steps", 25)))

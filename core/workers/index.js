@@ -113,7 +113,7 @@ function createWorkers(options = {}) {
       const python = path.join(PROJECT_DIR, '.venv-workers', 'bin', 'python');
       if (!fs.existsSync(python)) return { ok: false, output: '', error: 'Browser-use o\'rnatilmagan (scripts/install-workers.sh)' };
       const result = await runProcess(python, [path.join(__dirname, 'browser_worker.py')], {
-        spawn: spawnFn, cwd: PROJECT_DIR, timeoutMs, stallMs: 300000, input: JSON.stringify({ task: prompt, max_steps: 30, headless: env('BROWSER_WORKER_HEADLESS', 'true') !== 'false' }),
+        spawn: spawnFn, cwd: PROJECT_DIR, timeoutMs, stallMs: 300000, input: JSON.stringify({ task: prompt, max_steps: 40, headless: env('BROWSER_WORKER_HEADLESS', 'false') === 'true', use_profile: env('BROWSER_WORKER_USE_PROFILE', 'true') !== 'false' }),
         env: { ...process.env, AZURE_OPENAI_KEY: azureKey(), AZURE_OPENAI_ENDPOINT: azureBase(), BROWSER_WORKER_MODEL: agentModel(), ANONYMIZED_TELEMETRY: 'false', BROWSER_USE_LOGGING_LEVEL: 'error' }
       });
       const line = cleanOutput(result.stdout).split('\n').filter(l => l.trim().startsWith('{')).pop();

@@ -10,11 +10,11 @@ const PLAN_SYSTEM =
   '{"criteria":["..."],"tasks":[{"title":"...","worker":"agent|interpreter|browser|gui|babyagi|autogpt|think","prompt":"...","priority":1-10}]}\n' +
   "Workers: agent = full computer agent with skills (calendar, email, files, Telegram, memory, desktop apps, web search); " +
   "interpreter = code, terminal, scripts, files, data work and local dev servers; browser = multi-step web research, portals and forms " +
-  "with a real browser; gui = visual desktop UI when no API or accessibility exists; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
+  "with a real browser that is ALREADY signed in to the user's Google and LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it); gui = visual desktop UI when no API or accessibility exists; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
   "autogpt = AutoGPT, an autonomous think-act loop with web search and file output for open-ended research or writing that ends in a written deliverable; think = pure reasoning or writing, no side effects.\n" +
   "Rules: 3-6 criteria a reviewer could check from evidence; use the FEWEST tasks that make sense (one to three for a simple goal, at most 8 for a large one): " +
   "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; prefer read-only inspection first; higher priority number runs first; never include secrets; " +
-  "never plan irreversible, external or costly actions unless the goal explicitly asks for them.";
+  "never plan irreversible, external or costly actions unless the goal explicitly asks for them. For job hunting: research, shortlisting and drafting are separate tasks from actually applying or messaging recruiters, so the approval gate can ask the user first.";
 
 const REFLECT_SYSTEM =
   "You are the verification and reflection core of JARVIS's autonomous goal engine. You receive the goal, success criteria, the task list " +
@@ -47,6 +47,10 @@ function sanitizeForRisk(text) {
     .replace(/\bchmod\b/gi, ' ')
     .replace(/\/private\//g, '/');
 }
+
+// Ish arizasi, HR/recruiter xabari va shunga o'xshash tashqi yuborish amallari doim tasdiq talab qiladi
+// (umumiy siyosat "apply"/"submit" so'zlarini tashqi ta'sir deb bilmaydi).
+const OUTREACH_RISK = /\b(?:apply(?:ing)?\s+(?:to|for|on)|easy\s+apply|submit(?:ting)?\s+(?:an?\s+|the\s+|your\s+)?(?:job\s+)?(?:application|form|resume|cv)s?|send(?:ing)?\s+(?:an?\s+)?(?:inmail|connection\s+request)|inmail|connection\s+requests?|(?:message|contact|email|write\s+to|dm)\s+(?:the\s+)?(?:hr|recruiters?|hiring\s+managers?))\b/i;
 
 function clip(value, max) { return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max); }
 
@@ -164,7 +168,9 @@ class GoalEngine {
 
   _needsApproval(task) {
     if (task.approved) return null;
-    const assessment = this.assess({ kind: 'task', description: sanitizeForRisk(`${task.title}. ${task.prompt}`) });
+    const text = sanitizeForRisk(`${task.title}. ${task.prompt}`);
+    if (OUTREACH_RISK.test(text)) return 'external-communication (job application or outreach)';
+    const assessment = this.assess({ kind: 'task', description: text });
     if (!assessment.requiresConfirmation) return null;
     if (assessment.autonomousEligible && (this.routineAutonomy || this.fullAutonomy())) return null;
     return assessment.category || 'risky action';

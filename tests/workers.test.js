@@ -48,3 +48,25 @@ test('BabyAGI and AutoGPT workers report a clear error when their environments a
     assert.match(result.error, /o'rnatilmagan/);
   }
 });
+
+test('the browser worker uses the signed-in JARVIS Chrome profile by default and is visible', async () => {
+  const { createWorkers } = require('../core/workers');
+  const EventEmitter = require('node:events');
+  let sentInput = '';
+  const spawn = () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter(); proc.stderr = new EventEmitter();
+    proc.stdin = { write: text => { sentInput += text; }, end() {} };
+    proc.pid = 0; proc.kill = () => {};
+    process.nextTick(() => { proc.stdout.emit('data', Buffer.from('{"ok": true, "output": "done"}')); proc.emit('close', 0); });
+    return proc;
+  };
+  const fs = require('node:fs');
+  const path = require('node:path');
+  if (!fs.existsSync(path.join(__dirname, '..', '.venv-workers', 'bin', 'python'))) return;
+  const result = await createWorkers({ env: () => '', spawn }).browser.run({ prompt: 'open linkedin', timeoutMs: 5000 });
+  assert.equal(result.ok, true);
+  const request = JSON.parse(sentInput);
+  assert.equal(request.use_profile, true);
+  assert.equal(request.headless, false);
+});

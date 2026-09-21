@@ -222,3 +222,15 @@ test('risk assessment ignores URL query strings and harmless "message"/"format" 
   assert.equal(flagged('Format the disk and reinstall'), true);
   assert.equal(flagged('Send a message to my brother'), true);
 });
+
+test('job applications and recruiter outreach always need approval, while research and drafting do not', () => {
+  const { GoalEngine } = require('../core/missions/engine');
+  const engine = new GoalEngine({ store: {}, llm: {}, workers: {} });
+  const needs = prompt => Boolean(engine._needsApproval({ title: prompt, prompt, approved: false }));
+  assert.equal(needs('Search LinkedIn for remote backend jobs matching my resume and list the best 20 with links'), false);
+  assert.equal(needs('Draft a tailored cover letter for each shortlisted job and save it to a file'), false);
+  assert.equal(needs('Apply to the shortlisted jobs using Easy Apply'), true);
+  assert.equal(needs('Submit the application form with my resume'), true);
+  assert.equal(needs('Send an InMail to the recruiter'), true);
+  assert.equal(needs('Message the HR of each company about the role'), true);
+});
