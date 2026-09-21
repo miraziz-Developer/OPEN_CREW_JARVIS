@@ -21,11 +21,13 @@ async function embeddingCount(options = {}) {
     if (value) config[name] = value;
   }
   const client = new Client(config);
-  await client.connect();
   try {
+    await client.connect();
     const result = await client.query('SELECT count(*)::int AS count FROM jarvis.memory_embeddings');
     return result.rows[0].count;
-  } finally { await client.end(); }
+  } catch (_) {
+    return 0; // Postgres yo'q yoki jadval hali yaratilmagan (toza o'rnatish) — xato emas
+  } finally { await client.end().catch(() => {}); }
 }
 
 async function audit(options = {}) {
