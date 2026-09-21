@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { PROJECT_DIR } = require('../../core/paths');
-const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
+let ENV = ''; try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (_) {}
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
 const TIMEZONE = env('TIMEZONE', 'Asia/Kuala_Lumpur');
 

@@ -21,7 +21,7 @@ const WORLD_MODEL_FILE = path.join(PROJECT_DIR, '.jarvis-world-model.json');
 const worldModel = new WorldModel({ file: WORLD_MODEL_FILE });
 
 // ── Config (.env dan) ─────────────────────────────────────────────────
-const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
+let ENV = ''; try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (_) {}
 function getEnv(key, def) {
   const m = ENV.match(new RegExp('^' + key + '=(.*)$', 'm'));
   return m ? m[1].trim() : def;
