@@ -253,7 +253,8 @@ function embedText(text) {
   return new Promise((resolve, reject) => {
     const KEY = azureEnv('AZURE_EMBEDDING_KEY', azureEnv('AZURE_OPENAI_KEY'));
     const RAW_ENDPOINT = (azureEnv('AZURE_EMBEDDING_ENDPOINT', azureEnv('AZURE_OPENAI_ENDPOINT')) || '').replace(/\/$/, '').replace(/\/openai\/v1$/, '');
-    const deployment = azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2');
+    // Bazadagi yorliq (AZURE_EMBEDDING_DEPLOYMENT) eski yozuvlarga bog'langan; haqiqiy Azure deployment nomi alohida bo'lishi mumkin.
+    const deployment = azureEnv('AZURE_EMBEDDING_API_DEPLOYMENT', azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2'));
     if (!KEY || !RAW_ENDPOINT) return reject(new Error('AZURE_EMBEDDING_KEY/ENDPOINT yo\'q'));
     const payload = JSON.stringify({ model: deployment, input: String(text).slice(0, 8000) });
     const url = new URL(RAW_ENDPOINT + '/openai/v1/embeddings');

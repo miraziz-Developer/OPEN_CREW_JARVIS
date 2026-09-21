@@ -26,3 +26,25 @@ test('runProcess enforces the hard timeout even when the process keeps printing'
 test('cleanOutput strips ANSI colors and Python warnings', () => {
   assert.equal(cleanOutput('\x1b[31mred\x1b[0m\nUserWarning: pkg_resources is deprecated\n\nvalue'), 'red\nvalue');
 });
+
+test('the worker registry exposes every worker the planner may choose, including BabyAGI and AutoGPT', () => {
+  const { createWorkers } = require('../core/workers');
+  const { WORKERS } = require('../core/missions/engine');
+  const workers = createWorkers({ env: () => '' });
+  for (const name of WORKERS) assert.equal(typeof workers[name]?.run, 'function', name);
+  assert.ok(WORKERS.includes('babyagi') && WORKERS.includes('autogpt'));
+});
+
+test('BabyAGI and AutoGPT workers report a clear error when their environments are missing', async () => {
+  const { createWorkers } = require('../core/workers');
+  const workers = createWorkers({ env: () => '' });
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..');
+  for (const [name, venv] of [['babyagi', '.venv-babyagi'], ['autogpt', '.venv-autogpt']]) {
+    if (fs.existsSync(path.join(root, venv, 'bin', 'python'))) continue;
+    const result = await workers[name].run({ prompt: 'x', mission: { id: 'm-test' }, task: { id: 't1' }, timeoutMs: 1000 });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /o'rnatilmagan/);
+  }
+});

@@ -79,3 +79,6 @@ reports/
 /vendor/gods-eye-view/.gev-logs/
 /vendor/gods-eye-view/.gev-cache/
 .venv-workers/
+.venv-agents/
+.venv-babyagi/
+.venv-autogpt/

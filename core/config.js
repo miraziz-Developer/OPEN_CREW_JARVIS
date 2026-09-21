@@ -56,6 +56,7 @@ const CONFIG_SCHEMA = Object.freeze({
   AZURE_EMBEDDING_ENDPOINT: { type: 'url' },
   AZURE_EMBEDDING_KEY: { type: 'secret' },
   AZURE_EMBEDDING_DEPLOYMENT: { type: 'string', default: 'text-embedding-3-large-2' },
+  AZURE_EMBEDDING_API_DEPLOYMENT: { type: 'string', default: '' },
   AZURE_RERANK_ENDPOINT: { type: 'url' },
   AZURE_RERANK_KEY: { type: 'secret' },
   AZURE_RERANK_DEPLOYMENT: { type: 'string', default: 'Cohere-rerank-v4.0-pro' },

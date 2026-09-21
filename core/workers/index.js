@@ -42,6 +42,16 @@ function cleanOutput(text) {
   return String(text || '').replace(ANSI, '').split('\n').filter(line => !/pkg_resources|UserWarning|^\s*$/.test(line)).join('\n').trim();
 }
 
+function parseJsonWorker(result, name) {
+  const line = cleanOutput(result.stdout).split('\n').filter(l => l.trim().startsWith('{')).pop();
+  if (result.timedOut) return { ok: false, output: '', error: result.stalled ? `${name} stalled (no output)` : `${name} timeout` };
+  if (!line) return { ok: false, output: '', error: cleanOutput(result.stderr).slice(-400) || `${name} exit ${result.code}` };
+  try {
+    const parsed = JSON.parse(line);
+    return { ok: Boolean(parsed.ok), output: String(parsed.output || '').slice(-6000), error: parsed.error || '' };
+  } catch (error) { return { ok: false, output: '', error: `${name} javobi o'qilmadi` }; }
+}
+
 function workspace(mission) {
   const dir = path.join(PROJECT_DIR, '.run', 'missions', 'work', mission.id);
   fs.mkdirSync(dir, { recursive: true });
@@ -121,6 +131,41 @@ function createWorkers(options = {}) {
     }
   };
 
+  // 4b) BabyAGI (yoheinakajima/babyagi, functionz): vazifani funksiyalarga bo'lib, kodini o'zi yozadi, ro'yxatga oladi va
+  //     ishga tushiradi. O'rganilgan funksiyalar doimiy papkada to'planadi (o'zini-o'zi quruvchi kutubxona).
+  const babyagi = {
+    async run({ prompt, timeoutMs }) {
+      const python = path.join(PROJECT_DIR, '.venv-babyagi', 'bin', 'python');
+      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'BabyAGI o\'rnatilmagan (.venv-babyagi)' };
+      const cwd = path.join(PROJECT_DIR, '.run', 'agents', 'babyagi');
+      fs.mkdirSync(cwd, { recursive: true });
+      const result = await runProcess(python, [path.join(__dirname, 'babyagi_worker.py')], {
+        spawn: spawnFn, cwd, timeoutMs, stallMs: 240000, input: JSON.stringify({ task: prompt, cwd }),
+        env: { ...process.env, OPENAI_API_KEY: azureKey(), OPENAI_API_BASE: azureBase(), BABYAGI_MODEL: agentModel(), BABYAGI_REASONING: env('BABYAGI_REASONING', 'low'),
+          BABYAGI_EMBED_BASE: env('AZURE_EMBEDDING_ENDPOINT') || azureBase(), BABYAGI_EMBED_KEY: env('AZURE_EMBEDDING_KEY') || azureKey(),
+          BABYAGI_EMBED_MODEL: env('AZURE_EMBEDDING_API_DEPLOYMENT') || 'text-embedding-3-large', PYTHONWARNINGS: 'ignore' }
+      });
+      return parseJsonWorker(result, 'babyagi');
+    }
+  };
+
+  // 4c) AutoGPT (Significant-Gravitas/Auto-GPT): maqsadga qarab fikrlash -> buyruq -> natija tsikli (continuous rejim).
+  //     Xavfsizlik: ishchi papka bilan cheklangan, lokal shell o'chiq, iteratsiya chegarasi bor.
+  const autogpt = {
+    async run({ prompt, mission, task, timeoutMs }) {
+      const python = path.join(PROJECT_DIR, '.venv-autogpt', 'bin', 'python');
+      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'AutoGPT o\'rnatilmagan (.venv-autogpt)' };
+      const cwd = path.join(workspace(mission), `autogpt-${task.id}`);
+      fs.mkdirSync(cwd, { recursive: true });
+      const result = await runProcess(python, [path.join(__dirname, 'autogpt_worker.py')], {
+        spawn: spawnFn, cwd, timeoutMs, stallMs: 300000,
+        input: JSON.stringify({ task: prompt, cwd, max_iterations: parseInt(env('AUTOGPT_MAX_ITERATIONS'), 10) || 15 }),
+        env: { ...process.env, OPENAI_API_KEY: azureKey(), OPENAI_API_BASE: azureBase(), AUTOGPT_MODEL: agentModel(), AUTOGPT_REASONING: env('AUTOGPT_REASONING', 'low'), PYTHONWARNINGS: 'ignore' }
+      });
+      return parseJsonWorker(result, 'autogpt');
+    }
+  };
+
   // 5) Sof fikrlash / yozish
   const think = {
     async run({ prompt }) {
@@ -131,7 +176,7 @@ function createWorkers(options = {}) {
     }
   };
 
-  return { agent, interpreter, browser, gui, think };
+  return { agent, interpreter, browser, gui, babyagi, autogpt, think };
 }
 
 module.exports = { createWorkers, runProcess, cleanOutput };
