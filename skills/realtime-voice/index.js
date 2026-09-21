@@ -451,6 +451,31 @@ function loadLegacyInstructions() {
   );
 }
 
+// Sessiya boshida ochiq missiyalar haqida qisqa xabardorlik ("ko'prik" ikki tomonni ham ko'rib turadi).
+function missionsBlock() {
+  try {
+    const dir = path.join(PROJECT_DIR, '.run', 'missions', 'missions');
+    const open = [];
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const mission = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+        const recentlyDone = mission.status === 'completed' && Date.now() - (mission.completedAt || 0) < 12 * 3600000;
+        if (recentlyDone || ['planning', 'running', 'paused', 'awaiting_approval', 'blocked'].includes(mission.status)) open.push(mission);
+      } catch (e) {}
+    }
+    if (!open.length) return '';
+    open.sort((a, b) => a.n - b.n);
+    const lines = open.slice(-4).map(m => {
+      const done = (m.tasks || []).filter(t => t.status === 'done').length;
+      const extra = m.status === 'awaiting_approval' && m.pendingApproval ? ` — waiting for approval: ${m.pendingApproval.reason}` : '';
+      const outcome = m.status === 'completed' && m.result ? ` — result: ${String(m.result).slice(0, 120)}` : '';
+      return `Mission ${m.n} [${m.status}] ${String(m.goal).slice(0, 90)} (${done}/${(m.tasks || []).length} tasks)${extra}${outcome}`;
+    });
+    return '\n\nBACKGROUND MISSIONS RIGHT NOW (mention only when relevant or asked):\n' + lines.join('\n') + '\n';
+  } catch (e) { return ''; }
+}
+
 function loadInstructions() {
   return (
     "You are Jarvis, the user's realtime voice assistant. English is the default response language: reply in natural English regardless of the language, accent, isolated foreign words, quoted text, transcription errors, or background audio in the user's speech. Do not automatically switch to Uzbek, Russian, or any other language. An explicit request to translate into a named language, or to speak or respond in a named language, is the only exception; fulfill that requested translation or language conversation, then return to English unless the user explicitly asks to continue in that language. " +
@@ -467,6 +492,12 @@ function loadInstructions() {
     "For 'send', 'text', or 'email someone', call run_task right away with the user's words; it finds the contact and drafts the message, and the safety layer asks the user to confirm before anything is actually sent. " +
     "Ask only when a required detail truly cannot be looked up, once and briefly. If a task fails because an integration is not connected, " +
     "name that integration in one sentence and say how to fix it. " +
+    "MISSIONS: you are the always-on voice bridge between the user and a team of autonomous background agents. Never make the user wait for a long job: " +
+    "for any large or long-running goal (many steps, research, building or fixing a project, 'until it is done', hours or days) call start_mission immediately, " +
+    "confirm in one short sentence, and keep talking. The user may hand you several goals, so start each as its own mission and keep them all in view. " +
+    "Report a mission's progress only when asked or when an announcement arrives; use mission_status before answering anything about background work. " +
+    "When a mission needs approval, say plainly what it wants to do and ask; on yes call mission_control approve, on no call reject. " +
+    "A single quick job of a few minutes still uses run_task or fast_action. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
     "Use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
     "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
@@ -476,7 +507,7 @@ function loadInstructions() {
     "Resolve references such as 'that task' from recent context; if ambiguity could cause a wrong action, ask one concise clarification. " +
     "During the same live session, treat each new utterance as a natural follow-up without requiring the user to say Jarvis again; preserve context and resolve short follow-ups such as 'yana-chi?' or 'what about tomorrow?'. " +
     "Never invent a remembered fact. Adapt subtly to urgency or mood audible in the user's voice without explicitly commenting on emotion." +
-    recentContextBlock() + profileSummaryBlock()
+    missionsBlock() + recentContextBlock() + profileSummaryBlock()
   );
 }
 
@@ -598,10 +629,52 @@ function buildTools() {
     }
   });
 
+  // Uzoq muddatli, maqsadga yo'naltirilgan avtonom missiyalar (soatlab/kunlab): ovozli suhbatni bloklamaydi.
+  tools.push({
+    type: 'function',
+    name: 'start_mission',
+    description: "Use for a BIG or LONG goal that needs many steps and may take minutes, hours or days: research everything about X, " +
+      "build or fix a project end to end, keep working until something is achieved, organise a lot of files, monitor and report. " +
+      "It returns instantly and an autonomous agent team (computer agent, code interpreter, web browser, screen worker) works in " +
+      "the background until the goal is verifiably achieved, asking the user only for risky steps. You can start several missions. " +
+      "For a single quick job (a few minutes) use run_task instead. After starting, answer in one short sentence and stay available.",
+    parameters: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: "The full goal in the user's words with every constraint and the definition of done" },
+        hours: { type: 'number', description: 'Optional time budget in hours (default 72)' }
+      },
+      required: ['goal']
+    }
+  });
+  tools.push({
+    type: 'function',
+    name: 'mission_status',
+    description: "Progress of the user's background missions: what is running, how far along, what is blocked or waiting for approval. " +
+      "Call silently when the user asks how it is going, what you are working on, or about a specific mission number.",
+    parameters: { type: 'object', properties: { mission: { type: 'string', description: 'Optional mission number' } } }
+  });
+  tools.push({
+    type: 'function',
+    name: 'mission_control',
+    description: "Control a background MISSION (use this, not cancel_task, whenever the user says pause, stop, hold, resume, cancel or approve about a mission, a goal, or the background work): pause, resume (also unblocks a stalled one), cancel, approve or reject a step that is " +
+      "waiting for permission, or add a note/instruction. If only one mission matches, the number may be omitted.",
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['pause', 'resume', 'cancel', 'approve', 'reject', 'note'] },
+        mission: { type: 'string', description: 'Mission number' },
+        text: { type: 'string', description: 'For note: the instruction to add' }
+      },
+      required: ['action']
+    }
+  });
+
   tools.push({
     type: 'function',
     name: 'cancel_task',
-    description: "Foydalanuvchi bajarilayotgan vazifani TO'XTATISHNI so'rasa (\"to'xtat\", \"bekor qil\", \"kerak emas\", " +
+    description: "ONLY for quick run_task jobs running right now (\"stop that task\"). If the user means a background mission or long goal, call mission_control instead. " +
+      "Foydalanuvchi bajarilayotgan vazifani TO'XTATISHNI so'rasa (\"to'xtat\", \"bekor qil\", \"kerak emas\", " +
       "\"qo'y\", \"shart emas endi\") — darhol shuni chaqiring. Hozir ishlayotgan barcha `run_task` vazifalari to'xtatiladi. " +
       "Hech qanday vazifa ishlamayotgan bo'lsa ham chaqirsa bo'ladi — shunchaki to'xtatadigan narsa yo'qligini qaytaradi.",
     parameters: { type: 'object', properties: {}, required: [] }
@@ -772,9 +845,13 @@ function confirmationPrompt(description, assessment = {}) {
   return `${lead}: ${what}. Say confirm to proceed, or cancel.`;
 }
 
+// Uzoq muddatli maqsadlar ("...tugaguncha", "hours", "end to end") tez fon-agent yo'liga emas, modelga (start_mission) boradi.
+const LONG_HORIZON = /\b(?:until (?:it(?:'s| is)?|you|the)|keep (?:working|going|trying|at it)|don'?t stop|for (?:hours|days)|overnight|all day|as long as it takes|end[- ]to[- ]end|from scratch|whole (?:project|system|thing)|tugaguncha|to['‘’]?xtamasdan|soatlab|kunlab|maqsadga yetguncha|butun loyiha)\b/i;
+
 function needsBackgroundAgentTask(text) {
   const value = String(text || '').trim();
   if (HEDGED_UTTERANCE.test(value)) return false;
+  if (LONG_HORIZON.test(value)) return false;
   if (!value || /\?|\b(?:why|how|what|which|should i|advice|explain|nega|qanday|nima|qaysi|maslahat|tushuntir)\b/i.test(value)) return false;
   const action = /\b(?:open|close|click|type|write|create|edit|update|fix|debug|build|test|install|configure|deploy|run|start|launch|search|research|send|upload|download|fill|submit|och|yop|bos|yoz|yarat|tahrir|yangila|tuzat|tekshir|o'rnat|ornat|sozla|ishga tushir|qidir|izla|yubor|yukla|to'ldir|jo'nat|jonat|bajar)\b/i.test(value);
   const work = value.length >= 12 || /\b(?:file|code|project|browser|form|email|report|website|app|fayl|kod|loyiha|brauzer|forma|hisobot|sayt|dastur)\b/i.test(value);
@@ -995,6 +1072,7 @@ class RealtimeSession extends EventEmitter {
       ? options.communicationRunner
       : intent => require('../communications').searchYouTube(intent.query);
     this._memoryProvider = options.memoryProvider || require('../memory');
+    this._missions = options.missions || null;
     this._conversationContext = options.conversationContext || new ConversationContext();
     this._actionSafety = options.actionSafetyPolicy || new ActionSafetyPolicy({
       confirmationTtlMs: options.actionConfirmationTtlMs,
@@ -1578,6 +1656,33 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
+  // Missiya tool'lari: fayl yozish/o'qish, millisekundlarda qaytadi.
+  _handleMissionTool(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    let output;
+    try {
+      if (!this._missions) output = 'Missions are not available in this session.';
+      else if (msg.name === 'start_mission') output = this._missions.start(String(args.goal || ''), { hours: args.hours });
+      else if (msg.name === 'mission_status') output = this._missions.status(args.mission);
+      else output = this._missions.control(args.mission, String(args.action || ''), { text: args.text });
+    } catch (error) { output = 'Mission error: ' + String(error.message || error).slice(0, 200); }
+    this.emit('telemetry', 'mission.tool', { name: msg.name });
+    try {
+      this.ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: msg.call_id, output: String(output).slice(0, 1500) } }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
+  // Fon missiyasi natijasini (tugadi/to'siq/tasdiq kerak) gapirish navbatiga qo'yadi; JARVIS gapirmayotgan paytda aytiladi.
+  announce(text) {
+    const clean = String(text || '').trim();
+    if (!clean || this.closed) return false;
+    this._backgroundTaskResults.push({ answer: clean.slice(0, 600) });
+    this._deliverReadyBackgroundWork();
+    return true;
+  }
+
   _speculativeEnabled() {
     return SPECULATIVE_RESPONSE && this.provider?.id === 'voice-live' && !this._mediaModeActive && !this._authoritativeTranscribe;
   }
@@ -1901,6 +2006,7 @@ class RealtimeSession extends EventEmitter {
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
     if (msg.name === 'ask_expert') { this._handleAskExpert(msg); return; }
+    if (['start_mission', 'mission_status', 'mission_control'].includes(msg.name)) { this._handleMissionTool(msg); return; }
     if (msg.name !== 'run_task') return;
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -2546,5 +2652,5 @@ class RealtimeSession extends EventEmitter {
 module.exports = {
   RealtimeSession, resample16to24, needsGroundedAnswer, needsContextGrounding,
   needsExpertAnswer, needsBackgroundAgentTask, collectGrounding, matchDirectFastAction, prepareSpokenAnswer,
-  buildSessionUpdate, loadInstructions, runFullAgent, confirmationPrompt
+  buildSessionUpdate, loadInstructions, runFullAgent, confirmationPrompt, buildTools
 };

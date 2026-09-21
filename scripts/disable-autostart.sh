@@ -16,6 +16,7 @@ launchctl unload "${DEST}" 2>/dev/null || true
 USER_ID=$(id -u)
 launchctl bootout gui/$USER_ID/com.jarvis.openclaw 2>/dev/null || true
 launchctl bootout gui/$USER_ID/com.jarvis.persistent-agent-runner 2>/dev/null || true
+launchctl bootout gui/$USER_ID/com.jarvis.mission-runner 2>/dev/null || true
 
 # Faylni o'chirish
 if [[ -f "${DEST}" ]]; then
@@ -26,6 +27,7 @@ else
 fi
 
 rm -f "${HOME}/Library/LaunchAgents/com.jarvis.persistent-agent-runner.plist"
+rm -f "${HOME}/Library/LaunchAgents/com.jarvis.mission-runner.plist"
 
 echo "   Hozir ishlatilayotgan Jarvis ni to'xtatish:"
 echo "   launchctl bootout gui/${USER_ID}/com.jarvis.openclaw"

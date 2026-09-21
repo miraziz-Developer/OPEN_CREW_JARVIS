@@ -26,6 +26,8 @@ process.chdir(PROJECT_DIR);
 const { writeMemory, searchMemory, upsertTurnMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
 const { NativeMic } = require('./core/native-mic');
+const { MissionStore: GoalMissionStore } = require('./core/missions/store');
+const { createMissionApi } = require('./core/missions/api');
 const { JarvisRuntime } = require('./core/jarvis-runtime');
 const { VoiceFlightRecorder } = require('./core/voice-flight-recorder');
 const { MissionControl, stableId } = require('./core/mission-control');
@@ -169,6 +171,21 @@ const DAEMON_STARTED_AT = Date.now();
 const runtimeIdentity = () => ({ pid: process.pid, startedAt: DAEMON_STARTED_AT });
 const missions = new MissionControl({ file: MISSION_CONTROL_FILE, defaultMaxAttempts: 3 });
 const skillPlatform = createSkillPlatform({ projectDir: PROJECT_DIR, env });
+// Avtonom missiyalar (soatlab/kunlab): alohida runner jarayoni bajaradi (core/mission-runner.js), daemon faqat ko'prik.
+const goalMissionStore = new GoalMissionStore({ dir: path.join(PROJECT_DIR, '.run', 'missions') });
+const goalMissionApi = createMissionApi(goalMissionStore);
+let goalEventOffset = goalMissionStore.eventsOffset();
+const GOAL_VOICE_EVENTS = new Set(['mission.completed', 'mission.blocked', 'mission.failed', 'mission.needs_approval']);
+setInterval(() => {
+  try {
+    const { events, offset } = goalMissionStore.readEventsSince(goalEventOffset);
+    goalEventOffset = offset;
+    for (const event of events) {
+      if (!GOAL_VOICE_EVENTS.has(event.kind) || !_activeRealtimeSession) continue;
+      _activeRealtimeSession.announce(event.text);
+    }
+  } catch (_) {}
+}, 3000).unref();
 const conversationContext = new ConversationContext({ windowMs: CONVERSATION_FOLLOWUP_MS });
 const turnJournal = new TurnJournal({
   file: path.join(PROJECT_DIR, '.run', 'addressed-turns.jsonl'),
@@ -604,6 +621,8 @@ async function mainLoop() {
     if (_activeRealtimeSession || state !== 'listening') return false;
 
     const session = new RealtimeSession({
+      // Fon missiyalari bilan ko'prik: start/status/control millisekundlarda qaytadi (ovozli suhbat bloklanmaydi).
+      missions: goalMissionApi,
       // Fn hands-free trigger butun ochiq sessiya davomida foydalanuvchi
       // Jarvisga murojaat qilayotganini tasdiqlaydi. Shuning uchun media
       // background gate follow-up gaplarni bloklamaydi. Wake-word trigger

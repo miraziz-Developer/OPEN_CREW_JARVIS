@@ -60,6 +60,21 @@ if [[ -f "${RUNNER_SRC}" ]]; then
   fi
 fi
 
+MISSION_PLIST="com.jarvis.mission-runner.plist"
+MISSION_SRC="${PROJECT_DIR}/scripts/${MISSION_PLIST}"
+MISSION_DEST="${HOME}/Library/LaunchAgents/${MISSION_PLIST}"
+MISSION_LABEL="com.jarvis.mission-runner"
+if [[ -f "${MISSION_SRC}" ]]; then
+  launchctl bootout gui/$USER_ID/${MISSION_LABEL} 2>/dev/null || true
+  node "${PROJECT_DIR}/scripts/render-launchd.js" "${MISSION_SRC}" "${MISSION_DEST}" "${PROJECT_DIR}" "${NODE_BIN}"
+  chmod 644 "${MISSION_DEST}"
+  if launchctl bootstrap gui/$USER_ID "${MISSION_DEST}" 2>/dev/null; then
+    echo "✅ Mission runner (avtonom maqsadlar) yuklandi!"
+  else
+    echo "⚠️ Mission runner yuklanmadi. Qo'lda: launchctl bootstrap gui/${USER_ID} ${MISSION_DEST}"
+  fi
+fi
+
 # ── Pauza sentinel (Fn+Shift bilan to'xtatish/uyg'otish) — alohida,
 # doim ishlab turadigan LaunchAgent, asosiy Jarvis'dan mustaqil ──
 SENTINEL_PLIST="com.jarvis.pausesentinel.plist"
