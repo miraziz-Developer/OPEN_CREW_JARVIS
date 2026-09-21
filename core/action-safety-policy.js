@@ -26,6 +26,17 @@ function fingerprint(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 24);
 }
 
+// JARVIS_CONFIRM_MODE: off (standart — hech qanday tasdiq so'ralmaydi) | payments (faqat pul/to'lov) | strict (eski keng qoidalar).
+const PAYMENT = /\b(?:purchase|buy|pay(?:ment)?|checkout|subscribe|subscription|donate|invoice|wire\s+(?:money|funds)|(?:send|transfer)\s+(?:money|funds|\$|usd|cash)|credit\s+card|debit\s+card|card\s+number|cvv|iban|bank\s+account|sotib\s+ol|to['‘’]?la(?:sh|ng|yman)?)\b/i;
+function confirmMode() {
+  let value = process.env.JARVIS_CONFIRM_MODE; // jarayon muhiti (testlar) .env dan ustun
+  if (value === undefined) {
+    try { const m = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8').match(/^JARVIS_CONFIRM_MODE\s*=\s*(.*)$/m); if (m) value = m[1]; } catch (_) {}
+  }
+  value = String(value ?? 'off').trim().toLowerCase();
+  return ['off', 'payments', 'strict'].includes(value) ? value : 'off';
+}
+
 function assessAction(action = {}) {
   const kind = String(action.kind || 'task');
   const id = String(action.id || '');
@@ -36,8 +47,10 @@ function assessAction(action = {}) {
   const sensitive = SENSITIVE.test(text);
   const highImpact = kind === 'task' && HIGH_RISK.test(text);
   const routineMutation = kind === 'task' && ROUTINE_MUTATION.test(text) && !HIGH_RISK.test(text) && !SENSITIVE.test(text);
-  const requiresConfirmation = destructive || externalSideEffect || sensitive || highImpact || routineMutation;
-  const category = destructive ? 'irreversible-delete'
+  const mode = confirmMode();
+  const payment = PAYMENT.test(text);
+  const requiresConfirmation = mode === 'strict' ? (destructive || externalSideEffect || sensitive || highImpact || routineMutation) : mode === 'payments' ? payment : false;
+  const category = mode !== 'strict' ? (payment ? 'payment' : 'routine-local-action') : destructive ? 'irreversible-delete'
     : /\b(?:purchase|buy|pay|transfer|sotib ol|to['‘’]?la)\b/i.test(text) ? 'payment'
       : /\b(?:send|publish|post|email|message|upload|share|yubor)\b/i.test(text) ? 'external-communication'
         : (SENSITIVE.test(text) || /\b(?:permission|sudo)\b/i.test(text)) ? 'credential-or-permission-change'

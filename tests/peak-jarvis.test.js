@@ -101,3 +101,19 @@ test('confirmation accepts natural phrasing but never a negated one', () => {
     assert.equal(policy.handleUtterance(said).confirmed === true, ok, said);
   }
 });
+
+test('confirm modes: off asks nothing, payments asks only for money, strict keeps the full rules', () => {
+  const { assessAction } = require('../core/action-safety-policy');
+  const prev = process.env.JARVIS_CONFIRM_MODE;
+  try {
+    const cases = { send: 'send an email to the recruiter', del: 'delete the old report files', apply: 'apply to this job and submit the application', pay: 'buy the annual subscription with my credit card' };
+    process.env.JARVIS_CONFIRM_MODE = 'off';
+    for (const text of Object.values(cases)) assert.equal(assessAction({ kind: 'task', description: text }).requiresConfirmation, false, text);
+    process.env.JARVIS_CONFIRM_MODE = 'payments';
+    assert.equal(assessAction({ kind: 'task', description: cases.pay }).requiresConfirmation, true);
+    for (const k of ['send', 'del', 'apply']) assert.equal(assessAction({ kind: 'task', description: cases[k] }).requiresConfirmation, false, k);
+    process.env.JARVIS_CONFIRM_MODE = 'strict';
+    assert.equal(assessAction({ kind: 'task', description: cases.send }).requiresConfirmation, true);
+    delete process.env.JARVIS_CONFIRM_MODE; // .env/standart -> off
+  } finally { if (prev === undefined) delete process.env.JARVIS_CONFIRM_MODE; else process.env.JARVIS_CONFIRM_MODE = prev; }
+});

@@ -50,6 +50,12 @@ function sanitizeForRisk(text) {
 
 // Ish arizasi, HR/recruiter xabari va shunga o'xshash tashqi yuborish amallari doim tasdiq talab qiladi
 // (umumiy siyosat "apply"/"submit" so'zlarini tashqi ta'sir deb bilmaydi).
+// Ariza/xat yuborish tasdig'i faqat strict rejimda (standart: to'liq avtonomiya).
+function confirmModeStrict() {
+  let v = process.env.JARVIS_CONFIRM_MODE;
+  if (v === undefined) { try { const m = require('fs').readFileSync(require('path').join(require('../paths').PROJECT_DIR, '.env'), 'utf8').match(/^JARVIS_CONFIRM_MODE\s*=\s*(.*)$/m); if (m) v = m[1]; } catch (_) {} }
+  return String(v ?? 'off').trim().toLowerCase() === 'strict';
+}
 const OUTREACH_RISK = /\b(?:apply(?:ing)?\s+(?:to|for|on)|easy\s+apply|submit(?:ting)?\s+(?:an?\s+|the\s+|your\s+)?(?:job\s+)?(?:application|form|resume|cv)s?|send(?:ing)?\s+(?:an?\s+)?(?:inmail|connection\s+request)|inmail|connection\s+requests?|(?:message|contact|email|write\s+to|dm)\s+(?:the\s+)?(?:hr|recruiters?|hiring\s+managers?))\b/i;
 
 function clip(value, max) { return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max); }
@@ -171,7 +177,7 @@ class GoalEngine {
     if (task.approved) return null;
     const text = sanitizeForRisk(`${task.title}. ${task.prompt}`);
     const assessment = this.assess({ kind: 'task', description: text });
-    const outreach = OUTREACH_RISK.test(text);
+    const outreach = confirmModeStrict() && OUTREACH_RISK.test(text);
     if (outreach || assessment.requiresConfirmation) {
       // Doimiy ruxsat (kunlik limit ichida) mos kelsa so'ramaymiz; xavfli toifalar hech qachon qoplanmaydi.
       const rule = this.standing?.consume(text, outreach && !assessment.externalSideEffect ? { ...assessment, category: 'external-communication' } : assessment);
