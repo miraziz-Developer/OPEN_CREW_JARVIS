@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 
 const q = s => encodeURIComponent(String(s || '').trim());
 const run = (file, args, timeout) => new Promise((resolve, reject) =>
-  execFile(file, args, { timeout, encoding: 'utf8' }, (err, stdout) => err ? reject(err) : resolve(String(stdout || ''))));
+  execFile(file, args, { timeout, encoding: 'utf8', env: { ...process.env, SSL_CERT_FILE: process.env.SSL_CERT_FILE || '/etc/ssl/cert.pem' } }, (err, stdout) => err ? reject(err) : resolve(String(stdout || ''))));
 
 // Bir qadamlik veb-amallar: to'liq agent o'rniga soniyalarda bajariladi.
 // kind: youtube_play | youtube_search | google | maps | url
