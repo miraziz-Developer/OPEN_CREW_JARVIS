@@ -123,6 +123,54 @@ function isRepeatedResponse(candidate, previous, threshold = 0.82) {
   return (enoughForPrefixDecision && (b.startsWith(a) || a.startsWith(b))) || similarity(a, b) >= threshold;
 }
 
+// JARVIS gapirayotganda "boldi", "kerak emas", "aha okay okay", "stop" kabi qisqa to'xtatish/tasdiq gaplari:
+// javob yaratmaydi, faqat gapni to'xtatib yana tinglashga o'tadi (uz/en/ru).
+const STOP_CORE = new Set([
+  'stop', 'enough', 'quiet', 'hush', 'silence', 'pause', 'wait', 'hold', 'shut', 'all', 'do', 'cancel', 'nevermind',
+  'okay', 'ok', 'okey', 'aha', 'yeah', 'yes', 'yep', 'yup', 'right', 'alright', 'sure', 'fine', 'got', 'understood',
+  'thanks', 'thank',
+  'boldi', 'boldy', 'bolde', 'bolti', 'buldi', 'bodi', 'vd', 'yetadi', 'yetarli', 'bas', 'toxta', 'toxtang', 'toxtat', 'jim', 'tushundim', 'tushunarli', 'yaxshi',
+  'xop', 'hop', 'mayli', 'rahmat', 'bekor', 'emas', 'keremas', 'ha',
+  'хватит', 'стоп', 'ладно', 'понял', 'ясно', 'хорошо', 'спасибо', 'тихо', 'всё', 'все', 'ага', 'ок'
+]);
+const STOP_FILLER = new Set([
+  'it', 'i', 'get', 'that', 'thats', 'will', 'is', 'no', 'need', 'not', 'needed', 'talking', 'up', 'be', 'please',
+  'now', 'just', 'me', 'you', 'on', 'a', 'bit', 'uh', 'um', 'hm', 'hmm', 'mm', 'mmm', 'ah', 'oh', 'the', 'kerak',
+  'endi', 'jarvis'
+]);
+
+function stopTokens(text) {
+  return String(text || '').toLocaleLowerCase('en-US')
+    // Til aniqlash noto'g'ri bo'lganda "aha" ba'zan CJK belgilar ('啊哈') bo'lib keladi — ular shovqin.
+    .replace(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g, ' ')
+    .replace(/[ʻ’‘`´ʼ']/g, '').replace(/[^\p{L}\p{N} ]/gu, ' ')
+    .split(/\s+/).filter(Boolean);
+}
+
+// Server "Stop" ni "Top", "Boldi" ni "Boldy" deb eshitishi mumkin: bitta so'zli gapda 1 harf farqqacha qabul qilamiz.
+const FUZZY_STOP_WORDS = ['stop', 'boldi'];
+
+function editDistance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const current = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+      previous = current;
+    }
+  }
+  return row[b.length];
+}
+
+function isStopIntent(text) {
+  const tokens = stopTokens(text);
+  if (!tokens.length || tokens.length > 6) return false;
+  if (tokens.length === 1 && tokens[0].length >= 3 && FUZZY_STOP_WORDS.some(word => editDistance(tokens[0], word) <= 1)) return true;
+  return tokens.every(word => STOP_CORE.has(word) || STOP_FILLER.has(word)) && tokens.some(word => STOP_CORE.has(word));
+}
+
 function conversationIdleDelay(options = {}) {
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   const idleMs = Math.max(0, Number(options.idleMs) || 0);
@@ -135,5 +183,5 @@ function conversationIdleDelay(options = {}) {
 module.exports = {
   normalize, similarity, looksLikeUzbekTurn, looksLikeEnglishIntent,
   looksLikeAddressedTurn, classifyUserTurn, isRepeatedResponse,
-  conversationIdleDelay
+  conversationIdleDelay, isStopIntent
 };

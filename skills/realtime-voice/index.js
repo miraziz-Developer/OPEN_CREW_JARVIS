@@ -22,7 +22,7 @@ const WebSocketClient = require('ws');
 const { DuplexVoiceEngine, rms } = require('../../core/duplex-voice-engine');
 const { personaInstructions } = require('../../core/persona');
 const { PcmPlaybackBuffer } = require('../../core/pcm-playback-buffer');
-const { classifyUserTurn, isRepeatedResponse } = require('../../core/voice-turn-policy');
+const { classifyUserTurn, isRepeatedResponse, isStopIntent } = require('../../core/voice-turn-policy');
 const { chooseTranscript, authoritativeTimeoutMs, nativeIsConfident } = require('../../core/stt-recovery');
 const { loadCalibration, resolveCalibratedNumber, resolveBargeInResidual } = require('../../core/audio-calibration');
 const { ConversationContext } = require('../../core/conversation-context');
@@ -115,10 +115,11 @@ const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in na
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
 const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
 const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10) || 15000;
-const NATIVE_BARGE_IN_RMS = parseInt(env('REALTIME_NATIVE_BARGE_IN_RMS'), 10) || 600;
+const NATIVE_BARGE_IN_RMS = parseInt(env('REALTIME_NATIVE_BARGE_IN_RMS'), 10) || 450;
 const NATIVE_MIC_MUTE_GRACE_MS = 150;
 const NATIVE_BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_NATIVE_BARGE_IN_CONFIRM_MS'), 10) || 250;
 const NATIVE_PREROLL_BYTES = 24000 * 2 * 1.2;
+const STOP_QUIET_MS = 6000;
 const BARGE_IN_VERIFY_TIMEOUT_MS = parseInt(env('REALTIME_BARGE_IN_VERIFY_MS'), 10) || 3500;
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
@@ -923,6 +924,7 @@ class RealtimeSession extends EventEmitter {
     this._autoResponseOn = true;
     this._dropStaleAudio = false;
     this._duck = null;
+    this._quietUntil = 0;
     this._nativeAec = false;
     this._nativePreRoll = [];
     this._nativePreRollBytes = 0;
@@ -1347,6 +1349,13 @@ class RealtimeSession extends EventEmitter {
       else this._deliverSpokenAnswer('Cancelled.');
       return true;
     }
+    // "Boldi", "kerak emas", "aha okay okay", "stop": JARVIS gapirayotgan bo'lsa — to'xtab, yana tinglaydi (javob yo'q).
+    if (this._isSpeakingNow() && isStopIntent(this.userTranscript)) {
+      this._stopSpeakingByUser('stop-command');
+      this.emit('turn_suppressed', 'stop-command', this.userTranscript);
+      this.userTranscript = '';
+      return false;
+    }
     const policy = classifyUserTurn(this.userTranscript, {
       lastAssistant: this._lastAssistantTranscript,
       mediaMode: this._mediaModeActive,
@@ -1520,6 +1529,7 @@ class RealtimeSession extends EventEmitter {
   }
 
   async _deliverReadyBackgroundResearch() {
+    if (Date.now() < this._quietUntil) return;
     const work = this._backgroundResearch;
     if (!work || this.closed || work.serial !== this._groundedTurnSerial || this._realtimeResponseActive || this.assistantSpeaking) return;
     this._backgroundResearch = null;
@@ -1528,6 +1538,7 @@ class RealtimeSession extends EventEmitter {
   }
 
   async _deliverReadyBackgroundWork() {
+    if (Date.now() < this._quietUntil) return;
     if (this.closed || this._realtimeResponseActive || this.assistantSpeaking || !this._backgroundTaskResults.length) return;
     const work = this._backgroundTaskResults.shift();
     await this._deliverSpokenAnswer(work.answer);
@@ -2277,6 +2288,33 @@ class RealtimeSession extends EventEmitter {
   // Mahalliy shovqin darvozasi gap tugagach audio yuborishni to'xtatadi, server VAD esa jimlikni faqat
   // kelayotgan audiodan biladi (server shovqin filtri kechikishi bilan 330 ms yetmaydi) — shuning uchun
   // gap tugamaganini ko'rsa, speech_stopped kelguncha jimlik yuboramiz.
+  _isSpeakingNow() {
+    return this.assistantSpeaking || Boolean(this._duck) || this._realtimeResponseActive || Date.now() < this._playbackUntil;
+  }
+
+  // Foydalanuvchi "to'xta/boldi" dedi: gapni darhol to'xtatamiz va fon xabarlari qisqa muddat jim turadi.
+  _stopSpeakingByUser(reason) {
+    this._discardSpeculative();
+    if (this._duck) {
+      this._commitBargeIn(reason);
+    } else {
+      this._responseInterrupted = true;
+      this._dropStaleAudio = true;
+      if (this._realtimeResponseActive) {
+        this._specClearing = true;
+        this._armSpecClearTimer();
+        try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
+      }
+      this._flushPlayback();
+      this.assistantSpeaking = false;
+      this._syncAutoResponse();
+    }
+    this._quietUntil = Date.now() + STOP_QUIET_MS;
+    const timer = setTimeout(() => { this._deliverReadyBackgroundResearch(); this._deliverReadyBackgroundWork(); }, STOP_QUIET_MS + 100);
+    if (timer.unref) timer.unref();
+    this.emit('telemetry', 'stop_command', { reason });
+  }
+
   // Barge-in: karnayni darhol PAUZA qilamiz (SIGSTOP), javobni esa transkript tekshirilguncha bekor qilmaymiz.
   _beginDuck() {
     if (this._duck) return;
