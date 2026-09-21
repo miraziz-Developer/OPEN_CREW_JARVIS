@@ -5,7 +5,9 @@ const fs = require('fs');
 const path = require('path');
 const { PROJECT_DIR } = require('./paths');
 
-const CONFIRM = /^(?:yes|confirm|confirmed|proceed|do it|go ahead|ha|tasdiqlayman|davom et|bajar)$/i;
+// "confirm", "I confirm", "yes, confirm it", "ha" — qisqa gap ichida tasdiq so'zi bo'lsa yetarli (rad so'zi bo'lmasa).
+const CONFIRM_WORD = /\b(?:yes|confirm(?:ed)?|proceed|do it|go ahead|ha|tasdiqlayman|davom et|bajar)\b/i;
+const CONFIRM = { test: v => String(v).length <= 40 && CONFIRM_WORD.test(v) && !/\b(?:no|not|don['‘’]?t|cancel|stop|yo['‘’]?q|bekor)\b/i.test(v) };
 const REJECT = /^(?:no|cancel|stop|don't|do not|yo['‘’]?q|bekor|to['‘’]?xta|qilma)$/i;
 const HIGH_RISK = /\b(?:delete|remove|erase|trash|format|reset|shutdown|restart|purchase|buy|pay|transfer|send|publish|post|email|message|upload|share|password|credential|permission|sudo|rm\s+-rf|o['‘’]?chir|yubor|sotib ol|to['‘’]?la|parol)\b/i;
 const SENSITIVE = /\b(?:password|passcode|secret|token|credential|bank|card|medical|private|parol|maxfiy|karta)\b/i;

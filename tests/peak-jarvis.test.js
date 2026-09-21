@@ -92,3 +92,12 @@ test('morning brief includes today\'s calendar and unread mail when available', 
   const text = composeBrief({ now: new Date('2026-09-22T08:00:00'), events: [{ start: '2026-09-22T10:30:00+05:00', title: 'Standup' }], unread: [{ subject: 'Interview invite' }, { subject: 'Invoice' }] });
   assert.match(text, /Today: 10:30 Standup/); assert.match(text, /Unread mail: 2 — Interview invite \| Invoice/);
 });
+
+test('confirmation accepts natural phrasing but never a negated one', () => {
+  const { ActionSafetyPolicy } = require('../core/action-safety-policy');
+  for (const [said, ok] of [['I confirm.', true], ['yes, confirm it', true], ['ha', true], ["don't confirm", false], ['cancel', false], ['confirm ' + 'x'.repeat(50), false]]) {
+    const policy = new ActionSafetyPolicy();
+    policy.authorize({ kind: 'task', description: 'send an email' });
+    assert.equal(policy.handleUtterance(said).confirmed === true, ok, said);
+  }
+});
