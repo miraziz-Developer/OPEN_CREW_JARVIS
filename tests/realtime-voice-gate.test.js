@@ -470,7 +470,7 @@ test('run_task starts the full agent with configured credentials instead of cras
     '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\nOpen the requested song', '--agent', 'main', '--thinking', 'off'
   ]);
   assert.ok(Object.hasOwn(invocation.options.env, 'AZURE_OPENAI_KEY'));
-  assert.equal(invocation.options.env.JARVIS_PROJECT_DIR.endsWith('OPEN_CREW_JARVIS'), true);
+  assert.equal(invocation.options.env.JARVIS_PROJECT_DIR, require('../core/paths').PROJECT_DIR);
   assert.equal(invocation.options.timeout, 300000);
 });
 
