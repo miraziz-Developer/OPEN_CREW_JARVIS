@@ -149,7 +149,7 @@ class GoalEngine {
   async plan(mission) {
     const notes = mission.notes.length ? `\nUser notes:\n- ${mission.notes.join('\n- ')}` : '';
     const plan = await this.llm.completeJson({
-      system: PLAN_SYSTEM, user: `Goal: ${mission.goal}${notes}`, model: this.model, effort: 'medium', maxOutputTokens: 6000, hard: true
+      system: PLAN_SYSTEM, user: `Goal: ${mission.goal}${notes}`, model: this.model, effort: 'medium', maxOutputTokens: 6000
     });
     mission.criteria = (Array.isArray(plan.criteria) ? plan.criteria : []).map(c => clip(c, 300)).filter(Boolean).slice(0, 8);
     if (!mission.criteria.length) mission.criteria = [`The goal is fully achieved: ${clip(mission.goal, 200)}`];
