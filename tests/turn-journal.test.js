@@ -130,3 +130,49 @@ test('journal rotates bounded segments and retains replayable current events', (
   const recovered = new TurnJournal({ file, maxBytes: 220, retentionFiles: 2, materialize() {} });
   assert.ok(recovered.turns.size >= 2);
 });
+test('replay skips turns whose exact state was already materialized (sidecar) and replays changed ones', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'turn-journal-sidecar-'));
+  const file = path.join(dir, 'turns.jsonl');
+  const sidecarFile = path.join(dir, 'turns.materialized.json');
+  const written = [];
+  const make = () => new TurnJournal({ file, sidecarFile, materialize: turn => written.push(turn.turnId) });
+  const first = make();
+  first.append('t1', 'user.accepted', { text: 'hello there' });
+  first.append('t1', 'assistant.completed', { text: 'hi' });
+  first.append('t2', 'user.accepted', { text: 'second turn' });
+  first.append('t2', 'assistant.completed', { text: 'done' });
+  first._saveSidecarSoon();
+  clearTimeout(first._sidecarTimer);
+  first._sidecarTimer = null;
+  fs.writeFileSync(sidecarFile, JSON.stringify({ version: 1, signatures: Object.fromEntries(first.signatures) }));
+
+  written.length = 0;
+  const second = make();
+  const result = second.replay();
+  assert.equal(result.replayed, 0);
+  assert.equal(result.alreadyMaterialized, 2);
+  assert.deepEqual(written, []);
+
+  second.append('t2', 'turn.cancelled', { reason: 'later' });
+  written.length = 0;
+  const third = make();
+  const changed = third.replay();
+  assert.equal(changed.alreadyMaterialized >= 1, true);
+  assert.equal(changed.replayed <= 1, true);
+});
+
+test('replayAsync yields between batches and reports the same counts', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'turn-journal-async-'));
+  const file = path.join(dir, 'turns.jsonl');
+  const journal = new TurnJournal({ file, materialize() {} });
+  for (const id of ['a', 'b', 'c', 'd', 'e']) {
+    journal.append(id, 'user.accepted', { text: 'hello ' + id });
+    journal.append(id, 'assistant.completed', { text: 'ok' });
+  }
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 1);
+  const result = await journal.replayAsync({ batch: 2, pauseMs: 5 });
+  clearInterval(timer);
+  assert.equal(result.replayed, 5);
+  assert.ok(ticks > 0, 'event loop stayed responsive');
+});

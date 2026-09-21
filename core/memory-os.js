@@ -50,7 +50,22 @@ class MemoryOS {
     this.now = options.now || Date.now;
     this.maxRecords = options.maxRecords || 5000;
     this.state = { version: 1, records: [], entities: {}, relations: [], migrations: {} };
+    this._cleanStaleTemps();
     this._load();
+  }
+
+  // Qulagan jarayondan qolgan eskirgan vaqtinchalik fayllar (masalan .json.<pid>.<hex>.tmp) katta joy egallaydi.
+  _cleanStaleTemps() {
+    if (!this.file) return;
+    try {
+      const dir = path.dirname(this.file);
+      const prefix = path.basename(this.file) + '.';
+      for (const name of fs.readdirSync(dir)) {
+        if (!name.startsWith(prefix) || !name.endsWith('.tmp')) continue;
+        const full = path.join(dir, name);
+        if (Date.now() - fs.statSync(full).mtimeMs > 3600000) fs.rmSync(full, { force: true });
+      }
+    } catch (_) {}
   }
 
   _load() {
@@ -65,7 +80,7 @@ class MemoryOS {
     if (!this.file) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = `${this.file}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 });
     fs.renameSync(tmp, this.file);
     try { fs.chmodSync(this.file, 0o600); } catch (_) {}
   }
@@ -74,7 +89,7 @@ class MemoryOS {
     if (!this.file) return work();
     const lock = `${this.file}.lock`;
     const wait = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + 8000;
     while (true) {
       try { fs.mkdirSync(lock); break; }
       catch (error) {

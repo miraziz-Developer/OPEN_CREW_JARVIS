@@ -172,6 +172,7 @@ const skillPlatform = createSkillPlatform({ projectDir: PROJECT_DIR, env });
 const conversationContext = new ConversationContext({ windowMs: CONVERSATION_FOLLOWUP_MS });
 const turnJournal = new TurnJournal({
   file: path.join(PROJECT_DIR, '.run', 'addressed-turns.jsonl'),
+  sidecarFile: path.join(PROJECT_DIR, '.run', 'addressed-turns.materialized.json'),
   materialize: upsertTurnMemory,
   retryMs: 750,
   maxRetries: 4,
@@ -392,13 +393,15 @@ if (EMBED_INDEX_ENABLED) {
   setTimeout(() => { embedIndexJob.run(); }, 60 * 1000);
   setInterval(() => { embedIndexJob.run(); }, EMBED_INDEX_INTERVAL_MIN * 60 * 1000);
 }
-const replayResult = turnJournal.replay();
 turnJournal.startWatchdog({ maxAgeMs: TURN_STALE_TIMEOUT_MS, reason: 'turn watchdog timeout' });
-runtime.heartbeat('memory-recovery', { status: 'ready', ...replayResult });
-if (replayResult.replayed > 0) {
-  inf(`Turn journal recovery: ${replayResult.replayed} ta terminal turn qayta materialize qilindi`);
-  if (EMBED_INDEX_ENABLED) setTimeout(() => embedIndexJob.run(), 500).unref?.();
-}
+// Tiklash bo'lib-bo'lib bajariladi (event loop bloklanmaydi); allaqachon yozilganlari sidecar orqali o'tkazib yuboriladi.
+turnJournal.replayAsync().then(replayResult => {
+  runtime.heartbeat('memory-recovery', { status: 'ready', ...replayResult });
+  if (replayResult.replayed > 0) {
+    inf(`Turn journal recovery: ${replayResult.replayed} ta terminal turn qayta materialize qilindi (${replayResult.alreadyMaterialized || 0} tasi allaqachon yozilgan)`);
+    if (EMBED_INDEX_ENABLED) setTimeout(() => embedIndexJob.run(), 500).unref?.();
+  }
+}).catch(error => wrn('Turn journal recovery xatosi: ' + (error.message || error)));
 
 function adaptGain(energy) {
   if (energy < ENERGY_MIN_STT) _gain = Math.min(_gain * 1.2, GAIN_MAX);
@@ -493,8 +496,10 @@ async function mainLoop() {
   // If Azure VoiceLive is configured, create a lightweight wake worker that
   // keeps a transcription/VAD-only session open and emits transcripts.
   try {
-    const vlProvider = VOICE_PROVIDERS.find(p => p.id === 'voice-live');
-    const wakeEnabled = (env('AZURE_VOICELIVE_WAKE_ENABLED') || 'true') !== 'false';
+    // Bulutli VoiceLive wake worker qo'shimcha ulanish ochadi va mahalliy openWakeWord/Whisper bilan ikki marta uyg'otishi
+    // mumkin — shuning uchun faqat aniq yoqilganda (AZURE_VOICELIVE_WAKE_ENABLED=true) ishga tushadi.
+    const wakeEnabled = (env('AZURE_VOICELIVE_WAKE_ENABLED') || 'false') === 'true';
+    const vlProvider = wakeEnabled ? require('./core/voice-provider').buildVoiceProviders(env).find(p => p.id === 'voice-live') : null;
     if (vlProvider && wakeEnabled) {
       _voiceLiveWake = new VoiceLiveWake({
         provider: vlProvider,

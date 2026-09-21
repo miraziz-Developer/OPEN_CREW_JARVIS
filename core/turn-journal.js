@@ -22,10 +22,16 @@ class TurnJournal extends EventEmitter {
     this.maxRetries = options.maxRetries ?? 3;
     this.maxBytes = options.maxBytes || 8 * 1024 * 1024;
     this.retentionFiles = options.retentionFiles || 5;
+    // Ixtiyoriy sidecar: qaysi turn qaysi holatda xotiraga yozilganini eslab qoladi, shunda qayta ishga tushganda
+    // allaqachon yozilganlari qayta yozilmaydi (idempotent, lekin qimmat: har biri Obsidian + xotira JSON'ini qayta yozadi).
+    this.sidecarFile = options.sidecarFile || null;
+    this.signatures = new Map();
+    this._sidecarTimer = null;
     this.turns = new Map();
     this.pending = new Map();
     this.watchdogTimer = null;
     this._load();
+    this._loadSidecar();
   }
 
   createTurn(source = 'voice') {
@@ -48,19 +54,38 @@ class TurnJournal extends EventEmitter {
     return turn ? JSON.parse(JSON.stringify(turn)) : null;
   }
 
-  replay(options = {}) {
+  _replayCandidates(options = {}) {
     const terminalOnly = options.terminalOnly !== false;
-    let replayed = 0;
+    const todo = [];
     let skipped = 0;
+    let alreadyMaterialized = 0;
     for (const turn of this.turns.values()) {
-      if (!turn.user || (terminalOnly && !TERMINAL_STATUSES.has(turn.status))) {
-        skipped += 1;
-        continue;
-      }
-      this._materialize(turn, 0, 'replay');
-      replayed += 1;
+      if (!turn.user || (terminalOnly && !TERMINAL_STATUSES.has(turn.status))) { skipped += 1; continue; }
+      if (!options.force && this.sidecarFile && this.signatures.get(turn.turnId) === this._signature(turn)) { alreadyMaterialized += 1; continue; }
+      todo.push(turn);
     }
-    const result = { replayed, skipped, total: this.turns.size };
+    return { todo, skipped, alreadyMaterialized };
+  }
+
+  replay(options = {}) {
+    const { todo, skipped, alreadyMaterialized } = this._replayCandidates(options);
+    for (const turn of todo) this._materialize(turn, 0, 'replay');
+    const result = { replayed: todo.length, skipped, total: this.turns.size };
+    if (alreadyMaterialized) result.alreadyMaterialized = alreadyMaterialized;
+    this.emit('replayed', result);
+    return result;
+  }
+
+  // Daemon uchun: bo'lib-bo'lib yozadi, shunda mikrofon/event loop bloklanmaydi.
+  async replayAsync(options = {}) {
+    const { todo, skipped, alreadyMaterialized } = this._replayCandidates(options);
+    const batch = options.batch || 4;
+    for (let index = 0; index < todo.length; index += batch) {
+      for (const turn of todo.slice(index, index + batch)) this._materialize(turn, 0, 'replay');
+      await new Promise(resolve => setTimeout(resolve, options.pauseMs ?? 15));
+    }
+    const result = { replayed: todo.length, skipped, total: this.turns.size };
+    if (alreadyMaterialized) result.alreadyMaterialized = alreadyMaterialized;
     this.emit('replayed', result);
     return result;
   }
@@ -179,10 +204,37 @@ class TurnJournal extends EventEmitter {
     return current;
   }
 
+  _signature(turn) {
+    return crypto.createHash('sha1').update(JSON.stringify(turn)).digest('hex').slice(0, 16);
+  }
+
+  _loadSidecar() {
+    if (!this.sidecarFile) return;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.sidecarFile, 'utf8'));
+      for (const [turnId, signature] of Object.entries(parsed?.signatures || {})) this.signatures.set(turnId, signature);
+    } catch (_) {}
+  }
+
+  _saveSidecarSoon() {
+    if (!this.sidecarFile || this._sidecarTimer) return;
+    this._sidecarTimer = setTimeout(() => {
+      this._sidecarTimer = null;
+      try {
+        const signatures = {};
+        for (const turnId of this.turns.keys()) if (this.signatures.has(turnId)) signatures[turnId] = this.signatures.get(turnId);
+        fs.mkdirSync(path.dirname(this.sidecarFile), { recursive: true });
+        fs.writeFileSync(this.sidecarFile, JSON.stringify({ version: 1, signatures }), { mode: 0o600 });
+      } catch (_) {}
+    }, 2000);
+    this._sidecarTimer.unref?.();
+  }
+
   _materialize(turn, attempt, origin = 'append') {
     const startedAt = this.now();
     try {
       this.materialize(JSON.parse(JSON.stringify(turn)));
+      if (this.sidecarFile) { this.signatures.set(turn.turnId, this._signature(turn)); this._saveSidecarSoon(); }
       clearTimeout(this.pending.get(turn.turnId));
       this.pending.delete(turn.turnId);
       this.emit('materialized', turn, { durationMs: Math.max(0, this.now() - startedAt), attempt, origin });
