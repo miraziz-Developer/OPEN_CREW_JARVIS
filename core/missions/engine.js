@@ -37,6 +37,10 @@ const NEGATED_ACTIONS = new RegExp(
 
 function sanitizeForRisk(text) {
   return String(text || '')
+    .replace(/https?:\/\/\S+/gi, ' ')                                                    // URL ichidagi ?format=3, /post/ kabilar
+    .replace(/\b(?:error|short|summary|status|log|commit|exception|warning|help|output|explanatory)\s+messages?\b/gi, ' ')
+    .replace(/\bmessage\s+(?:field|key|string|text)\b/gi, ' ')
+    .replace(/\bformat(?:s|ted|ting)?\b(?!\s+(?:the\s+)?(?:disk|drive|volume|partition|mac|hard))/gi, 'layout')
     .replace(NEGATED_ACTIONS, ' ')
     .replace(/\bread[- ]only\b/gi, ' ')
     .replace(/\b(?:default|file|unix|posix|directory)\s+permissions?\b/gi, ' ')

@@ -212,3 +212,13 @@ test('runner writes finished missions to long-term memory and only notifies abou
   assert.deepEqual(remembered, ['mission.completed']);
   assert.equal(notified.length, 1);
 });
+
+test('risk assessment ignores URL query strings and harmless "message"/"format" wording', () => {
+  const { sanitizeForRisk } = require('../core/missions/engine');
+  const { assessAction } = require('../core/action-safety-policy');
+  const flagged = text => assessAction({ kind: 'task', description: sanitizeForRisk(text) }).requiresConfirmation;
+  assert.equal(flagged("Use curl -s 'https://wttr.in/Tashkent?format=3' and return a short message in the error field"), false);
+  assert.equal(flagged('Return the result as formatted text with an error message on failure'), false);
+  assert.equal(flagged('Format the disk and reinstall'), true);
+  assert.equal(flagged('Send a message to my brother'), true);
+});

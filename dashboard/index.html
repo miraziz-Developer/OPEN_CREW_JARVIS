@@ -158,6 +158,9 @@ body.booted header{animation:panelIn .4s backwards}
     <div class="panel"><h2><span>FAOLIYAT (LOG)</span><span class="num">03</span></h2>
       <div id="activity"><div>— yuklanmoqda —</div></div>
     </div>
+    <div class="panel"><h2><span>AVTONOM MISSIYALAR</span><span class="num">04b</span></h2>
+      <div id="missionsList" style="max-height:220px;overflow-y:auto;font-size:12.5px"><div>— hozircha yo'q —</div></div>
+    </div>
     <div class="panel"><h2><span>JONLI VAZIFALAR</span><span class="num">04</span></h2>
       <div id="rtTasksList" style="max-height:150px;overflow-y:auto;font-size:12.5px"><div>— hozircha yo'q —</div></div>
     </div>
@@ -382,6 +385,20 @@ function timeAgo(ts){
   if(s<60) return s+"s";
   return Math.round(s/60)+"m";
 }
+async function refreshMissions(){
+  try{
+    const data = await jget("/api/missions");
+    const el = $("missionsList");
+    const head = `<div style="color:var(--txt-dim);font-size:11px">Runner: ${data.runnerAlive ? "ishlayapti" : "to'xtagan"}</div>`;
+    if(!data.missions.length){ el.innerHTML = head + "<div>— hozircha yo'q —</div>"; return; }
+    const icon = {planning:"🧭",running:"⏳",paused:"⏸",awaiting_approval:"🔐",completed:"✅",blocked:"🚧",failed:"❌",cancelled:"⛔"};
+    el.innerHTML = head + data.missions.map(m => {
+      const done = m.tasks.filter(t => t.status === "done").length;
+      const extra = m.pendingApproval ? `<br><span style="color:var(--warn,#ffb020)">tasdiq kerak: ${esc(m.pendingApproval.reason)}</span>` : (m.summary ? `<br><span style="color:var(--txt-dim);font-size:11px">${esc(m.summary)}</span>` : "");
+      return `<div class="task"><span class="box">${icon[m.status]||"•"}</span><span>#${m.n} ${esc(m.goal)}<br><span style="color:var(--txt-dim);font-size:11px">${m.status} · ${done}/${m.tasks.length} vazifa</span>${extra}</span></div>`;
+    }).join("");
+  }catch(e){}
+}
 async function refreshRealtimeTasks(){
   try{
     const items = await jget("/api/realtime-tasks");
@@ -423,6 +440,7 @@ function refreshAll(){
   refreshStatus();
   refreshActivity();
   refreshRealtimeTasks();
+  refreshMissions();
   refreshTasks();
   refreshProfile();
   loadChatHistory();

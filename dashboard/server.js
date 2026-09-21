@@ -128,6 +128,22 @@ function getAgentTasks() {
   }));
 }
 
+// Avtonom missiyalar (core/mission-runner.js): ovozli daemon va runner umumiy `.run/missions` papkasidan o'qiydi.
+function getMissions() {
+  const { MissionStore } = require('../core/missions/store');
+  const store = new MissionStore({ dir: path.join(PROJECT_DIR, '.run', 'missions') });
+  const runner = readJsonSafe(path.join(PROJECT_DIR, '.run', 'missions', 'runner.json'), null);
+  return {
+    runnerAlive: Boolean(runner && Date.now() - runner.at < 15000),
+    missions: store.list().slice(-12).reverse().map(m => ({
+      n: m.n, goal: m.goal.slice(0, 200), status: m.status, iteration: m.iteration,
+      tasks: m.tasks.map(t => ({ id: t.id, title: t.title, worker: t.worker, status: t.status })),
+      summary: m.summary, pendingApproval: m.pendingApproval, result: m.result ? String(m.result).slice(0, 300) : null,
+      createdAt: m.createdAt, updatedAt: m.updatedAt, completedAt: m.completedAt
+    }))
+  };
+}
+
 function getVoiceTelemetry() {
   return loadVoiceTelemetry(path.join(PROJECT_DIR, '.run', 'voice-flight-recorder.jsonl'), { maxLines: 3000 });
 }
@@ -197,6 +213,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/tasks') return json(res, getTasks());
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());
     if (url.pathname === '/api/agent-tasks') return json(res, getAgentTasks());
+    if (url.pathname === '/api/missions') return json(res, getMissions());
     if (url.pathname === '/api/runtime') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}));
     if (url.pathname === '/api/voice-telemetry') return json(res, getVoiceTelemetry());
     if (url.pathname === '/api/telemetry') return json(res, getRuntimeTelemetry());
