@@ -33,6 +33,7 @@ const { createAgentBridge, needsPersistentExecution } = require('../../core/agen
 const { createSkillPlatform } = require('../platform');
 
 const { PROJECT_DIR } = require('../../core/paths');
+const { ambientBlock } = require('../../core/ambient-context');
 const execFileAsync = promisify(execFile);
 let ENV = '';
 try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (error) {
@@ -511,7 +512,7 @@ function loadInstructions() {
     "Resolve references such as 'that task' from recent context; if ambiguity could cause a wrong action, ask one concise clarification. " +
     "During the same live session, treat each new utterance as a natural follow-up without requiring the user to say Jarvis again; preserve context and resolve short follow-ups such as 'yana-chi?' or 'what about tomorrow?'. " +
     "Never invent a remembered fact. Adapt subtly to urgency or mood audible in the user's voice without explicitly commenting on emotion." +
-    missionsBlock() + recentContextBlock() + profileSummaryBlock()
+    missionsBlock() + ambientBlock(path.join(PROJECT_DIR, '.run', 'ambient-context.json')) + recentContextBlock() + profileSummaryBlock()
   );
 }
 

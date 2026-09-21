@@ -129,6 +129,17 @@ function getAgentTasks() {
 }
 
 // Avtonom missiyalar (core/mission-runner.js): ovozli daemon va runner umumiy `.run/missions` papkasidan o'qiydi.
+function getHud() {
+  const { sharedMeter } = require('../core/usage-meter');
+  const telemetry = readJsonSafe(path.join(PROJECT_DIR, '.run', 'telemetry.json'), {});
+  return {
+    at: Date.now(),
+    ambient: readJsonSafe(path.join(PROJECT_DIR, '.run', 'ambient-context.json'), null),
+    usage: sharedMeter().totals(),
+    telemetry
+  };
+}
+
 function getMissions() {
   const { MissionStore } = require('../core/missions/store');
   const store = new MissionStore({ dir: path.join(PROJECT_DIR, '.run', 'missions') });
@@ -214,6 +225,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());
     if (url.pathname === '/api/agent-tasks') return json(res, getAgentTasks());
     if (url.pathname === '/api/missions') return json(res, getMissions());
+    if (url.pathname === '/api/hud') return json(res, getHud());
     if (url.pathname === '/api/runtime') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}));
     if (url.pathname === '/api/voice-telemetry') return json(res, getVoiceTelemetry());
     if (url.pathname === '/api/telemetry') return json(res, getRuntimeTelemetry());

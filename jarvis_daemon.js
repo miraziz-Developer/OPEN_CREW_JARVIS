@@ -296,6 +296,10 @@ const { createUrgentCheckJob } = require('./core/background-jobs/urgent-check');
 const { createDailySynthesisJob } = require('./core/background-jobs/daily-synthesis-job');
 const { createDailyTasksJob } = require('./core/background-jobs/daily-tasks-job');
 const { createDailyReportJob } = require('./core/background-jobs/daily-report-job');
+const { createMorningBriefJob } = require('./core/background-jobs/morning-brief-job');
+const { AmbientContext } = require('./core/ambient-context');
+const { HealthWatchdog, kickstart } = require('./core/health-watchdog');
+const { collectMacOSContext } = require('./core/macos-context');
 const { createProjectsJob } = require('./core/background-jobs/projects-job');
 const { createFastActionLearnJob } = require('./core/background-jobs/fast-action-learn-job');
 const { createEmbedIndexJob } = require('./core/background-jobs/embed-index-job');
@@ -374,6 +378,33 @@ const dailyReportJob = createDailyReportJob({
 if (DAILY_REPORT_ENABLED) {
   inf('Kunlik hisobot rejimi yoqilgan — har kuni soat ' + DAILY_REPORT_HOUR + ':00dan keyin');
   setInterval(() => { dailyReportJob.run().catch(() => {}); }, 15 * 60 * 1000);
+}
+
+// PEAK: ertalabki brifing, ekran konteksti, o'zini-o'zi tiklash.
+if ((env('MORNING_BRIEF_ENABLED') || 'true') !== 'false') {
+  const morningBrief = createMorningBriefJob({
+    projectDir: PROJECT_DIR, localDateStr, hour: parseInt(env('MORNING_BRIEF_HOUR'), 10) || 8,
+    getMissions: () => goalMissionStore.list(),
+    getUsage: () => { const d = new Date(Date.now() - 86400000); return require('./core/usage-meter').sharedMeter().totals(require('./core/usage-meter').dayKey(d.getTime())); },
+    getYesterday: async () => '',
+    sendTelegram,
+    announce: text => { try { if (_activeRealtimeSession) _activeRealtimeSession.announce(text.replace(/\n/g, ' ')); } catch (_) {} }
+  });
+  setInterval(() => { morningBrief.run().catch(() => {}); }, 5 * 60 * 1000);
+  setTimeout(() => { morningBrief.run().catch(() => {}); }, 20000);
+}
+if ((env('AMBIENT_CONTEXT') || 'true') !== 'false') {
+  new AmbientContext({ file: path.join(PROJECT_DIR, '.run', 'ambient-context.json'), collect: collectMacOSContext, intervalMs: parseInt(env('AMBIENT_INTERVAL_MS'), 10) || 5000 }).start();
+}
+if ((env('HEALTH_WATCHDOG') || 'true') !== 'false') {
+  const httpOk = url => fetch(url, { signal: AbortSignal.timeout(4000) }).then(r => r.ok).catch(() => false);
+  new HealthWatchdog({
+    notify: sendTelegram,
+    checks: [
+      { name: 'OpenClaw gateway', probe: () => httpOk('http://127.0.0.1:18789/health'), heal: kickstart('ai.openclaw.gateway') },
+      { name: 'Mission runner', probe: async () => { try { return Date.now() - JSON.parse(fs.readFileSync(path.join(PROJECT_DIR, '.run', 'missions', 'runner.json'), 'utf8')).at < 30000; } catch (_) { return false; } }, heal: kickstart('com.jarvis.mission-runner') }
+    ]
+  }).start();
 }
 
 // LOYIHALAR — ko'p bosqichli, kun davomida ketma-ket bajariladigan
