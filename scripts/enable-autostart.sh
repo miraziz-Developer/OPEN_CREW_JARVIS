@@ -93,3 +93,15 @@ if [[ -f "${SENTINEL_SRC}" ]]; then
     echo "⚠️ Pauza sentinel yuklanmadi. Qo'lda: launchctl bootstrap gui/${USER_ID} ${SENTINEL_DEST}"
   fi
 fi
+
+# ── Tekshiruv: bootout/bootstrap poygasi jimgina xizmatni yo'qotmasin (qayta urinish bilan) ──
+for LABEL_PLIST in "com.jarvis.mission-runner" "com.jarvis.persistent-agent-runner" "com.jarvis.pausesentinel" "com.jarvis.openclaw"; do
+  PLIST_FILE="${HOME}/Library/LaunchAgents/${LABEL_PLIST}.plist"
+  [[ -f "${PLIST_FILE}" ]] || continue
+  for attempt in 1 2 3 4; do
+    launchctl list | grep -q "${LABEL_PLIST}" && break
+    sleep 2
+    launchctl bootstrap gui/$USER_ID "${PLIST_FILE}" 2>/dev/null || true
+  done
+  launchctl list | grep -q "${LABEL_PLIST}" && echo "✅ ${LABEL_PLIST} ishlayapti" || echo "⚠️ ${LABEL_PLIST} ishga tushmadi"
+done
