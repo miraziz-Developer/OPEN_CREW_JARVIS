@@ -29,6 +29,12 @@ CONFIRM_COUNT = max(2, int(os.environ.get("OPENWAKEWORD_CONFIRM_COUNT", "2")))
 CONFIRM_WINDOW_FRAMES = max(CONFIRM_COUNT, int(os.environ.get("OPENWAKEWORD_CONFIRM_WINDOW_FRAMES", "4")))
 DIAGNOSTIC_FLOOR = float(os.environ.get("OPENWAKEWORD_DIAGNOSTIC_FLOOR", "0.03"))
 OWNER_PID = int(os.environ.get("JARVIS_OWNER_PID", "0") or "0")
+# Shaxsiy (o'zingiz ovozingizda o'qitilgan) model skorlari ~1.0 ga yaqin va juda
+# ajratuvchi: unga alohida, baland chegara beramiz. Built-in modellar yumshoq.
+PERSONAL_THRESHOLD = float(os.environ.get("OPENWAKEWORD_PERSONAL_THRESHOLD", "0.6"))
+PERSONAL_STRONG = float(os.environ.get("OPENWAKEWORD_PERSONAL_STRONG", "0.9"))
+PERSONAL_CONFIRM = float(os.environ.get("OPENWAKEWORD_PERSONAL_CONFIRM", "0.2"))
+PERSONAL_NAMES = {"jarvis"}
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 def configured_models():
@@ -91,11 +97,14 @@ def main():
                 score = float(predictions.get(name, 0))
                 recent_scores[name].append(score)
                 frame_peak = max(frame_peak, score)
+                personal = name in PERSONAL_NAMES
+                thr, strong, conf = ((PERSONAL_THRESHOLD, PERSONAL_STRONG, PERSONAL_CONFIRM) if personal
+                                     else (THRESHOLD, STRONG_THRESHOLD, CONFIRM_THRESHOLD))
                 ordered_scores = sorted(recent_scores[name], reverse=True)
                 confirmed = (len(ordered_scores) >= CONFIRM_COUNT
-                             and ordered_scores[0] >= THRESHOLD
-                             and ordered_scores[CONFIRM_COUNT - 1] >= CONFIRM_THRESHOLD)
-                if score >= STRONG_THRESHOLD or confirmed:
+                             and ordered_scores[0] >= thr
+                             and ordered_scores[CONFIRM_COUNT - 1] >= conf)
+                if score >= strong or confirmed:
                     if detected is None or score > detected[1]:
                         detected = (name, score)
             diagnostic_peak = max(diagnostic_peak, frame_peak)

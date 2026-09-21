@@ -48,7 +48,9 @@ class OpenWakeWordDetector {
         OPENWAKEWORD_CONFIRM_WINDOW_FRAMES: this.env('OPENWAKEWORD_CONFIRM_WINDOW_FRAMES') || '4',
         OPENWAKEWORD_CONFIRM_COUNT: this.env('OPENWAKEWORD_CONFIRM_COUNT') || '2',
         OPENWAKEWORD_DIAGNOSTIC_FLOOR: this.env('OPENWAKEWORD_DIAGNOSTIC_FLOOR') || '0.03',
-        OPENWAKEWORD_MODELS: this.env('OPENWAKEWORD_MODELS') || 'hey_jarvis'
+        OPENWAKEWORD_PERSONAL_THRESHOLD: this.env('OPENWAKEWORD_PERSONAL_THRESHOLD') || '0.8',
+        OPENWAKEWORD_PERSONAL_STRONG: this.env('OPENWAKEWORD_PERSONAL_STRONG') || '0.98',
+        OPENWAKEWORD_MODELS: this.env('OPENWAKEWORD_MODELS') || 'models/wake-word/jarvis.onnx'
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });
