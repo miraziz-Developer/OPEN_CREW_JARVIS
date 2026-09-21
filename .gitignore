@@ -82,3 +82,5 @@ reports/
 .venv-agents/
 .venv-babyagi/
 .venv-autogpt/
+encryption_key.json
+funztionz.db
