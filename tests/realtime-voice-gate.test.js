@@ -14,6 +14,9 @@ const {
   loadInstructions, runFullAgent
 } = require('../skills/realtime-voice');
 
+// Uslub/til qoidalari sessiya ko'rsatmalarida (response.create'dagi `instructions` ularni almashtirib yuborardi).
+const sessionInstructions = () => buildSessionUpdate({ id: 'voice-live', voice: 'x' }, { instructions: '', tools: [] }).session.instructions;
+
 test('voice instructions default to English, permit explicit translation, and require real task execution', () => {
   const instructions = loadInstructions();
   assert.match(instructions, /English is the default response language/i);
@@ -44,8 +47,9 @@ test('an acknowledgement after an assistant reply remains a realtime turn', () =
   assert.equal(session._acceptTranscript('Ha'), true);
   const response = sent.find(message => message.type === 'response.create');
   assert.ok(response);
-  assert.match(response.response.instructions, /natural English by default/i);
-  assert.match(response.response.instructions, /only when the user explicitly requested that named language/i);
+  assert.match(sessionInstructions(), /natural English by default/i);
+  assert.equal(response.response.instructions, undefined);
+  assert.match(sessionInstructions(), /only when the user explicitly requested that named language/i);
 });
 
 test('transcript gate keeps generic conversation and reasoning on the low-latency Realtime route', async () => {
@@ -88,9 +92,10 @@ test('transcript gate keeps generic conversation and reasoning on the low-latenc
   const realtimeResponses = sent.filter(message => message.type === 'response.create');
   assert.equal(realtimeResponses.length, 1);
   assert.equal(realtimeResponses[0].response.tool_choice, 'auto');
-  assert.match(realtimeResponses[0].response.instructions, /latest turn/i);
-  assert.match(realtimeResponses[0].response.instructions, /natural English by default/i);
-  assert.match(realtimeResponses[0].response.instructions, /never cut a sentence short/i);
+  assert.match(sessionInstructions(), /latest turn/i);
+  assert.equal(realtimeResponses[0].response.instructions, undefined);
+  assert.match(sessionInstructions(), /natural English by default/i);
+  assert.match(sessionInstructions(), /never cut a sentence short/i);
   assert.equal(questions.length, 0);
   assert.equal(spoken[0], 'It is 23:09.');
 
@@ -763,8 +768,8 @@ test('contextual turns speak immediately and deliver grounded verification as a 
   assert.match(calls[1][2], /OBSIDIAN/);
   const responses = sent.filter(message => message.type === 'response.create');
   assert.equal(responses.length, 1);
-  assert.doesNotMatch(responses[0].response.instructions, /bozorli\.online/);
-  assert.doesNotMatch(responses[0].response.instructions, /biroz kuting|natijasini kut/i);
+  // Suhbat javobi sessiya ko'rsatmalarini ishlatadi (alohida `instructions` yo'q), tasdiqlangan matn hali yo'q.
+  assert.equal(responses[0].response.instructions, undefined);
 
   session._onMessage({ data: JSON.stringify({ type: 'response.done', response: { status: 'completed' } }) });
   await new Promise(resolve => setImmediate(resolve));
@@ -837,7 +842,8 @@ test('generic reasoning skips grounding and streams through Realtime', async () 
   assert.equal(calls.some(call => call[0] === 'expert'), false);
   const response = sent.find(message => message.type === 'response.create');
   assert.equal(response.response.tool_choice, 'auto');
-  assert.match(response.response.instructions, /latest turn/i);
+  assert.match(sessionInstructions(), /latest turn/i);
+  assert.equal(response.response.instructions, undefined);
 });
 
 test('safe common voice commands map to deterministic fast actions', () => {

@@ -221,7 +221,9 @@ function buildSessionUpdate(provider, options) {
     ...(TRANSCRIPTION_LANGUAGE ? { language: TRANSCRIPTION_LANGUAGE } : {})
   };
   const common = {
-    instructions: speculative ? options.instructions + '\n\n' + CONVERSATION_STYLE_INSTRUCTIONS : options.instructions,
+    // Uslub ko'rsatmasi sessiyaga doim qo'shiladi: response.create'dagi `instructions` sessiya ko'rsatmalarini
+    // (xarakter, imkoniyatlar, tool qoidalari) shu javob uchun ALMASHTIRIB yuboradi.
+    instructions: options.instructions + '\n\n' + CONVERSATION_STYLE_INSTRUCTIONS,
     tools: options.tools,
     tool_choice: 'auto'
   };
@@ -457,6 +459,14 @@ function loadInstructions() {
     "Match the answer length to the need: keep simple replies short, but give enough detail to fully answer a real question. Do not force every reply into one sentence and never cut a thought short. Start speaking the first useful answer as soon as it is ready; reason silently, do not narrate thinking, and do not delay a simple answer for extra polish. " +
     "Speak at a calm, comfortable pace with natural pauses and expressive but restrained intonation. Do not use a metallic, synthetic, announcer-like, or theatrical delivery. " +
     "Never add unnecessary greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
+    "CAPABILITY: you are the voice of a full personal assistant, so never say you cannot do something and never ask the user for information you can look up. " +
+    "Through run_task you can operate the user's calendar and email (read, create, send), contacts, Telegram and other messaging, reminders and to-do tasks, " +
+    "web research and browsing, files, code and terminal work, apps and the visible screen, maps and the 3D globe, and daily summaries. " +
+    "For 'my day', 'what did I do', or 'what is going on' call recall_memory first (add run_task for calendar or email when relevant). " +
+    "When a person is named without an address or number, let run_task resolve the contact instead of asking. " +
+    "For 'send', 'text', or 'email someone', call run_task right away with the user's words; it finds the contact and drafts the message, and the safety layer asks the user to confirm before anything is actually sent. " +
+    "Ask only when a required detail truly cannot be looked up, once and briefly. If a task fails because an integration is not connected, " +
+    "name that integration in one sentence and say how to fix it. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
     "Use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
     "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
@@ -614,7 +624,7 @@ function buildTools() {
         "har doim buni run_task'dan USTUN qo'ying. Aniq ro'yxat quyidagi `id` maydonining enum'ida.",
       parameters: {
         type: 'object',
-        properties: { id: { type: 'string', enum: fastActionIds, description: "Bajarilishi kerak bo'lgan action id'si (ro'yxatdan)" } },
+        properties: { id: { type: 'string', ...(fastActionIds.length ? { enum: fastActionIds } : {}), description: "Bajarilishi kerak bo'lgan action id'si (ro'yxatdan)" } },
         required: ['id']
       }
     });
@@ -752,6 +762,15 @@ function needsGroundedAnswer(text) {
 
 // Mulohaza, taxmin yoki maslahat so'rash ("I think I should...", "maybe", "what if") buyruq emas — vazifa ishga tushmasin.
 const HEDGED_UTTERANCE = /^(?:(?:well|so|hmm+|um+|uh+|okay|ok)[,.]?\s+)*(?:i\s+(?:think|guess|suppose|wonder|feel like|might|may|could|should|would|was thinking|am thinking|'m thinking|'m not sure|don'?t know)|i'm\s+(?:thinking|not sure|wondering)|maybe|perhaps|what if|should i|do you think|would it be|it might be|it would be|just thinking)\b/i;
+
+// Tasdiq so'rovi NIMA tasdiqlanayotganini aytadi (foydalanuvchi aynan shuni tasdiqlaydi).
+function confirmationPrompt(description, assessment = {}) {
+  const what = String(description || '').replace(/\s+/g, ' ').trim().slice(0, 110).replace(/[.!?\s]+$/, '');
+  const lead = assessment.destructive ? 'That is destructive or hard to undo'
+    : assessment.externalSideEffect ? 'That sends something outside this machine'
+      : 'That needs your approval';
+  return `${lead}: ${what}. Say confirm to proceed, or cancel.`;
+}
 
 function needsBackgroundAgentTask(text) {
   const value = String(text || '').trim();
@@ -1433,7 +1452,7 @@ class RealtimeSession extends EventEmitter {
       if (!authorization.allowed) {
         this._pendingConfirmedAction = () => this._startBackgroundAgentTask(this.userTranscript);
         this.emit('telemetry', 'safety.confirmation_required', { risk: authorization.assessment.risk, kind: 'task' });
-        this._deliverSpokenAnswer('That one is destructive or hard to undo. Say confirm to proceed, or cancel.');
+        this._deliverSpokenAnswer(confirmationPrompt(this.userTranscript, authorization.assessment));
         return true;
       }
       this.emit('telemetry', 'router.decision', { route: 'realtime-with-background-agent' });
@@ -1462,8 +1481,7 @@ class RealtimeSession extends EventEmitter {
   _respondWithRealtimeConversation() {
     return this._sendResponseCreate({
       max_output_tokens: REALTIME_MAX_RESPONSE_TOKENS,
-      tool_choice: 'auto',
-      instructions: CONVERSATION_STYLE_INSTRUCTIONS,
+      tool_choice: 'auto'
     });
   }
 
@@ -1691,7 +1709,7 @@ class RealtimeSession extends EventEmitter {
     if (!authorization.allowed) {
       this._pendingConfirmedAction = () => this._runDirectFastAction(id);
       this.emit('telemetry', 'safety.confirmation_required', { risk: authorization.assessment.risk, kind: 'fast-action' });
-      await this._deliverSpokenAnswer('That one is destructive or hard to undo. Say confirm to proceed, or cancel.');
+      await this._deliverSpokenAnswer(confirmationPrompt(`run ${id}`, authorization.assessment));
       return;
     }
     const callId = 'direct-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
@@ -2528,5 +2546,5 @@ class RealtimeSession extends EventEmitter {
 module.exports = {
   RealtimeSession, resample16to24, needsGroundedAnswer, needsContextGrounding,
   needsExpertAnswer, needsBackgroundAgentTask, collectGrounding, matchDirectFastAction, prepareSpokenAnswer,
-  buildSessionUpdate, loadInstructions, runFullAgent
+  buildSessionUpdate, loadInstructions, runFullAgent, confirmationPrompt
 };

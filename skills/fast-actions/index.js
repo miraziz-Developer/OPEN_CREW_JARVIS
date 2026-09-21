@@ -44,9 +44,28 @@ function preloadActions() {
   return actionsReady;
 }
 
+let syncFallbackTried = false;
+
+function loadActionsSync() {
+  let base = [];
+  let learned = [];
+  try { base = JSON.parse(fs.readFileSync(BASE_FILE, 'utf8')); } catch (_) {}
+  try { learned = JSON.parse(fs.readFileSync(LEARNED_FILE, 'utf8')); } catch (_) {}
+  const seen = new Set(base.map(a => a.id));
+  const merged = base.slice();
+  for (const a of learned) if (!seen.has(a.id)) { merged.push(a); seen.add(a.id); }
+  return merged;
+}
+
 function loadActions() {
-  // Callers on the realtime path get a memory-only snapshot. The async preload
-  // starts at module load and runFastAction waits for it before execution.
+  // Realtime yo'li xotiradagi nusxani oladi; asinxron preload modul yuklanganda boshlanadi. Modul aynan shu
+  // sessiya ochilayotganda birinchi marta yuklansa, nusxa hali bo'sh bo'ladi va fast_action tool'i ro'yxatsiz
+  // qolib, JARVIS oddiy amallarni sekin run_task'ga yuborardi — shuning uchun bo'sh bo'lsa bir marta sinxron o'qiymiz.
+  if (!cachedActions.length && !syncFallbackTried) {
+    syncFallbackTried = true;
+    const merged = loadActionsSync();
+    if (merged.length) cachedActions = merged;
+  }
   return cachedActions;
 }
 preloadActions();

@@ -40,3 +40,18 @@ test('hedged musings are conversation, while real commands still start a backgro
     'Open the project folder and create a new file called notes.'
   ]) assert.equal(needsBackgroundAgentTask(text), true, text);
 });
+
+test('voice instructions tell the model it can act through run_task and must not ask for lookup-able details', () => {
+  const instructions = require('../skills/realtime-voice').loadInstructions();
+  assert.match(instructions, /never say you cannot do something/i);
+  assert.match(instructions, /never ask the user for information you can look up/i);
+  assert.match(instructions, /calendar and email/i);
+  assert.match(instructions, /recall_memory first/i);
+});
+
+test('confirmation prompts say exactly what is about to happen', () => {
+  const { confirmationPrompt } = require('../skills/realtime-voice');
+  assert.match(confirmationPrompt('Send an email to John saying I will be late.', { externalSideEffect: true }), /sends something outside this machine: Send an email to John saying I will be late\. Say confirm/);
+  assert.match(confirmationPrompt('Delete all my files', { destructive: true }), /destructive or hard to undo: Delete all my files/);
+  assert.ok(confirmationPrompt('x'.repeat(400), {}).length < 190);
+});
