@@ -45,6 +45,9 @@ class ConversationContext {
     return Boolean(this.state.lastActivityAt && at - this.state.lastActivityAt <= this.windowMs);
   }
 
+  // Suhbat oynasini turn yozmasdan yangilaydi (masalan faqat "Jarvis" deyilganda).
+  touch(at = this.now()) { this.state.lastActivityAt = at; }
+
   observe(role, text, options = {}) {
     const at = Number(options.at) || this.now();
     if (this.state.lastActivityAt && at - this.state.lastActivityAt > this.windowMs) this.reset();

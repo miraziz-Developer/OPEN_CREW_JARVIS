@@ -120,6 +120,10 @@ const NATIVE_MIC_MUTE_GRACE_MS = 150;
 const NATIVE_BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_NATIVE_BARGE_IN_CONFIRM_MS'), 10) || 250;
 const NATIVE_PREROLL_BYTES = 24000 * 2 * 1.2;
 const STOP_QUIET_MS = 6000;
+// Doim eshitib turish: bo'sh paytda mahalliy energiya darvozasi bulutga faqat nutq (+ oldingi 450 ms) yuboradi.
+const IDLE_GATE_MIN_RMS = parseInt(env('ALWAYS_LISTEN_MIN_RMS'), 10) || 140;
+const IDLE_GATE_HANGOVER_MS = parseInt(env('ALWAYS_LISTEN_HANGOVER_MS'), 10) || 900;
+const IDLE_GATE_PREROLL_BYTES = 24000 * 2 * 0.45;
 const BARGE_IN_VERIFY_TIMEOUT_MS = parseInt(env('REALTIME_BARGE_IN_VERIFY_MS'), 10) || 3500;
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
@@ -1017,7 +1021,14 @@ class RealtimeSession extends EventEmitter {
     this._suppressCurrentResponse = false;
     this._spec = null;
     this._serverSpeechOpen = false;
-    this._autoResponseOn = true;
+    this._wakeRequired = Boolean(options.wakeRequired);
+    this._autoResponseOn = !this._wakeRequired;
+    this._idlePreroll = [];
+    this._idlePrerollBytes = 0;
+    this._idleHangMs = 0;
+    this._idleFloor = 60;
+    this._wakeSyncTimer = this._wakeRequired ? setInterval(() => this._syncAutoResponse(), 3000) : null;
+    if (this._wakeSyncTimer?.unref) this._wakeSyncTimer.unref();
     this._dropStaleAudio = false;
     this._duck = null;
     this._quietUntil = 0;
@@ -1047,6 +1058,7 @@ class RealtimeSession extends EventEmitter {
     this._explicitUserSession = Boolean(options.explicitUserSession);
     this._explicitUserTurnPending = Boolean(options.explicitUserTrigger);
     this._addressedWakePending = Boolean(options.addressedWakeTrigger);
+    this._wakeRequiredOption = Boolean(options.wakeRequired);
     this._initialTranscript = String(options.initialTranscript || '').trim();
     // Native Realtime transcription is accepted immediately. The legacy
     // authoritative hook remains injectable only for isolated recovery tests;
@@ -1156,7 +1168,7 @@ class RealtimeSession extends EventEmitter {
       this._connecting = false;
       this.ws.send(JSON.stringify(buildSessionUpdate(provider, {
         startMediaAware: this._mediaModeActive,
-        speculative: SPECULATIVE_RESPONSE && !this._authoritativeTranscribe,
+        speculative: SPECULATIVE_RESPONSE && !this._authoritativeTranscribe && !this._wakeRequired,
         instructions: loadInstructions(),
         tools: buildTools()
       })));
@@ -1269,7 +1281,7 @@ class RealtimeSession extends EventEmitter {
             this._finalizeAuthoritativeTurn();
           }
         } else {
-          this._acceptTranscript(msg.transcript || '');
+          this._acceptTranscript(msg.transcript || '', { itemId: msg.item_id || msg.item?.id || '' });
         }
         break;
       }
@@ -1432,6 +1444,28 @@ class RealtimeSession extends EventEmitter {
         this.emit('turn_suppressed', 'wake-only', text);
         return false;
       }
+    }
+    // Doim eshitib turish: suhbat oynasidan tashqarida faqat "Jarvis" deb boshlangan/tugagan gap qabul qilinadi.
+    // Qolgan xona gaplari jimgina tashlanadi va serverdagi suhbat kontekstidan ham o'chiriladi (maxfiylik).
+    if (this._wakeRequired && !this._explicitUserSession && !this._conversationContext.isActive()) {
+      const addressed = require('../../core/wake-word-policy').extractAddressedCommand(this.userTranscript);
+      if (!addressed) {
+        this._discardSpeculative();
+        this._deleteItem(options.itemId);
+        this.emit('turn_suppressed', 'no-wake', '');
+        this.userTranscript = '';
+        return false;
+      }
+      this.userTranscript = addressed.command;
+      if (!this.userTranscript) {
+        this._discardSpeculative();
+        this._deleteItem(options.itemId);
+        this._conversationContext.touch();
+        this._syncAutoResponse();
+        this.emit('turn_suppressed', 'wake-only', '');
+        return false;
+      }
+      this._conversationContext.touch();
     }
     const confirmation = this._actionSafety.handleUtterance(this.userTranscript);
     if (confirmation.matched) {
@@ -1643,9 +1677,42 @@ class RealtimeSession extends EventEmitter {
 
   // Gapirish vaqtida server avtomatik javob yaratmasin (xona aks-sadosi "yangi gap" bo'lib qolmasin);
   // jim paytda esa yoqiq — taxminiy tez javob uchun.
+  _deleteItem(itemId) {
+    if (!itemId) return;
+    try { this.ws.send(JSON.stringify({ type: 'conversation.item.delete', item_id: itemId })); } catch (e) {}
+  }
+
+  // Suhbat oynasi tashqarisida bo'sh paytda serverga faqat nutq yuboriladi (energiya + oldingi 450 ms + hangover).
+  _idleGateActive() {
+    return this._wakeRequired && !this._explicitUserSession && !this.assistantSpeaking && !this._duck
+      && !this._serverSpeechOpen && !this._conversationContext.isActive();
+  }
+
+  _idleGate(audio) {
+    const level = rms(audio);
+    const chunkMs = audio.length / 48;
+    const threshold = Math.max(IDLE_GATE_MIN_RMS, this._idleFloor * 3.5);
+    if (level >= threshold) {
+      const opening = this._idleHangMs <= 0;
+      this._idleHangMs = IDLE_GATE_HANGOVER_MS;
+      const lead = opening ? this._idlePreroll.splice(0) : [];
+      this._idlePrerollBytes = 0;
+      return { send: true, audio: lead.length ? Buffer.concat([...lead, audio]) : audio, reason: 'speech', residualRms: level, correlation: 0, speechThresholdRms: Math.round(threshold) };
+    }
+    if (this._idleHangMs > 0) {
+      this._idleHangMs -= chunkMs;
+      return { send: true, audio, reason: 'hangover', residualRms: level, correlation: 0, speechThresholdRms: Math.round(threshold) };
+    }
+    this._idleFloor = this._idleFloor * 0.97 + Math.min(level, Math.max(this._idleFloor * 2, 80)) * 0.03;
+    this._idlePreroll.push(Buffer.from(audio));
+    this._idlePrerollBytes += audio.length;
+    while (this._idlePrerollBytes > IDLE_GATE_PREROLL_BYTES && this._idlePreroll.length > 1) this._idlePrerollBytes -= this._idlePreroll.shift().length;
+    return { send: false, audio, reason: 'idle-quiet', residualRms: level, correlation: 0, speechThresholdRms: Math.round(threshold) };
+  }
+
   _syncAutoResponse() {
     if (!this._speculativeEnabled()) return;
-    const want = !this.assistantSpeaking;
+    const want = !this.assistantSpeaking && (!this._wakeRequired || this._explicitUserSession || this._conversationContext.isActive());
     if (this._autoResponseOn === want) return;
     this._autoResponseOn = want;
     try {
@@ -1689,7 +1756,8 @@ class RealtimeSession extends EventEmitter {
 
   _beginSpeculative() {
     // Gapirish paytida kelgan speech_stopped (aks-sado) yangi taxminiy javobni ochmasin.
-    if (!this._speculativeEnabled() || this.assistantSpeaking || this._realtimeResponseActive) return;
+    // Server avtomatik javobi o'chiq bo'lsa (doim eshitish rejimida suhbat oynasidan tashqarida) taxminiy javob kutilmaydi.
+    if (!this._speculativeEnabled() || !this._autoResponseOn || this.assistantSpeaking || this._realtimeResponseActive) return;
     clearTimeout(this._specTimer);
     this._spec = { state: 'expected', held: [], calls: [], doneInfo: null, created: false };
     const spec = this._spec;
@@ -2508,6 +2576,7 @@ class RealtimeSession extends EventEmitter {
   }
 
   _nativeGate(audio) {
+    if (this._idleGateActive()) return this._idleGate(audio);
     const level = rms(audio);
     if (this.assistantSpeaking) {
       if (this._duck || this._bargeInConfirmed || this._serverSpeechOpen) {
@@ -2643,6 +2712,7 @@ class RealtimeSession extends EventEmitter {
     this.closed = true;
     if (this._pendingAuthoritativeTurn?.timer) clearTimeout(this._pendingAuthoritativeTurn.timer);
     this._pendingAuthoritativeTurn = null;
+    clearInterval(this._wakeSyncTimer);
     this.cancelRunningTasks();
     this._stopPlayback();
     try { this.ws && this.ws.close(); } catch (e) {}

@@ -2,7 +2,9 @@
 
 const WAKE_ALIASES = Object.freeze([
   'jarvis', 'jarviz', 'jervis', 'djervis', 'yarvis', 'jorvis', 'djarvis',
-  'charvis', 'jarv', 'hey jarvis', 'hey jervis'
+  'charvis', 'jarv', 'hey jarvis', 'hey jervis',
+  // Server transkripsiyasi "Jarvis" ni ba'zan shunday yozadi
+  'jarves', 'jarvas', 'jarvish', 'gervis', 'jervas', 'jarvice', 'jarvi', 'hey jarves'
 ]);
 
 function normalizeWakeText(text) {

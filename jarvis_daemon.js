@@ -135,6 +135,10 @@ const WAKE_STT_MIN_SPEECH_MS = 480;
 
 const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
 const NATIVE_AEC = (env('JARVIS_NATIVE_AEC') || 'true') !== 'false';
+// Doim eshitib turish: Azure Voice Live sessiyasi ochiq turadi va faqat "Jarvis" deb boshlangan gaplarga javob beradi
+// (openWakeWord/Whisper zaxira bo'lib qoladi). Bo'sh paytda bulutga faqat mahalliy darvozadan o'tgan nutq yuboriladi.
+const ALWAYS_LISTEN = (env('JARVIS_ALWAYS_LISTEN') || 'true') !== 'false';
+const ALWAYS_LISTEN_MAX_AGE_MS = Math.max(5, parseInt(env('ALWAYS_LISTEN_MAX_AGE_MIN'), 10) || 25) * 60000;
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
 // Provider VAD `speech_stopped` hodisasini yo'qotsa idle timer qayta
 // qurollanmay qolishi mumkin. Bu mustaqil watchdog stuck realtime sessiyani
@@ -624,6 +628,7 @@ async function mainLoop() {
     const session = new RealtimeSession({
       // Fon missiyalari bilan ko'prik: start/status/control millisekundlarda qaytadi (ovozli suhbat bloklanmaydi).
       missions: goalMissionApi,
+      wakeRequired: Boolean(trigger.alwaysOn),
       // Fn hands-free trigger butun ochiq sessiya davomida foydalanuvchi
       // Jarvisga murojaat qilayotganini tasdiqlaydi. Shuning uchun media
       // background gate follow-up gaplarni bloklamaydi. Wake-word trigger
@@ -661,7 +666,7 @@ async function mainLoop() {
       file: path.join(PROJECT_DIR, '.run', 'voice-latency.jsonl'),
       sessionId: flightRecorder.beginSession({ trigger: reason, mode: reason.includes('Fn') ? 'fn-hands-free' : 'wake-word' })
     });
-    voiceTelemetry.event(VOICE_MILESTONES.WAKE_DETECTED, { trigger: reason.includes('Fn') ? 'fn' : 'wake-word' });
+    if (!trigger.alwaysOn) voiceTelemetry.event(VOICE_MILESTONES.WAKE_DETECTED, { trigger: reason.includes('Fn') ? 'fn' : 'wake-word' });
     runtime.beginConversation(reason.includes('Fn') ? 'fn-hands-free' : 'wake-word');
     const connectStartedAt = Date.now();
     _activeRealtimeSession = session;
@@ -701,6 +706,7 @@ async function mainLoop() {
     let idleTimer = null;
     let staleSessionTimer = null;
     let lastRealtimeActivityAt = Date.now();
+    const sessionStartedAt = Date.now();
     let finished = false;
     let sessionWasReady = false;
     let lastUserTranscript = '';
@@ -737,6 +743,7 @@ async function mainLoop() {
       // Faol VAD turni uchun jimlik timeri bo'lmaydi. speech_stopped
       // transcription oynasini yakunlagach ushbu timer yana qurollanadi.
       if (userSpeaking) return;
+      if (trigger.alwaysOn) return;   // doim yoniq sessiya jimlikda yopilmaydi
       const delay = conversationIdleDelay({
         now: Date.now(),
         idleMs: REALTIME_IDLE_MS,
@@ -759,6 +766,11 @@ async function mainLoop() {
         runtimeTelemetry.vadWatchdogTimeout();
         wrn('Realtime VAD speech_stopped bermadi (' + Math.round((Date.now() - userSpeechStartedAt) / 1000) + 's) — stuck turn yopilyapti');
         finishRealtimeSession('VAD speech timeout');
+        return;
+      }
+      if (trigger.alwaysOn) {
+        // Uzoq ochiq sessiya server tomonida eskirishi mumkin — vaqti-vaqti bilan yangilaymiz (jimlik paytida).
+        if (Date.now() - sessionStartedAt > ALWAYS_LISTEN_MAX_AGE_MS && !userSpeaking && !session.assistantSpeaking) finishRealtimeSession('always-on yangilanmoqda');
         return;
       }
       const inactiveMs = Date.now() - lastRealtimeActivityAt;
@@ -793,7 +805,7 @@ async function mainLoop() {
         // close() callbacklari tugab state listening holatiga o'tgach yangi
         // session ochiladi. Shu sabab Fn stuck realtime sessiyani tiklaydi.
         setTimeout(() => triggerVoice('⌨️ Fn hands-free conversation'), 0);
-      }
+      } else scheduleAlwaysOn(1500);
     };
 
     session.on('ready', () => {
@@ -840,8 +852,9 @@ async function mainLoop() {
     });
     session.on('turn_suppressed', (reason, text) => {
       markRealtimeActivity();
+      if (reason === 'no-wake') return;   // xona gapi: hech qayerga yozilmaydi
       flightRecorder.textEvent('turn.suppressed', text, { reason });
-      inf('🔇 Realtime turn bloklandi (' + reason + '): ' + String(text || '').slice(0, 100));
+      if (reason !== 'no-wake' && reason !== 'wake-only') inf('🔇 Realtime turn bloklandi (' + reason + '): ' + String(text || '').slice(0, 100));
       runtime.setConversationMode('listening');
       if (reason === 'wake-only' && !shouldPlayAck) playWakeSound(WAKE_SOUND_PATH);
       armIdleTimer();
@@ -1043,6 +1056,24 @@ async function mainLoop() {
   // qilingan snapshotda triggerVoice chaqiriqlari qolib, funksiyaning o'zi
   // yo'qolgan edi — Porcupine/qarsak topilganda ReferenceError bo'lib daemon
   // qular edi. Fn DOWN hands-free suhbatni shu yer orqali ochadi.
+  // ── Doim eshitib turish sessiyasi ──
+  let alwaysOnTimer = null;
+  function ensureAlwaysOnSession() {
+    if (!ALWAYS_LISTEN || !REALTIME_ENABLED || _activeRealtimeSession || state !== 'listening' || Date.now() < _realtimeDisabledUntil) return false;
+    inf('👂 Doim eshitish sessiyasi ochilmoqda (faqat "Jarvis" deganingizda javob beradi)');
+    return startRealtimeSession('always-on', { alwaysOn: true, playAck: false });
+  }
+  function scheduleAlwaysOn(delay = 1500) {
+    if (!ALWAYS_LISTEN) return;
+    clearTimeout(alwaysOnTimer);
+    alwaysOnTimer = setTimeout(ensureAlwaysOnSession, delay);
+    alwaysOnTimer.unref?.();
+  }
+  if (ALWAYS_LISTEN) {
+    scheduleAlwaysOn(4000);
+    setInterval(ensureAlwaysOnSession, 7000).unref?.();
+  }
+
   function triggerVoice(reason, trigger = {}) {
     if (state !== 'listening') return false;
     inf('[triggerVoice] ' + reason + ' @' + new Date().toISOString() + ' trigger=' + JSON.stringify(trigger).slice(0,200));
