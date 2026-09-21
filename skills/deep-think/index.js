@@ -45,6 +45,9 @@ const SYSTEM_PROMPT =
   "- Start with the answer, not a preamble such as 'good question' or 'let's examine it'.\n" +
   "- Reply only in English.";
 
+const GROK_VOICE_TIMEOUT_MS = parseInt(env('GROK_VOICE_TIMEOUT_MS'), 10) || 14000;
+let grokSkipUntil = 0;
+
 function isComplexReasoningRequest(question) {
   const text = String(question || '').toLowerCase();
   return text.length > 700 || /\b(architecture|architect|strategy|tradeoffs?|design (?:a|an|the)?|multi[ -]?step|roadmap|migration|root cause|debug(?:ging)?|security review|implementation plan|system design|comprehensive|in[- ]depth|chuqur|arxitektura|strategiya|taqqosla|reja(?:si|lashtir)?|ko'p bosqich|muammoni tahlil)\b/i.test(text);
@@ -103,11 +106,15 @@ async function askExpert(question, context) {
   if (isComplexReasoningRequest(question)) {
     try {
       const grok = require('../../core/grok');
-      if (grok.available()) {
+      if (grok.available() && Date.now() >= grokSkipUntil) {
         const system = context ? SYSTEM_PROMPT + '\n\nSuhbat konteksti:\n' + String(context).slice(0, 4000) : SYSTEM_PROMPT;
-        return stripMarkdown(await grok.chat({ system, user: String(question).slice(0, 8000), maxTokens: 3500, timeoutMs: TIMEOUT_MS }));
+        // Ovozda kutayotgan odam bor: grok kechiksa (o'lchangan 10-46 s) tez tushib ketamiz.
+        return stripMarkdown(await grok.chat({ system, user: String(question).slice(0, 8000), maxTokens: 3500, timeoutMs: GROK_VOICE_TIMEOUT_MS, maxWaitMs: 2000 }));
       }
-    } catch (error) { lastError = error; }
+    } catch (error) {
+      lastError = error;
+      if (/timeout/i.test(error.message)) grokSkipUntil = Date.now() + 180000; // sekin turibdi — 3 daqiqa o'tkazib yuboramiz
+    }
   }
   for (const provider of reasoningProviders(question)) {
     try { return await requestExpert(question, context, provider); }
