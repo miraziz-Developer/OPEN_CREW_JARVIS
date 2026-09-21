@@ -14,12 +14,8 @@ const NOTIFY_KINDS = new Set(['mission.completed', 'mission.blocked', 'mission.f
 const MEMORY_KINDS = new Set(['mission.completed', 'mission.blocked', 'mission.failed']);
 
 function telegramNotifier(env) {
-  return text => new Promise(resolve => {
-    // .env ni har safar yangidan o'qiymiz: egasi ulangandan keyin qayta ishga tushirish shart emas.
-    let fresh = {};
-    try { fresh = require('./config').parseEnv(fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8')); } catch (_) {}
-    const token = (fresh.TELEGRAM_BOT_TOKEN) || env('TELEGRAM_BOT_TOKEN'), chatId = fresh.TELEGRAM_CHAT_ID || env('TELEGRAM_CHAT_ID');
-    if (!token || !chatId) return resolve(false);
+  const { parseOwnerIds } = require('./telegram-owner');
+  const post = (token, chatId, text) => new Promise(resolve => {
     const payload = JSON.stringify({ chat_id: chatId, text: String(text).slice(0, 3500) });
     const req = https.request(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
@@ -28,6 +24,16 @@ function telegramNotifier(env) {
     req.setTimeout(15000, () => { req.destroy(); resolve(false); });
     req.write(payload); req.end();
   });
+  return async text => {
+    // .env ni har safar yangidan o'qiymiz: egalar o'zgarganda qayta ishga tushirish shart emas.
+    let fresh = {};
+    try { fresh = require('./config').parseEnv(fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8')); } catch (_) {}
+    const token = (fresh.TELEGRAM_BOT_TOKEN) || env('TELEGRAM_BOT_TOKEN');
+    const owners = parseOwnerIds(fresh.TELEGRAM_CHAT_ID || env('TELEGRAM_CHAT_ID'), fresh.TELEGRAM_OWNER_IDS || env('TELEGRAM_OWNER_IDS'));
+    if (!token || !owners.length) return false;
+    const results = await Promise.all(owners.map(owner => post(token, owner, text)));
+    return results.some(Boolean);
+  };
 }
 
 /**

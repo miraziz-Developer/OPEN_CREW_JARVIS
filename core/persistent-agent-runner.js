@@ -29,7 +29,7 @@ function createRunner(options = {}) {
   const telemetry = options.telemetry || new RuntimeTelemetry({ file: path.join(projectDir, '.run', 'telemetry.json') });
   const openClawEnvironment = options.openClawEnvironment || resolveOpenClawEnvironment({ projectDir });
   const bridge = options.bridge || createAgentBridge({
-    chatId: env('TELEGRAM_CHAT_ID'), token: env('TELEGRAM_BOT_TOKEN'), projectDir, env,
+    chatId: env('TELEGRAM_CHAT_ID'), chatIds: [env('TELEGRAM_OWNER_IDS')], token: env('TELEGRAM_BOT_TOKEN'), projectDir, env,
     azureOpenAiKey: env('AZURE_OPENAI_KEY'), openClawEnvironment,
     skillPlatform: createSkillPlatform({ projectDir, env }), runtime: {}, telemetry
   });

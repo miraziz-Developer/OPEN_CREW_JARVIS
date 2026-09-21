@@ -68,12 +68,14 @@ console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
 const bot = new TelegramBot(TOKEN, { polling: false });
 const { createOwnerUpdateHandler, createOwnerTaskCommands } = require('./core/telegram-owner');
 const { createGmailTaskNotifier } = require('./core/gmail-task-notifier');
-let ownerId = getEnv('TELEGRAM_CHAT_ID');
+const { parseOwnerIds } = require('./core/telegram-owner');
+let ownerIds = parseOwnerIds(getEnv('TELEGRAM_CHAT_ID'), getEnv('TELEGRAM_OWNER_IDS'));
+let ownerId = ownerIds[0] || '';
 const { createPairing } = require('./core/telegram-pairing');
 const pairing = createPairing({ file: path.join(__dirname, '.run', 'telegram-pair-code.json'), envFile: path.join(__dirname, '.env') });
-const buildOwnerHandler = id => createOwnerUpdateHandler({ ownerId: id, dispatch: update => bot.processUpdate(update) });
-const isPaired = () => /^[1-9]\d*$/.test(ownerId);
-let ownerHandler = buildOwnerHandler(ownerId);
+const buildOwnerHandler = ids => createOwnerUpdateHandler({ ownerIds: ids.join(','), dispatch: update => bot.processUpdate(update) });
+const isPaired = () => ownerIds.length > 0;
+let ownerHandler = buildOwnerHandler(ownerIds);
 if (!isPaired()) {
   const state = pairing.ensureCode();
   console.error('Telegram locked: no owner yet. Pair from your private Telegram chat with the bot: /pair ' + state.code +
@@ -85,8 +87,9 @@ const telegramPoller = createTelegramPoller({
     if (!isPaired()) {
       const result = pairing.attempt(update?.message);
       if (result.ok) {
-        ownerId = result.ownerId;
-        ownerHandler = buildOwnerHandler(ownerId);
+        ownerIds = parseOwnerIds(result.ownerId);
+        ownerId = ownerIds[0];
+        ownerHandler = buildOwnerHandler(ownerIds);
         console.log('Telegram owner paired.');
         bot.sendMessage(ownerId, 'Paired. This chat now controls JARVIS. Restarting my services once so everything picks it up.').catch(() => {});
         // Daemon, mission runner va boshqalar TELEGRAM_CHAT_ID ni yangi o'qishi uchun bir martalik qayta ishga tushirish.

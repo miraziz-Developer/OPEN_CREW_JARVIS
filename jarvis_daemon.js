@@ -276,6 +276,7 @@ const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
 // TELEGRAM / TTS / AGENT BRIDGE (core/agent-bridge.js)
 // ════════════════════════════════════════════
 const { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders, askAgent } = createAgentBridge({
+  chatIds: [env('TELEGRAM_OWNER_IDS')],
   chatId: CHAT_ID, token: TOKEN, projectDir: PROJECT_DIR, env, azureOpenAiKey: AZURE_OPENAI_KEY,
   openClawEnvironment: resolveOpenClawEnvironment({ projectDir: PROJECT_DIR }),
   skillPlatform, runtime, telemetry: runtimeTelemetry

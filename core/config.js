@@ -98,6 +98,7 @@ const CONFIG_SCHEMA = Object.freeze({
   CONVERSATION_FOLLOWUP_MS: { type: 'integer', default: 60000, min: 5000, max: 120000 },
   ACTION_CONFIRMATION_TTL_MS: { type: 'integer', default: 30000, min: 5000, max: 120000 },
   JARVIS_FULL_AUTONOMY: { type: 'boolean', default: false },
+  TELEGRAM_OWNER_IDS: { type: 'string', default: '' },
   JARVIS_NATIVE_AEC: { type: 'boolean', default: true },
   REALTIME_NATIVE_BARGE_IN_RMS: { type: 'integer', default: 450, min: 50, max: 8000 },
   TURN_JOURNAL_MAX_BYTES: { type: 'integer', default: 8388608, min: 65536, max: 1073741824 },

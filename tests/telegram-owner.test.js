@@ -21,7 +21,7 @@ test('owner gate blocks every unauthorized command and media update before dispa
 });
 
 test('owner gate fails closed without a positive private owner ID', () => {
-  for (const ownerId of ['', undefined, '-123', '123,456', 'owner', '0']) {
+  for (const ownerId of ['', undefined, '-123', 'owner', '0', '1.5']) {
     const handler = createOwnerUpdateHandler({ ownerId, dispatch: () => assert.fail('must not dispatch') });
     assert.equal(handler({ message: message() }), false);
   }
@@ -40,4 +40,17 @@ test('owner commands validate task IDs, route explicit approval/rejection, and s
   assert.deepEqual(approvals.map(call => call[1]), [{ approved: true, source: 'telegram-owner' }, { approved: false, source: 'telegram-owner' }]);
   assert.match(replies[1].text, /Summary/);
   assert.match(replies[2].text, /Usage/);
+});
+test('multiple owners are each trusted in their own private chat, everyone else is ignored', () => {
+  const { parseOwnerIds } = require('../core/telegram-owner');
+  assert.deepEqual(parseOwnerIds('111111111', '111111111, 222222222;abc,0'), ['111111111', '222222222']);
+  const dispatched = [];
+  const handler = createOwnerUpdateHandler({ ownerId: '111111111', ownerIds: '222222222', dispatch: update => dispatched.push(update.id) });
+  const message = (id, chat = id, type = 'private') => ({ id: `${id}/${chat}`, message: { text: 'hi', chat: { id: chat, type }, from: { id, is_bot: false } } });
+  assert.equal(handler(message(111111111)), true);
+  assert.equal(handler(message(222222222)), true);
+  assert.equal(handler(message(111)), false);
+  assert.equal(handler(message(222222222, -100, 'group')), false);
+  assert.equal(handler(message(222222222, 111111111)), false);
+  assert.deepEqual(dispatched, ['111111111/111111111', '222222222/222222222']);
 });

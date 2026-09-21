@@ -81,7 +81,7 @@ const FALLBACK_NOTICE = '[The main computer agent is temporarily unavailable, so
   'calendar, email, files, apps or browser, say in one short sentence that the agent is temporarily unavailable and will work again shortly; ' +
   'never claim the capability does not exist. If it is a general question, simply answer it.]\n\n';
 
-function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, openClawEnvironment, openClawBaseEnvironment, spawnProcess = spawn, selfHealRunner, skillPlatform, runtime, telemetry } = {}) {
+function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenAiKey, openClawEnvironment, openClawBaseEnvironment, spawnProcess = spawn, selfHealRunner, skillPlatform, runtime, telemetry } = {}) {
   const openClawTimeoutMs = Math.max(30000, parseInt(env('OPENCLAW_AGENT_TIMEOUT_MS'), 10) || 300000);
   const deepThinkTimeoutMs = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
   const longTaskNoticeMs = Math.min(
@@ -120,10 +120,19 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ope
     telemetry?.openClawAttempt(attempt);
   }
 
+  // Xabarnomalar barcha egalarga boradi (TELEGRAM_OWNER_IDS + TELEGRAM_CHAT_ID).
+  const recipients = () => require('./telegram-owner').parseOwnerIds(chatId, ...(Array.isArray(chatIds) ? chatIds : [chatIds]));
+
   function sendTelegram(text) {
+    const targets = recipients();
+    if (targets.length > 1) return Promise.all(targets.map(target => sendTelegramTo(target, text))).then(results => results.some(Boolean));
+    return sendTelegramTo(targets[0], text);
+  }
+
+  function sendTelegramTo(target, text) {
     return new Promise((resolve) => {
-      if (!chatId) { resolve(false); return; }
-      const payload = JSON.stringify({ chat_id: chatId, text: String(text).substring(0, 4096) });
+      if (!target) { resolve(false); return; }
+      const payload = JSON.stringify({ chat_id: target, text: String(text).substring(0, 4096) });
       const req = https.request({ hostname: 'api.telegram.org', path: '/bot' + token + '/sendMessage', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(true)); });
       req.on('error', () => resolve(false)); req.setTimeout(15000, () => { req.destroy(); resolve(false); });
       req.write(payload); req.end();
@@ -132,8 +141,9 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ope
 
   function sendTelegramVoice(oggPath) {
     return new Promise((resolve) => {
-      if (!chatId || !fs.existsSync(oggPath)) { resolve(false); return; }
-      try { execSync('curl -s -X POST "https://api.telegram.org/bot' + token + '/sendVoice" -F "chat_id=' + chatId + '" -F "voice=@' + oggPath + '" > /dev/null 2>&1'); resolve(true); }
+      const targets = recipients();
+      if (!targets.length || !fs.existsSync(oggPath)) { resolve(false); return; }
+      try { for (const target of targets) execSync('curl -s -X POST "https://api.telegram.org/bot' + token + '/sendVoice" -F "chat_id=' + target + '" -F "voice=@' + oggPath + '" > /dev/null 2>&1'); resolve(true); }
       catch (e) { resolve(false); }
     });
   }

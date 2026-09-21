@@ -1,13 +1,24 @@
 'use strict';
 
-function createOwnerUpdateHandler({ ownerId, dispatch }) {
-  const owner = String(ownerId || '').trim();
-  const configured = /^[1-9]\d*$/.test(owner);
+// TELEGRAM_OWNER_IDS="123,456": bir nechta ega (har biri o'z shaxsiy chatida). TELEGRAM_CHAT_ID — asosiy ega.
+function parseOwnerIds(...values) {
+  const ids = [];
+  for (const value of values) {
+    for (const part of String(value || '').split(/[\s,;]+/)) {
+      if (/^[1-9]\d*$/.test(part) && !ids.includes(part)) ids.push(part);
+    }
+  }
+  return ids;
+}
+
+function createOwnerUpdateHandler({ ownerId, ownerIds, dispatch }) {
+  const owners = parseOwnerIds(ownerId, ownerIds);
+  const configured = owners.length > 0;
   return update => {
     // Edited messages must not replay actions; only a private owner message is trusted.
     const message = update?.message;
     if (!configured || !message || message.chat?.type !== 'private' || message.from?.is_bot
-      || String(message.from?.id) !== owner || String(message.chat?.id) !== owner) return false;
+      || !owners.includes(String(message.from?.id)) || String(message.chat?.id) !== String(message.from?.id)) return false;
     dispatch(update);
     return true;
   };
@@ -42,4 +53,4 @@ function createOwnerTaskCommands({ bridge, notifier, send }) {
   };
 }
 
-module.exports = { createOwnerUpdateHandler, createOwnerTaskCommands };
+module.exports = { createOwnerUpdateHandler, createOwnerTaskCommands, parseOwnerIds };
