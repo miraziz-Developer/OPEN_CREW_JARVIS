@@ -5,6 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { PROJECT_DIR } = require('../paths');
 const llm = require('../llm');
+const { resolveOpenClawEnvironment } = require('../openclaw-credentials');
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
@@ -63,6 +64,11 @@ function createWorkers(options = {}) {
   const spawnFn = options.spawn || spawn;
   const azureKey = () => env('AZURE_OPENAI_KEY');
   const azureBase = () => env('AZURE_OPENAI_ENDPOINT');
+  // OpenClaw gateway tokeni launchd muhitida yo'q — loyihaning .env faylidan olinadi.
+  const openClawEnv = () => {
+    try { return resolveOpenClawEnvironment({ projectDir: PROJECT_DIR }); }
+    catch (_) { return { ...process.env, AZURE_OPENAI_KEY: azureKey(), JARVIS_PROJECT_DIR: PROJECT_DIR }; }
+  };
   const agentModel = () => env('MISSION_WORKER_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini'));
 
   // 1) To'liq OpenClaw agenti: barcha skill'lar (kalendar, pochta, Telegram, fayl, ilovalar, veb qidiruv, xotira)
@@ -71,7 +77,7 @@ function createWorkers(options = {}) {
       const sessionKey = `agent:main:mission-${mission.id}-${task.id}`;
       const result = await runProcess('openclaw', ['agent', '--session-key', sessionKey, '--message', prompt, '--agent', 'main'], {
         spawn: spawnFn, cwd: PROJECT_DIR, timeoutMs, stallMs: 15 * 60 * 1000,
-        env: { ...process.env, AZURE_OPENAI_KEY: azureKey(), JARVIS_PROJECT_DIR: PROJECT_DIR }
+        env: openClawEnv()
       });
       const output = cleanOutput(result.stdout);
       if (result.timedOut) return { ok: false, output, error: 'agent timeout' };

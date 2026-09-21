@@ -3,10 +3,10 @@
     "defaults": {
       "workspace": "/Users/mirazizerkinaliyev_dev/.openclaw/workspace",
       "model": {
-        "primary": "azure-openai/gpt-5.6-sol"
+        "primary": "azure-openai/gpt-5-mini"
       },
       "models": {
-        "azure-openai/gpt-5.6-sol": {}
+        "azure-openai/gpt-5-mini": {}
       },
       "skills": [
         "azure-tts",
@@ -59,7 +59,7 @@
       "azure-openai": {
         "api": "azure-openai-responses",
         "auth": "api-key",
-        "baseUrl": "https://mirazizerkinaliyev553-4-resource.services.ai.azure.com/openai/v1",
+        "baseUrl": "https://proj-defaultasd.services.ai.azure.com/openai/v1",
         "apiKey": {
           "source": "env",
           "provider": "default",
@@ -68,8 +68,8 @@
         "contextWindow": 128000,
         "models": [
           {
-            "id": "gpt-5.6-sol",
-            "name": "GPT-5.6 Sol",
+            "id": "gpt-5-mini",
+            "name": "GPT-5 mini",
             "input": [
               "text"
             ],

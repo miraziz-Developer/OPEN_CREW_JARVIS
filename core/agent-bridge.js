@@ -77,6 +77,10 @@ function classifyProviderError(error) {
 // xil Telegram/TTS chiqishiga murojaat qiladi; bu shu mantiqning yagona
 // nusxasi (daemon-tomon uchun — dependency'lar options orqali uzatiladi,
 // module-level closure emas, shunda alohida test/qayta ishlatish mumkin).
+const FALLBACK_NOTICE = '[The main computer agent is temporarily unavailable, so you have no tools right now. If the request needs the user\'s computer, ' +
+  'calendar, email, files, apps or browser, say in one short sentence that the agent is temporarily unavailable and will work again shortly; ' +
+  'never claim the capability does not exist. If it is a general question, simply answer it.]\n\n';
+
 function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, openClawEnvironment, openClawBaseEnvironment, spawnProcess = spawn, selfHealRunner, skillPlatform, runtime, telemetry } = {}) {
   const openClawTimeoutMs = Math.max(30000, parseInt(env('OPENCLAW_AGENT_TIMEOUT_MS'), 10) || 300000);
   const deepThinkTimeoutMs = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
@@ -402,7 +406,8 @@ function createAgentBridge({ chatId, token, projectDir, env, azureOpenAiKey, ope
     {
       id: 'azure-deep-think', priority: 1, timeoutMs: deepThinkTimeoutMs + 5000,
       invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
-        question: message,
+        // Bu zaxira asbobsiz LLM: asosiy agent ishlamay qolganda "qila olmayman" deb yolg'on gapirmasligi kerak.
+        question: FALLBACK_NOTICE + message,
         context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined
       })
     }
