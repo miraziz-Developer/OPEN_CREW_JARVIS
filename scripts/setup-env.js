@@ -40,6 +40,11 @@ async function main() {
   if (!fs.existsSync(ENV)) { fs.copyFileSync(path.join(ROOT, '.env.example'), ENV); console.log('✅ .env yaratildi'); }
   fs.chmodSync(ENV, 0o600);
   let text = fs.readFileSync(ENV, 'utf8');
+  if (!parse(text).get('OPENCLAW_GATEWAY_TOKEN')) {
+    text = setKey(text, 'OPENCLAW_GATEWAY_TOKEN', require('crypto').randomBytes(24).toString('hex'));
+    fs.writeFileSync(ENV, text, { mode: 0o600 });
+    console.log('✅ OPENCLAW_GATEWAY_TOKEN avtomatik yaratildi');
+  }
   const current = parse(text);
   const missing = REQUIRED.filter(([k]) => !current.get(k));
   if (!missing.length) { console.log('✅ .env to‘liq'); return; }

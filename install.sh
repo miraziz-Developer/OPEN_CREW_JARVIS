@@ -38,10 +38,16 @@ npm ci --no-audit --no-fund >/dev/null && ok "npm ci"
 step "3/8 Sozlamalar (.env)"
 node scripts/setup-env.js || warn ".env ni to'ldiring (nano .env), keyin bu skriptni qayta ishga tushiring"
 touch -a .env; chmod 600 .env
-# Aniqlangan yo'llarni yozib qo'yamiz (bo'sh bo'lsa)
-set_default() { grep -q "^$1=." .env 2>/dev/null || { grep -q "^$1=" .env && sed -i '' "s#^$1=.*#$1=$2#" .env || echo "$1=$2" >> .env; }; }
+# Aniqlangan yo'llarni .env ga yozamiz (qayta ishga tushirsa ham xavfsiz)
+set_env() { if grep -q "^$1=" .env; then sed -i '' "s#^$1=.*#$1=$2#" .env; else echo "$1=$2" >> .env; fi; }
 WBIN="$(command -v whisper-cli || true)"
-[[ -n "$WBIN" ]] && set_default WHISPER_WAKE_BINARY "$WBIN"
+WMODEL="$DIR/models/whisper/ggml-tiny.en.bin"
+if [[ -n "$WBIN" ]]; then
+  mkdir -p models/whisper
+  [[ -s "$WMODEL" ]] || curl -fsSL -o "$WMODEL" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin || rm -f "$WMODEL"
+fi
+if [[ -n "$WBIN" && -s "$WMODEL" ]]; then set_env WHISPER_WAKE_ENABLED true; set_env WHISPER_WAKE_BINARY "$WBIN"; set_env WHISPER_WAKE_MODEL "$WMODEL"
+else set_env WHISPER_WAKE_ENABLED false; warn "whisper.cpp modeli yo'q — zaxira wake o'chirildi (openWakeWord asosiy)"; fi
 
 step "4/8 Wake-word (openWakeWord)"
 [[ -x .venv-openwakeword/bin/python ]] || bash scripts/setup-openwakeword.sh >/dev/null 2>&1 || warn "openWakeWord o'rnatilmadi (STT zaxira ishlaydi)"
