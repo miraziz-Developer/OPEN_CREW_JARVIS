@@ -99,6 +99,16 @@ function requestExpert(question, context, provider) {
 
 async function askExpert(question, context) {
   let lastError;
+  // Murakkab so'rovlar avval kuchli grok'ka (daqiqalik limit ichida); band/yo'q bo'lsa eski zanjir.
+  if (isComplexReasoningRequest(question)) {
+    try {
+      const grok = require('../../core/grok');
+      if (grok.available()) {
+        const system = context ? SYSTEM_PROMPT + '\n\nSuhbat konteksti:\n' + String(context).slice(0, 4000) : SYSTEM_PROMPT;
+        return stripMarkdown(await grok.chat({ system, user: String(question).slice(0, 8000), maxTokens: 3500, timeoutMs: TIMEOUT_MS }));
+      }
+    } catch (error) { lastError = error; }
+  }
   for (const provider of reasoningProviders(question)) {
     try { return await requestExpert(question, context, provider); }
     catch (error) { lastError = error; }

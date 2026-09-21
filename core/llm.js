@@ -73,6 +73,13 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort }) {
 }
 
 async function complete(options = {}) {
+  // "Qiyin" chaqiruvlar (reja, yakuniy tekshiruv) avval kuchli modelga; limit/xato bo'lsa jim arzon modelga tushadi.
+  if (options.hard) {
+    try {
+      const grok = require('./grok');
+      if (grok.available()) return await grok.chat({ system: options.system, user: options.user, maxTokens: Math.max(options.maxOutputTokens || 0, 6000), timeoutMs: options.timeoutMs || 180000 });
+    } catch (_) { /* fallback below */ }
+  }
   const model = options.model || env('MISSION_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini'));
   const attempts = options.retries ?? 2;
   let lastError;

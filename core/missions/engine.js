@@ -149,7 +149,7 @@ class GoalEngine {
   async plan(mission) {
     const notes = mission.notes.length ? `\nUser notes:\n- ${mission.notes.join('\n- ')}` : '';
     const plan = await this.llm.completeJson({
-      system: PLAN_SYSTEM, user: `Goal: ${mission.goal}${notes}`, model: this.model, effort: 'medium', maxOutputTokens: 6000
+      system: PLAN_SYSTEM, user: `Goal: ${mission.goal}${notes}`, model: this.model, effort: 'medium', maxOutputTokens: 6000, hard: true
     });
     mission.criteria = (Array.isArray(plan.criteria) ? plan.criteria : []).map(c => clip(c, 300)).filter(Boolean).slice(0, 8);
     if (!mission.criteria.length) mission.criteria = [`The goal is fully achieved: ${clip(mission.goal, 200)}`];
@@ -304,7 +304,7 @@ class GoalEngine {
     let verdict;
     try {
       verdict = await this.llm.completeJson({
-        system: REFLECT_SYSTEM, model: this.model, effort: 'medium', maxOutputTokens: 4000,
+        system: REFLECT_SYSTEM, model: this.model, effort: 'medium', maxOutputTokens: 4000, hard: true,
         user: `Goal: ${mission.goal}\nSuccess criteria:\n- ${mission.criteria.join('\n- ')}\n\nAll tasks are finished or failed:\n${this._digest(mission)}\n\n` +
           'There is no task that just ran. Decide whether the goal is achieved (with evidence from the results above) or add the new tasks still needed.'
       });

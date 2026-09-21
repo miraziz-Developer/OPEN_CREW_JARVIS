@@ -137,6 +137,7 @@ function getHud() {
     ambient: readJsonSafe(path.join(PROJECT_DIR, '.run', 'ambient-context.json'), null),
     conversation: (readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), {}).conversation) || null,
     usage: sharedMeter().totals(),
+    grok: { configured: Boolean(require('../core/llm-env').env('GROK_KEY')), model: require('../core/llm-env').env('GROK_DEPLOYMENT') || 'grok-4.6' },
     telemetry
   };
 }

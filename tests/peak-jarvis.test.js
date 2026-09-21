@@ -65,3 +65,25 @@ test('voice model is offered web_open, file_op and undo_last', () => {
   const names = require('../skills/realtime-voice').buildTools().map(t => t.name);
   for (const n of ['web_open', 'file_op', 'undo_last']) assert.ok(names.includes(n), n);
 });
+
+test('grok token window enforces the per-minute budget, waits for room, and gives up on long waits', async () => {
+  const { TokenWindow, BudgetError } = require('../core/grok');
+  let t = 0; const w = new TokenWindow({ limit: 1000, now: () => t, sleep: async ms => { t += ms; } });
+  await w.acquire(600); await w.acquire(300);
+  assert.equal(w.used(), 900);
+  await w.acquire(400, 70000);                 // must wait for the first entry to age out
+  assert.ok(t >= 60000); assert.ok(w.used() <= 1000);
+  await assert.rejects(w.acquire(900, 100), BudgetError); // would need a long wait
+});
+
+test('grok chat adjusts to real usage, honours 429 Retry-After, and llm.complete falls back silently', async () => {
+  process.env.GROK_KEY = 'k'; process.env.GROK_ENDPOINT = 'https://example/openai/v1';
+  const { chat, TokenWindow, BudgetError } = require('../core/grok');
+  let t = 0; const w = new TokenWindow({ limit: 10000, now: () => t, sleep: async ms => { t += ms; } });
+  const ok = await chat({ user: 'hi', maxTokens: 500 }, { window: w, transport: async () => ({ status: 200, headers: {}, data: JSON.stringify({ choices: [{ message: { content: 'answer' } }], usage: { total_tokens: 42 } }) }) });
+  assert.equal(ok, 'answer'); assert.equal(w.used(), 42);
+  await assert.rejects(chat({ user: 'hi', maxTokens: 500, maxWaitMs: 10 }, { window: w, transport: async () => ({ status: 429, headers: { 'retry-after': '30' }, data: '' }) }), BudgetError);
+  await assert.rejects(chat({ user: 'again', maxWaitMs: 10 }, { window: w, transport: async () => { throw new Error('should be blocked'); } }), BudgetError);
+  delete process.env.GROK_KEY; delete process.env.GROK_ENDPOINT;
+  const { available } = require('../core/grok'); assert.equal(available(), false);
+});
