@@ -474,7 +474,7 @@ function selfKnowledgeBlock() {
     if (has('recall_memory')) can.push('search long-term memory');
     const workers = ['babyagi:.venv-babyagi', 'autogpt:.venv-autogpt', 'browser:.venv-workers', 'interpreter:.venv-workers'].filter(w => exists(w.split(':')[1])).map(w => w.split(':')[0]);
     const cannot = [];
-    if (!exists(path.join('.run', 'google-oauth.json')) && !fs.existsSync(path.join(process.env.HOME || '', '.jarvis', 'google-oauth.json'))) cannot.push('read Gmail or Calendar (Google is not connected yet)');
+    if (!exists('.google-tokens.json')) cannot.push('read Gmail or Calendar (Google is not connected yet)');
     cannot.push('act on other devices; see the screen continuously (only on request or ambient app name)');
     return '\n\nYOUR REAL ABILITIES RIGHT NOW (generated from the live system; do not claim more): ' + can.join('; ') + '.' +
       (workers.length ? ' Mission workers installed: ' + workers.join(', ') + '.' : '') +

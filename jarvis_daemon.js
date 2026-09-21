@@ -387,6 +387,8 @@ if ((env('MORNING_BRIEF_ENABLED') || 'true') !== 'false') {
     getMissions: () => goalMissionStore.list(),
     getUsage: () => { const d = new Date(Date.now() - 86400000); return require('./core/usage-meter').sharedMeter().totals(require('./core/usage-meter').dayKey(d.getTime())); },
     getYesterday: async () => '',
+    getEvents: async () => { const r = await require('./skills/google-calendar').listEvents(1, 8); return r.status === 'ok' ? r.events.filter(e => String(e.start || '').slice(0, 10) === localDateStr()) : []; },
+    getUnread: async () => { const r = await require('./skills/gmail').listMessages('is:unread category:primary newer_than:2d', 10); return r.status === 'ok' ? r.messages : []; },
     sendTelegram,
     announce: text => { try { if (_activeRealtimeSession) _activeRealtimeSession.announce(text.replace(/\n/g, ' ')); } catch (_) {} }
   });

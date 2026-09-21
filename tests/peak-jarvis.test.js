@@ -87,3 +87,8 @@ test('grok chat adjusts to real usage, honours 429 Retry-After, and llm.complete
   process.env.GROK_KEY = ''; process.env.GROK_ENDPOINT = '';
   const { available } = require('../core/grok'); assert.equal(available(), false);
 });
+
+test('morning brief includes today\'s calendar and unread mail when available', () => {
+  const text = composeBrief({ now: new Date('2026-09-22T08:00:00'), events: [{ start: '2026-09-22T10:30:00+05:00', title: 'Standup' }], unread: [{ subject: 'Interview invite' }, { subject: 'Invoice' }] });
+  assert.match(text, /Today: 10:30 Standup/); assert.match(text, /Unread mail: 2 — Interview invite \| Invoice/);
+});
