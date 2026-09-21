@@ -84,6 +84,6 @@ test('grok chat adjusts to real usage, honours 429 Retry-After, and llm.complete
   assert.equal(ok, 'answer'); assert.equal(w.used(), 42);
   await assert.rejects(chat({ user: 'hi', maxTokens: 500, maxWaitMs: 10 }, { window: w, transport: async () => ({ status: 429, headers: { 'retry-after': '30' }, data: '' }) }), BudgetError);
   await assert.rejects(chat({ user: 'again', maxWaitMs: 10 }, { window: w, transport: async () => { throw new Error('should be blocked'); } }), BudgetError);
-  delete process.env.GROK_KEY; delete process.env.GROK_ENDPOINT;
+  process.env.GROK_KEY = ''; process.env.GROK_ENDPOINT = '';
   const { available } = require('../core/grok'); assert.equal(available(), false);
 });
