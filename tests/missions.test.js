@@ -235,7 +235,7 @@ test('job applications and recruiter outreach always need approval, while resear
   assert.equal(needs('Message the HR of each company about the role'), true);
 });
 
-test('runner keeps the Mac awake only while missions are active, and pauses new steps over the daily token budget', async () => {
+test('runner keeps the Mac awake only while missions are active, and only notifies (never pauses) over the daily token budget', async () => {
   const { UsageMeter } = require('../core/usage-meter');
   const spawned = [];
   const fakeSpawn = (command, args) => {
@@ -252,19 +252,14 @@ test('runner keeps the Mac awake only while missions are active, and pauses new 
 
   usage.add('llm_tokens', 1500);
   usage.add('voice_seconds', 90);
-  const mission = store.create('blocked by budget');
-  await runner.tick();
-  assert.equal(store.get(mission.id).status, 'planning', 'no step starts while over budget');
-  assert.ok(notices.some(text => /Voice listening used 2 minutes/.test(text)) || notices.some(text => /Voice listening used 1 minutes/.test(text)) || notices.length >= 1);
-  assert.ok(store.readEventsSince(0).events.some(e => /token budget reached/.test(e.text)));
-  assert.equal(spawned.filter(item => item.command === 'caffeinate').length, 1);
+  const mission = store.create('over budget but keeps running');
+  for (let i = 0; i < 6; i++) { await runner.tick(); await new Promise(resolve => setTimeout(resolve, 20)); }
+  assert.equal(store.get(mission.id).status, 'completed', 'budget must not stop missions');
+  assert.ok(notices.some(text => /Voice listening used/.test(text)));
+  assert.ok(notices.some(text => /Heads up: missions used/.test(text) && /keep running/.test(text)));
+  assert.equal(notices.filter(text => /Heads up/.test(text)).length, 1, 'only one budget notice per level per day');
+  assert.equal(spawned.filter(item => item.command === 'caffeinate').length >= 1, true);
   assert.deepEqual(spawned[0].args.slice(0, 2), ['-i', '-w']);
-
-  const before = spawned.length;
-  await runner.tick();
-  assert.equal(spawned.length, before, 'caffeinate is not respawned every tick');
-  store.enqueue(mission.id, 'cancel');
-  await runner.tick();
   await runner.tick();
   assert.equal(runner.isAwake(), false);
   assert.equal(spawned[0].proc.killed, true);

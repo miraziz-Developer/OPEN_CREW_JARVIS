@@ -179,7 +179,7 @@ const skillPlatform = createSkillPlatform({ projectDir: PROJECT_DIR, env });
 const goalMissionStore = new GoalMissionStore({ dir: path.join(PROJECT_DIR, '.run', 'missions') });
 const goalMissionApi = createMissionApi(goalMissionStore);
 let goalEventOffset = goalMissionStore.eventsOffset();
-const GOAL_VOICE_EVENTS = new Set(['mission.completed', 'mission.blocked', 'mission.failed', 'mission.needs_approval']);
+const GOAL_VOICE_EVENTS = new Set(['mission.completed', 'mission.blocked', 'mission.failed', 'mission.needs_approval', 'usage.alert']);
 setInterval(() => {
   try {
     const { events, offset } = goalMissionStore.readEventsSince(goalEventOffset);
@@ -1039,8 +1039,11 @@ async function mainLoop() {
           reason: 'socket-closed-unexpectedly'
         });
         if (sessionWasReady) {
-          playSystemSound('Basso');
-          sendTelegram('⚠️ The voice session disconnected unexpectedly. It will reconnect on the next invocation.');
+          // Doim eshitish sessiyasi serverdan vaqti-vaqti bilan uziladi va o'zi qayta ulanadi — bunda ovoz/xabar yo'q.
+          if (!trigger.alwaysOn) {
+            playSystemSound('Basso');
+            sendTelegram('⚠️ The voice session disconnected unexpectedly. It will reconnect on the next invocation.');
+          }
         }
       }
       finishRealtimeSession('ulanish yopildi');

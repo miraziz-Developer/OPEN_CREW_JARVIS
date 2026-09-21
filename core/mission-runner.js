@@ -10,7 +10,7 @@ const { MissionStore } = require('./missions/store');
 const { GoalEngine } = require('./missions/engine');
 const { createWorkers } = require('./workers');
 
-const NOTIFY_KINDS = new Set(['mission.completed', 'mission.blocked', 'mission.failed', 'mission.needs_approval']);
+const NOTIFY_KINDS = new Set(['mission.completed', 'mission.blocked', 'mission.failed', 'mission.needs_approval', 'usage.alert']);
 const MEMORY_KINDS = new Set(['mission.completed', 'mission.blocked', 'mission.failed']);
 
 function telegramNotifier(env) {
@@ -24,7 +24,10 @@ function telegramNotifier(env) {
     req.setTimeout(15000, () => { req.destroy(); resolve(false); });
     req.write(payload); req.end();
   });
+  const briefer = new (require('./telegram-brief').TelegramBrief)({ llm: require('./llm') });
   return async text => {
+    text = await briefer.prepare(text);
+    if (!text) return false;
     // .env ni har safar yangidan o'qiymiz: egalar o'zgarganda qayta ishga tushirish shart emas.
     let fresh = {};
     try { fresh = require('./config').parseEnv(fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8')); } catch (_) {}
@@ -105,12 +108,16 @@ function createRunner(options = {}) {
     if (voiceMinutesAlert && (totals.voice_seconds || 0) / 60 >= voiceMinutesAlert && usage.once('voice-alert')) {
       try { await notify(`Voice listening used ${Math.round((totals.voice_seconds || 0) / 60)} minutes of cloud audio today (alert at ${voiceMinutesAlert}).`); } catch (_) {}
     }
-    const overBudget = Boolean(tokenBudget && (totals.llm_tokens || 0) >= tokenBudget);
-    if (overBudget && usage.once('token-budget')) {
-      const text = `Daily mission token budget reached (${Math.round((totals.llm_tokens || 0) / 1000)}k of ${Math.round(tokenBudget / 1000)}k). Missions are paused until tomorrow; raise MISSION_DAILY_TOKEN_BUDGET to continue now.`;
-      store.appendEvent({ kind: 'mission.blocked', missionId: null, n: 0, text });
+    // Byudjet oshsa missiyalar TO'XTAMAYDI — faqat bir marta xabar beriladi (kuniga bir marta, keyin har +50% da).
+    let freshLevel = false;
+    for (const step of [1, 1.5, 2, 3]) {
+      if (tokenBudget && (totals.llm_tokens || 0) >= tokenBudget * step && usage.once(`token-budget-${step}`)) freshLevel = true;
     }
-    return { overBudget };
+    if (freshLevel) {
+      store.appendEvent({ kind: 'usage.alert', missionId: null, n: 0,
+        text: `Heads up: missions used ${Math.round((totals.llm_tokens || 0) / 1000)}k tokens today (limit ${Math.round(tokenBudget / 1000)}k). They keep running.` });
+    }
+    return { overBudget: false };
   }
 
   function heartbeat() {

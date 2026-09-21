@@ -123,7 +123,15 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
   // Xabarnomalar barcha egalarga boradi (TELEGRAM_OWNER_IDS + TELEGRAM_CHAT_ID).
   const recipients = () => require('./telegram-owner').parseOwnerIds(chatId, ...(Array.isArray(chatIds) ? chatIds : [chatIds]));
 
-  function sendTelegram(text) {
+  // Barcha tizim xabarlari shu qatlamdan o'tadi: qisqa, tushunarli, takrorsiz, ovoz nusxalarisiz.
+  const briefer = new (require('./telegram-brief').TelegramBrief)({
+    llm: require('./llm'), mirrorVoice: typeof env === 'function' && env('TELEGRAM_MIRROR_VOICE') === 'true'
+  });
+
+  async function sendTelegram(text) {
+    const prepared = await briefer.prepare(text);
+    if (!prepared) return false;
+    text = prepared;
     const targets = recipients();
     if (targets.length > 1) return Promise.all(targets.map(target => sendTelegramTo(target, text))).then(results => results.some(Boolean));
     return sendTelegramTo(targets[0], text);
