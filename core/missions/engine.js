@@ -286,10 +286,10 @@ class GoalEngine {
       return this._finish(mission, 'completed', `Mission ${mission.n} is complete: ${clip(verdict.summary || verdict.goal_evidence, 240)}`, clip(verdict.goal_evidence, 1500));
     }
     if (verdict.blocked === true && clip(verdict.blocker, 3)) {
-      return this._finish(mission, 'blocked', `Mission ${mission.n} is blocked: ${clip(verdict.blocker, 240)}. Tell me how to proceed and say resume.`);
+      return this._finish(mission, 'blocked', `Mission ${mission.n} blocked: ${clip(verdict.blocker, 90)}.`);
     }
     if (mission.consecutiveFailures >= mission.budget.maxConsecutiveFailures) {
-      return this._finish(mission, 'blocked', `Mission ${mission.n} stalled after ${mission.consecutiveFailures} failed attempts in a row: ${clip(task.error, 160)}. Say resume after you have a look.`);
+      return this._finish(mission, 'blocked', `Mission ${mission.n} stalled: ${clip(task.error, 70)}.`);
     }
     if (status === 'done' && mission.tasks.filter(t => t.status === 'done').length % 5 === 0) {
       this._event(mission, 'mission.milestone', `Mission ${mission.n} progress: ${mission.tasks.filter(t => t.status === 'done').length} tasks done. ${mission.summary}`, { quiet: true });
@@ -326,7 +326,7 @@ class GoalEngine {
     }
     const fresh = normalizeTasks(verdict.new_tasks, mission.tasks.length, this.now());
     if (fresh.length) { mission.tasks.push(...fresh); return this.store.save(mission); }
-    if (verdict.blocked === true) return this._finish(mission, 'blocked', `Mission ${mission.n} is blocked: ${clip(verdict.blocker || 'unknown', 240)}.`);
+    if (verdict.blocked === true) return this._finish(mission, 'blocked', `Mission ${mission.n} blocked: ${clip(verdict.blocker || 'unknown', 90)}.`);
     return this._finish(mission, 'blocked', `Mission ${mission.n} has no further tasks but the goal is not verified. Tell me what is missing.`);
   }
 }

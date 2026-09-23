@@ -150,7 +150,8 @@ const MEDIA_VAD_SILENCE_MS = parseInt(env('REALTIME_MEDIA_VAD_SILENCE_MS'), 10) 
 // telemetry 160 tokenli 7–13 so'z javoblarning ham `max_output_tokens` bilan
 // kesilganini ko'rsatdi. Lo'ndalik prompt/policy orqali boshqariladi; texnik
 // limit esa tayyor gapni o'rtasida uzmasligi kerak.
-const REALTIME_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_MAX_RESPONSE_TOKENS'), 10) || 1024;
+// 1024 juda erkin edi — javoblar cho'zilib, keraksiz "yana savolingiz bo'lsa ayting" bilan tugardi.
+const REALTIME_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_MAX_RESPONSE_TOKENS'), 10) || 500;
 // Realtime audio tokenlari matn tokenlaridan ancha tez sarflanadi. 40 token
 // hatto "Hozir soat 20:20" kabi qisqa tasdiqni ham o'rtasida kesib qo'ydi.
 // Fast-action javobi qisqa bo'lsa-da, audio to'liq ijro etilishi uchun alohida
@@ -1847,7 +1848,7 @@ class RealtimeSession extends EventEmitter {
   announce(text) {
     const clean = String(text || '').trim();
     if (!clean || this.closed) return false;
-    this._backgroundTaskResults.push({ answer: clean.slice(0, 600) });
+    this._backgroundTaskResults.push({ answer: clean.slice(0, 220) }); // ovozda o'qiladi — texnik uzun matn emas, qisqa xabar
     this._deliverReadyBackgroundWork();
     return true;
   }

@@ -66,7 +66,7 @@ const CONFIG_SCHEMA = Object.freeze({
   REALTIME_TRANSCRIPTION_LANGUAGE: { type: 'string', default: '' },
   REALTIME_ENABLED: { type: 'boolean', default: true },
   REALTIME_IDLE_MS: { type: 'integer', default: 20000, min: 5000, max: 300000 },
-  REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 1024, min: 64, max: 4096 },
+  REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 500, min: 64, max: 4096 }, // past: hisob juda uzun gapirardi; qisqalik ko'rsatmasini qattiqroq ushlab turish uchun pasaytirildi
   REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS: { type: 'integer', default: 256, min: 64, max: 1024 },
   // Low-latency conversational profile. Keep enough margin for natural
   // intra-sentence pauses while releasing a completed turn promptly.

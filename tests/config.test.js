@@ -22,7 +22,7 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.ok, true);
   assert.equal(result.values.REALTIME_IDLE_MS, 25000);
   assert.equal(result.values.REALTIME_ENABLED, false);
-  assert.equal(result.values.REALTIME_MAX_RESPONSE_TOKENS, 1024);
+  assert.equal(result.values.REALTIME_MAX_RESPONSE_TOKENS, 500);
   assert.equal(result.values.REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS, 256);
   assert.equal(result.values.REALTIME_VAD_SILENCE_MS, 180);
   assert.equal(result.values.REALTIME_NORMAL_DUPLEX_HANGOVER_MS, 330);

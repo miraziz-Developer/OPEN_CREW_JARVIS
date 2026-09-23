@@ -21,7 +21,9 @@ test('voice instructions include the character by default and JARVIS_PERSONA=pla
     assert.match(loadInstructions(), /CHARACTER: you are JARVIS with an edge/);
     process.env.JARVIS_PERSONA = 'plain';
     assert.doesNotMatch(loadInstructions(), /CHARACTER: you are JARVIS with an edge/);
-    assert.equal(personaInstructions(k => (k === 'JARVIS_PERSONA' ? 'plain' : '')), '');
+    const plainInstr = personaInstructions(k => (k === 'JARVIS_PERSONA' ? 'plain' : ''));
+    assert.doesNotMatch(plainInstr, /CHARACTER: you are JARVIS with an edge/);
+    assert.match(plainInstr, /BREVITY/); // qisqalik plain rejimda ham saqlanadi
   } finally {
     if (previous === undefined) delete process.env.JARVIS_PERSONA; else process.env.JARVIS_PERSONA = previous;
   }
