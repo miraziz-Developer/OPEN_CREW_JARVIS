@@ -23,6 +23,16 @@ const net = require('net');
 const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
 
+// openclaw agent skill/core kodni PROJECT_DIR'dan emas, ~/.openclaw/workspace'dan
+// o'qiydi (alohida nusxa). Sinxronlash avval faqat qo'lda ishga tushirilardi va
+// haftalab eskirib qolgan edi — natijada bir qancha skill (memory, desktop-control,
+// google-calendar, gmail, phone-control...) agent uchun butunlay ko'rinmas edi.
+// Har boot/restart'da avtomatik, jim va tez (diff asosida) qayta ishga tushiriladi.
+try {
+  require('child_process').execFileSync('bash', [require('path').join(PROJECT_DIR, 'scripts', 'sync-workspace.sh')], { timeout: 20000, stdio: 'ignore' });
+} catch (e) { wrnEarly('sync-workspace.sh muvaffaqiyatsiz: ' + e.message); }
+function wrnEarly(msg) { try { console.warn('⚠️  ' + msg); } catch (_) {} }
+
 const { writeMemory, searchMemory, upsertTurnMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
 const { NativeMic } = require('./core/native-mic');

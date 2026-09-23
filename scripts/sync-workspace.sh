@@ -33,7 +33,10 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORKSPACE="${HOME}/.openclaw/workspace"
 EXCLUDE_SKILLS=(wakeword)
-CORE_FILES=(paths.js macos-context.js macos-accessibility.js world-model.js action-safety-policy.js)
+# Eskisi qo'lda saqlanadigan 5 ta faylga cheklangan edi — yangi skill core/dan
+# yangi fayl talab qilganda yana xuddi shu MODULE_NOT_FOUND xatosi takrorlanardi
+# (aynan shu narsa phone-control bilan sodir bo'ldi). Endi skills/ kabi, core/
+# ostidagi BARCHA .js fayl sinxronlanadi — hech kim ro'yxatni eslab yurmaydi.
 
 mkdir -p "${WORKSPACE}/skills"
 mkdir -p "${WORKSPACE}/core"
@@ -60,10 +63,11 @@ for SRC in "${PROJECT_DIR}"/skills/*/; do
 done
 
 # Workspace'dagi skilllar ../../core orqali shu kichik, secretsiz runtime
-# modullarini require qiladi. .env ko'chirilmaydi; state/config uchun agentga
-# JARVIS_PROJECT_DIR beriladi.
-for name in "${CORE_FILES[@]}"; do
-  SRC="${PROJECT_DIR}/core/${name}"
+# modullarini require qiladi (core/*.js'da hech qanday maxfiy kalit yo'q —
+# tekshirilgan; ular .env'ni env() orqali ishga tushirish vaqtida o'qiydi).
+# .env ko'chirilmaydi; state/config uchun agentga JARVIS_PROJECT_DIR beriladi.
+for SRC in "${PROJECT_DIR}"/core/*.js; do
+  name="$(basename "${SRC}")"
   DST="${WORKSPACE}/core/${name}"
   if ! diff -q "${SRC}" "${DST}" >/dev/null 2>&1; then
     cp "${SRC}" "${DST}"
