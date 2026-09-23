@@ -16,7 +16,7 @@ Do not use it for ordinary browser automation: use `web-specialist` and the buil
 
 1. Prefer a configured UI-TARS or OmniParser-compatible visual grounding runtime when it is installed and available to Jarvis.
 2. In the current workspace, neither UI-TARS nor OmniParser is installed. Use `screen-vision` with `{"action":"locate_elements","query":"..."}` as the supported visual-grounding fallback.
-3. Use `desktop-control.click_at` for the returned screenshot-pixel center. It maps Retina screenshot pixels to macOS logical click coordinates; never manually rescale them.
+3. Use `desktop-control.click_at` for the returned screenshot-pixel center. It maps Retina screenshot pixels to macOS logical click coordinates; never manually rescale them. Copy the JSON `center.x`/`center.y` numbers exactly as returned — never eyeball or round them; a few pixels off lands on the wrong control (observed cause of a real miss in testing).
 4. UI-TARS/OmniParser output is a proposed target, not authority. Act only on controls visibly supported by the latest screenshot and the user's scoped intent.
 
 ## Operating procedure

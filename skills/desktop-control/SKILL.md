@@ -43,7 +43,7 @@ echo '{"action":"open_app","name":"Safari"}' | node skills/desktop-control/index
 2. Semantik actionni konkret `query` va imkon qadar `expect` bilan bajaring.
 3. Action qaytargan Accessibility verification dalilini tekshiring.
 4. Element Accessibility’da yo‘q bo‘lsagina `screen-vision` → `locate_elements` ishlating.
-5. Vision confidence past/noaniq bo‘lsa bosmang. Yetarli bo‘lsa center koordinatani `click_at`ga bering va natijani qayta kuzating.
+5. Vision confidence past/noaniq bo‘lsa bosmang. Yetarli bo‘lsa center koordinatani `click_at`ga bering va natijani qayta kuzating. **Bosgandan keyin natija kutilganidek emasligini (noto'g'ri elementga tekkanini) sezsangiz — taxmin qilib davom etmang: yangi skrinshot bilan qayta aniqlang, ko'pi bilan 2 marta qayta urining.**
 
 Misollar:
 
@@ -58,7 +58,7 @@ echo '{"action":"select_menu","app":"TextEdit","menu":"File","item":"Save"}' | n
 `click_at` koordinata talab qiladi. Buni topish uchun:
 
 1. `screen-vision`ni structured action bilan chaqiring: `{"action":"locate_elements","query":"X elementi"}`.
-2. Qaytgan **xom piksel qiymatlarini** to'g'ridan-to'g'ri `click_at`ga bering — masshtab (Retina 2x va h.k.) `desktop-control` ichida avtomatik hisobga olinadi, o'zingiz bo'lish/ko'paytirish shart emas.
+2. Qaytgan **xom piksel qiymatlarini** to'g'ridan-to'g'ri `click_at`ga bering — masshtab (Retina 2x va h.k.) `desktop-control` ichida avtomatik hisobga olinadi, o'zingiz bo'lish/ko'paytirish shart emas. **JSON'dagi `center.x`/`center.y` sonlarini AYNAN nusxa oling, ko'z bilan taxmin qilmang yoki yaxlitlamang** — bir necha piksel farq ham noto'g'ri elementga tushirishi mumkin.
 3. Bosish/ochildirish/yozishni imkon qadar `verified_action` orqali bajaring. Accessibility yoki URL/title bilan tekshirib bo'lmaydigan vizual natijada **yana bir marta `screen-vision` bilan tekshiring** — keyingi qadamga faqat shundan keyin o'ting. Hech qachon ko'rmasdan yoki tekshirmasdan bosmang/"bajardim" demang.
 4. **Noto'g'ri joyga tekkan bo'lsa — avtomatik qayta urining.** Vision-koordinata ba'zan bir necha piksel adashishi mumkin, bu normal. Muvaffaqiyatsizlikni ko'rsangiz: agar noto'g'ri maydonga matn ketgan bo'lsa avval uni tozalang (Cmd+A, Delete), so'ng yangi skrinshotdan koordinatani QAYTA hisoblab (avvalgi qiymatni takrorlamang — bir oz to'g'rilab), qayta bosing va qayta tekshiring. Buni **ketma-ket 3 martagacha** avtomatik qiling — foydalanuvchidan so'ramasdan. Faqat 3 urinishdan keyin ham ishlamasa — nima muvaffaqiyatsiz bo'lganini aniq tushuntirib, foydalanuvchidan yordam so'rang.
 
