@@ -137,6 +137,20 @@ function createWorkers(options = {}) {
     }
   };
 
+  // Bog'langan iPhone'ni (iPhone Mirroring) boshqarish — phone-control SKILL.md'dagi tartib bilan bir xil:
+  // screenshot -> screen-vision locate_elements o'sha rasm bilan -> xom piksel koordinatani tap'ga -> har
+  // bosishdan keyin yangi screenshot bilan tekshirish. gui-worker'dan farqi: Mac oynasi emas, real qurilma.
+  const phone = {
+    async run({ prompt, mission, task, timeoutMs }) {
+      const brief = "Use the phone-control procedure (see skills/phone-control/SKILL.md): first check is_connected. " +
+        "Then loop: take a phone-control screenshot, call screen-vision locate_elements with that screenshot's imagePath to find the target, " +
+        "tap using the RAW pixel coordinates plus that same screenshot's imageWidth/imageHeight (never guess or reuse stale coordinates), " +
+        "then take a fresh screenshot to verify before the next step. Use home/app_switcher/spotlight to navigate between apps. " +
+        "This is the user's real phone with real messages and accounts — never send, pay, delete, or enter a password/code unless the user's request explicitly asked for exactly that.\n\nTask: " + prompt;
+      return agent.run({ prompt: brief, mission, task, timeoutMs });
+    }
+  };
+
   // 4b) BabyAGI (yoheinakajima/babyagi, functionz): vazifani funksiyalarga bo'lib, kodini o'zi yozadi, ro'yxatga oladi va
   //     ishga tushiradi. O'rganilgan funksiyalar doimiy papkada to'planadi (o'zini-o'zi quruvchi kutubxona).
   const babyagi = {
@@ -182,7 +196,7 @@ function createWorkers(options = {}) {
     }
   };
 
-  return { agent, interpreter, browser, gui, babyagi, autogpt, think };
+  return { agent, interpreter, browser, gui, phone, babyagi, autogpt, think };
 }
 
 module.exports = { createWorkers, runProcess, cleanOutput };

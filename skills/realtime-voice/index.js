@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn, execFile } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const EventEmitter = require('events');
 const WebSocketClient = require('ws');
@@ -477,10 +477,14 @@ function selfKnowledgeBlock() {
     if (has('start_mission')) can.push('run long autonomous missions in the background (hours/days)');
     if (has('see_screen')) can.push('look at the screen on request');
     if (has('recall_memory')) can.push('search long-term memory');
+    let phoneConnected = false;
+    try { phoneConnected = execFileSync('pgrep', ['-x', 'iPhone Mirroring'], { timeout: 2000 }).toString().trim().length > 0; } catch (e) { phoneConnected = false; }
+    if (phoneConnected) can.push('see and control the user\'s connected iPhone (tap, type, open apps) via run_task');
     const workers = ['babyagi:.venv-babyagi', 'autogpt:.venv-autogpt', 'browser:.venv-workers', 'interpreter:.venv-workers'].filter(w => exists(w.split(':')[1])).map(w => w.split(':')[0]);
     const cannot = [];
     if (!exists('.google-tokens.json')) cannot.push('read Gmail or Calendar (Google is not connected yet)');
-    cannot.push('act on other devices; see the screen continuously (only on request or ambient app name)');
+    if (!phoneConnected) cannot.push('control the phone right now (iPhone Mirroring is not connected — it needs the phone unlocked nearby once)');
+    cannot.push('see the screen continuously (only on request or ambient app name)');
     return '\n\nYOUR REAL ABILITIES RIGHT NOW (generated from the live system; do not claim more): ' + can.join('; ') + '.' +
       (workers.length ? ' Mission workers installed: ' + workers.join(', ') + '.' : '') +
       ' You currently CANNOT: ' + cannot.join('; ') + '. If asked for something outside this, say so plainly.\n';
@@ -569,7 +573,8 @@ function buildTools() {
     name: 'run_task',
     description: "Kompyuterda MURAKKAB, ko'p bosqichli amal bajarish kerak bo'lganda (brauzerda kezish/bosish/forma " +
       "to'ldirish, ekranni ko'rib tahlil qilish, fayl/kod bilan ishlash, eslab qolish/eslab olish, vazifalar ro'yxati, " +
-      "internetdan qidirish, va h.k.) shuni chaqir. Oddiy, bir qadamlik amal (dastur ochish, sayt ochish, ovoz, " +
+      "internetdan qidirish, telefon bilan bog'liq amallar, va h.k.) shuni chaqir. Telefonda biror narsa qilish so'ralsa (WhatsApp'da xabar, Instagram, ilova ochish, telefon ekranidagi biror narsa) — bu ham `run_task` orqali, u bog'langan iPhone'ni haqiqatan boshqara oladi, hech qachon 'buni qila olmayman' demang. " +
+      "Oddiy, bir qadamlik amal (dastur ochish, sayt ochish, ovoz, " +
       "skrinshot, vaqt/sana/batareya so'rash) uchun BUNI EMAS, `fast_action`ni ishlating — u ANCHA TEZROQ. " +
       "To'liq imkoniyatli yordamchi vazifani MUSTAQIL, fon rejimida bajaradi (boshqa vazifalarni to'xtatmaydi) va tugagach " +
       "natijani matn sifatida qaytaradi. Bir nechta mustaqil vazifa uchun bir nechta marta chaqirishingiz mumkin — ular " +

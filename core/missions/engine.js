@@ -2,15 +2,15 @@
 
 const { assessAction, ActionSafetyPolicy } = require('../action-safety-policy');
 
-const WORKERS = ['agent', 'interpreter', 'browser', 'gui', 'babyagi', 'autogpt', 'think'];
+const WORKERS = ['agent', 'interpreter', 'browser', 'gui', 'phone', 'babyagi', 'autogpt', 'think'];
 
 const PLAN_SYSTEM =
   "You are the planning core of JARVIS's autonomous goal engine (BabyAGI/AutoGPT style). Turn the user's goal into " +
   "verifiable success criteria and a short list of concrete tasks. Reply with ONE JSON object only:\n" +
-  '{"criteria":["..."],"tasks":[{"title":"...","worker":"agent|interpreter|browser|gui|babyagi|autogpt|think","prompt":"...","priority":1-10}]}\n' +
+  '{"criteria":["..."],"tasks":[{"title":"...","worker":"agent|interpreter|browser|gui|phone|babyagi|autogpt|think","prompt":"...","priority":1-10}]}\n' +
   "Workers: agent = full computer agent with skills (calendar, email, files, Telegram, memory, desktop apps, web search); " +
   "interpreter = code, terminal, scripts, files, data work and local dev servers; browser = multi-step web research, portals and forms " +
-  "with a real browser that is ALREADY signed in to the user's Google and LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it); gui = visual desktop UI when no API or accessibility exists; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
+  "with a real browser that is ALREADY signed in to the user's Google and LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it); gui = visual desktop UI when no API or accessibility exists; phone = controls the user's real connected iPhone (screenshots, taps, typing, navigation) for tasks only doable on the phone (an app with no Mac/web equivalent) — never for anything the browser/agent worker can already do on the Mac; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
   "autogpt = AutoGPT, an autonomous think-act loop with web search and file output for open-ended research or writing that ends in a written deliverable; think = pure reasoning or writing, no side effects.\n" +
   "Rules: 3-6 criteria a reviewer could check from evidence; use the FEWEST tasks that make sense (one to three for a simple goal, at most 8 for a large one): " +
   "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; each job application or outreach message must be its own task (one job or one recipient per task); prefer read-only inspection first; higher priority number runs first — SEQUENCE the plan: think through the whole job end to end, list tasks in the exact order they must run, give them strictly decreasing priorities (10, 9, 8, …) in that order, and in each later task's prompt name the files or results the earlier tasks produce and where (absolute paths) so no task depends on guessing; never include secrets; " +
