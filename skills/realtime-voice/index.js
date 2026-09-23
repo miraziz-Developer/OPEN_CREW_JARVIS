@@ -324,8 +324,10 @@ function recentContextBlock() {
 // o'rgangan hech narsani suhbatda ishlatmasdi. Endi qo'lda kiritilgan
 // "Odatlar" bo'limi (barqaror) + eng so'nggi bir nechta avtomatik
 // o'rganilgan-naqshlar bo'limi (chegaralangan hajmda) qo'shiladi.
-const PROFILE_SUMMARY_MAX_SECTIONS = 3;
-const PROFILE_SUMMARY_MAX_CHARS = 2000;
+// Avvalgi (3 bo'lim / 2000 belgi) haqiqiy profilning katta qismini (masalan 14 KB) yashirardi —
+// shuning uchun model faqat recall_memory chaqirilganda "bilardi". Endi ancha ko'proq avtomatik ko'rinadi.
+const PROFILE_SUMMARY_MAX_SECTIONS = parseInt(env('PROFILE_SUMMARY_MAX_SECTIONS'), 10) || 10;
+const PROFILE_SUMMARY_MAX_CHARS = parseInt(env('PROFILE_SUMMARY_MAX_CHARS'), 10) || 6000;
 
 function profileSummaryBlock() {
   try {
@@ -378,9 +380,10 @@ function loadLegacyInstructions() {
       "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
       "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
       "Keep the register low and full, with crisp consonants, measured rhythm, restrained emotion, and a subtle synthetic edge. Do not imitate any real actor or copyrighted character. " +
+      "NEVER PLAY DUMB: you have a rich remembered history and profile about this user (injected above, or reachable via recall_memory). Before saying 'I don't know', 'I don't have that information', or answering generically about something that touches the user's own life, work, projects, people or past — silently call recall_memory first and answer from what it returns. Only say you truly don't know after that search comes up empty. " +
       "ACT, NEVER ADVISE: you control this computer directly through your tools. If the user asks you to do something you have a tool for (open/close an app, play something, search, move a file, run a task), DO IT immediately — never describe manual steps, never say you cannot do it on 'this device' or 'this OS', and never give generic instructions instead of acting. Only explain manual steps if no tool covers it after you actually tried. " +
       "TOOLS: use fast_action for a supported one-step computer action; use close_app to quit any named app; use web_open for playing/searching/opening a site; use file_op for file moves/writes/deletes; use run_task for browser interaction, coding, forms, or any multi-step task; " +
-      "use see_screen when the user asks about what is visible; use recall_memory for older personal context; use ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). " +
+      "use see_screen when the user asks about what is visible; use recall_memory whenever a question touches the user's own life, work, projects, people or past and you do not already have the answer above — never guess and never say you don't know without checking first; use ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). " +
       "Call fast tools silently and speak only their result. A run_task may receive one brief acknowledgement, then report the actual result when available. " +
       "MEMORY: treat the recent activity and user profile below as facts you already remember. Use them naturally without saying that you read a memory file. " +
     "o'zing to'g'ridan-to'g'ri javob ber.\n\n" +
@@ -532,7 +535,7 @@ function loadInstructions() {
     "A single quick job of a few minutes still uses run_task or fast_action. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
     "Never start run_task or a mission from a garbled, half-heard or vague request (e.g. 'start your other class', 'let's start the work'): ask one short question instead, because the speech recognizer mishears. Use web_open for play/search/open-site requests (seconds); use file_op for simple file move/rename/create/save/delete (undoable; say 'undo' handling via undo_last); use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
-    "use see_screen for visible screen content, recall_memory for older personal context, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
+    "use see_screen for visible screen content, recall_memory whenever a question is about the user's own life, work, projects, people or past and the answer is not already visible above, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
     "Call fast tools silently and speak only their result. For a long run_task, one brief acknowledgement is acceptable, but never claim success until the tool returns a successful result. If a tool fails or only partially completes the work, say that plainly. " +
     "Independent run_task calls may run in parallel; report each result when it finishes. The user has granted full autonomy: never ask the user to confirm anything or to say a confirmation word — do the work and report the result. If a tool result ever says CONFIRMATION REQUIRED, tell the user briefly once and wait. " +
     "MEMORY: treat recent activity and the user profile below as facts you already remember. Use them naturally without mentioning memory files. " +
@@ -621,12 +624,10 @@ function buildTools() {
   tools.push({
     type: 'function',
     name: 'recall_memory',
-    description: "Foydalanuvchi O'TMISHDAGI biror narsaga ishora qilsa — \"o'sha loyiha\", \"avval nima degandik\", " +
-      "\"qachondir aytgan edim\", \"o'tgan hafta/oy\", biror nom/mavzu haqida \"eslaysanmi\" — DARHOL shuni chaqiring. " +
-      "Butun xotira tarixi bo'ylab (kecha ham, bir yil oldin ham) MA'NO bo'yicha qidiradi, so'zlar aynan mos " +
-      "kelmasa ham topadi. Tez ishlaydi (~1 soniya) — ikkilanmasdan ishlating. Taxmin qilib javob berishdan " +
-      "ko'ra, shu bilan ANIQ eslab javob bering. So'nggi bir necha soatlik ish uchun bu shart emas — u " +
-      "allaqachon yuqoridagi \"so'nggi faoliyat\" ro'yxatida bor. " +
+    description: "Search the user's full remembered history and profile — call this WHENEVER a question is about the user's own life, work, projects, people, preferences, or past, and the answer is not already visible in the context above. " +
+      "This covers explicit references (\"o'sha loyiha\", \"avval nima degandik\", \"eslaysanmi\") AND plain factual questions about the user (\"what am I working on\", \"what's my email\", \"do you know my resume\", \"who is X to me\") — do not wait for the user to say \"remember\" or \"search your memory\"; call it yourself. " +
+      "Searches by MEANING across the entire history (yesterday or a year ago), matches even when wording differs. Fast (~1s) — call it without hesitating rather than guessing or saying you don't know. " +
+      "Not needed for the last few hours of activity — that is already in the \"so'nggi faoliyat\" list above. " +
       "MUHIM: chaqirishdan oldin \"hozir eslab ko'ray\", \"bir oz o'ylab ko'ray\" kabi HECH NARSA AYTMANG — " +
       "jim chaqiring va natijani ko'rgach TO'G'RIDAN-TO'G'RI javobning o'zini ayting. Eslab aytganda, qachon " +
       "bo'lganini ham qisqa qo'shing (masalan \"o'tgan seshanba\", \"13-avgustda\") — bu ishonchni oshiradi.",
