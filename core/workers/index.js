@@ -146,6 +146,8 @@ function createWorkers(options = {}) {
         "Then loop: take a phone-control screenshot, call screen-vision locate_elements with that screenshot's imagePath to find the target, " +
         "tap using the RAW pixel coordinates plus that same screenshot's imageWidth/imageHeight (never guess or reuse stale coordinates), " +
         "then take a fresh screenshot to verify before the next step. Use home/app_switcher/spotlight to navigate between apps. " +
+        "NEVER answer a question about an app's content (messages, unread count, who texted) until a screenshot visibly confirms you are actually inside that app (its header/logo/content is visible) — " +
+        "a tap can miss the target icon. If the wrong screen shows, go home and retry (up to 2 times) before reporting anything; if you still cannot confirm the right screen, say you could not verify rather than guessing. " +
         "This is the user's real phone with real messages and accounts — never send, pay, delete, or enter a password/code unless the user's request explicitly asked for exactly that.\n\nTask: " + prompt;
       return agent.run({ prompt: brief, mission, task, timeoutMs });
     }
