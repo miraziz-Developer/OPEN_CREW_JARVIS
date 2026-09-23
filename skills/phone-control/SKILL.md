@@ -30,7 +30,7 @@ echo '{"action":"screenshot"}' | node skills/phone-control/index.js
 1. `is_connected` bilan tekshiring; ulanmagan bo'lsa foydalanuvchiga aytib to'xtang (telefon qulflangan/yiroqda bo'lishi mumkin).
 2. `screenshot` oling.
 3. `screen-vision`ni shu rasm bilan chaqiring: `{"action":"locate_elements","imagePath":"<screenshot.path>","prompt":"X elementi qayerda"}`.
-4. Qaytgan xom piksel koordinatani, screenshot'ning `imageWidth`/`imageHeight` bilan birga, to'g'ridan-to'g'ri `tap`ga bering — o'zingiz bo'lish/ko'paytirish shart emas.
+4. Qaytgan xom piksel koordinatani, screenshot'ning `imageWidth`/`imageHeight` bilan birga, to'g'ridan-to'g'ri `tap`ga bering — o'zingiz bo'lish/ko'paytirish shart emas. **JSON'dagi `center.x`/`center.y` sonlarini AYNAN nusxa oling, ko'z bilan taxmin qilmang yoki yaxlitlamang** — bir necha piksel farq ham noto'g'ri belgiga tushirishi mumkin (sinovda aynan shu sabab bilan bosish nishondan adashgan).
 5. **Har bosishdan keyin yangi `screenshot` oling va natijani tekshiring.** Eski skrinshotdagi koordinatani qayta ishlatmang — ekran o'zgargan bo'lishi mumkin (aynan shu sabab bilan noto'g'ri joyga bosish uchrайdi).
 6. Ilova ochish/almashtirish uchun avval `home`, keyin kerakli ilova belgisini toping va bosing (yoki `app_switcher`/`spotlight`).
 7. Matn kiritishdan oldin maydon skrinshotda aniq fokusda (klaviatura ochiq) ekanini tasdiqlang.
