@@ -12,6 +12,8 @@ function clean(value, max = 500) {
 }
 
 function envValue(key, projectDir = PROJECT_DIR) {
+  // Jarayon muhiti .env dan ustun (testlar Telegram'ni bo'sh qiymat bilan o'chiradi — haqiqiy chatga xabar ketmasin).
+  if (process.env[key] !== undefined) return String(process.env[key]).trim();
   try {
     const contents = fs.readFileSync(path.join(projectDir, '.env'), 'utf8');
     const match = contents.match(new RegExp('^' + key + '\\s*=\\s*(.*)$', 'm'));

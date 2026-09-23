@@ -42,8 +42,15 @@ function isOpenClawPolicyFailure(clean) {
   return /^(?:error:\s*)?(?:tool )?policy removed(?: this content)?\.?$/i.test(String(clean || '').trim());
 }
 
+// Ekran/telefon bilan ishlaydigan vazifalar koordinata aniqligiga muhtoj — bu yerda "thinking off"
+// bilan tezlashtirish aynan xato joyga bosishga olib keldi (sinovda tasdiqlandi). Shu turdagi
+// vazifalarda tezlikni emas, aniqlikni tanlaymiz; needsCheckpointedExecution'ga qo'shmaymiz — u
+// checkpoint/persistent-task semantikasini ham boshqaradi, bu yerga aralashtirib bo'lmaydi.
+const VISUAL_PRECISION_TASK = /\b(phone|iphone|whatsapp|instagram|telegram(?! bot)|screen|ekran|telefon|tap|click|bos(?:ish|ing)|app icon|home screen|mirroring)\b/i;
+function needsCarefulReasoning(message) { return needsCheckpointedExecution(message) || VISUAL_PRECISION_TASK.test(String(message || '')); }
+
 function fastThinkingArgs(message) {
-  return !needsCheckpointedExecution(message) && (process.env.AGENT_FAST_THINKING || 'off') !== 'default' ? ['--thinking', 'off'] : [];
+  return !needsCarefulReasoning(message) && (process.env.AGENT_FAST_THINKING || 'off') !== 'default' ? ['--thinking', 'off'] : [];
 }
 
 function buildOpenClawAgentArgs(message, sessionKey) {
@@ -502,6 +509,6 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
 module.exports = {
   createAgentBridge, buildOpenClawAgentArgs, fastThinkingArgs, checkpointSessionKey,
   OpenClawEmptyResponseError, ENGLISH_ONLY_INSTRUCTION,
-  needsCheckpointedExecution, needsPersistentExecution,
+  needsCheckpointedExecution, needsPersistentExecution, needsCarefulReasoning,
   classifyProviderError, RETRY_DELAYS_MS, RECOVERED_STEP_INSTRUCTION
 };

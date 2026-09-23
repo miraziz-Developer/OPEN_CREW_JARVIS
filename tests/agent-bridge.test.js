@@ -260,3 +260,12 @@ test('persisted approval permits only the gated repair then resumes the unfinish
   assert.equal(bridge.checkpoints.load(task.id).pendingApproval, undefined);
   await assert.rejects(bridge.approvePersistentTask(task.id, { approved: true }), /not awaiting approval/);
 });
+test('visual/phone-precision tasks keep full reasoning (thinking not forced off), unlike plain simple tasks', () => {
+  const { buildOpenClawAgentArgs, needsCarefulReasoning } = require('../core/agent-bridge');
+  for (const text of ['check WhatsApp for unread messages', 'tap the icon on my phone home screen', 'see who messaged me on Instagram', 'open the app on my iPhone and check it']) {
+    assert.equal(needsCarefulReasoning(text), true, text);
+    assert.ok(!buildOpenClawAgentArgs(text, 'k').includes('off'), text);
+  }
+  assert.equal(needsCarefulReasoning('open my downloads folder'), false);
+  assert.ok(buildOpenClawAgentArgs('open my downloads folder', 'k').includes('off'));
+});
