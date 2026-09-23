@@ -27,7 +27,9 @@ function env(k, def) {
 
 const KEY = env('AZURE_OPENAI_KEY');
 const ENDPOINT = (env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '');
-const VISION_DEPLOYMENT = env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1');
+// 'gpt-4.1' standart qiymati resursda mavjud emas edi (DeploymentNotFound) — endi haqiqatan
+// ishlaydigan asosiy deploymentga tushadi, agar alohida vision deployment ko'rsatilmagan bo'lsa.
+const VISION_DEPLOYMENT = env('AZURE_OPENAI_VISION_DEPLOYMENT') || env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini');
 const DEFAULT_PROMPT = "Analyze this screen screenshot in detail and answer in natural English. If multiple windows or apps are visible, describe each separately: identify the app or site and the concrete visible details, such as file names, project, topic, conversation, code, or text. Do not guess; report only what is visibly supported. Avoid a generic description and include concrete details.";
 const LOCATE_PROMPT = `Screenshotdagi so'ralgan interaktiv UI elementlarni top. FAQAT JSON qaytar, markdown yo'q:
 {"summary":"qisqa tavsif","elements":[{"name":"ko'rinadigan nom","role":"button|field|menu|other","confidence":0.0,"bounds":{"x":0,"y":0,"width":0,"height":0},"center":{"x":0,"y":0}}]}
@@ -61,7 +63,11 @@ function buildVisionRequestBody(imageBase64, prompt, options = {}) {
         { type: 'image_url', image_url: { url: 'data:image/png;base64,' + imageBase64 } }
       ]
     }],
-    max_tokens: options.structured ? 1200 : 300,
+    // gpt-5-mini reasoning modeli: 'max_tokens' rad etiladi, va yashirin fikrlash ham shu byudjetdan
+    // sarflanadi — kam bo'lsa javob bo'sh qaytadi (finish_reason "length", sinovda tasdiqlandi).
+    // 'low' effort tezlik uchun (bu tez-tez chaqiriladigan "bir qarashda ko'rish" vositasi).
+    max_completion_tokens: options.structured ? 2000 : 800,
+    reasoning_effort: 'low',
     ...(options.structured ? { response_format: { type: 'json_object' } } : {})
   };
 }

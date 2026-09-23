@@ -24,8 +24,8 @@ test('structured vision removes invalid geometry and sorts confidence', () => {
 test('structured vision requests guaranteed JSON output without changing normal requests', () => {
   const structured = buildVisionRequestBody('abc', 'locate', { structured: true });
   assert.deepEqual(structured.response_format, { type: 'json_object' });
-  assert.equal(structured.max_tokens, 1200);
+  assert.equal(structured.max_completion_tokens, 2000);
   const normal = buildVisionRequestBody('abc', 'describe');
   assert.equal(normal.response_format, undefined);
-  assert.equal(normal.max_tokens, 300);
+  assert.equal(normal.max_completion_tokens, 800);
 });
