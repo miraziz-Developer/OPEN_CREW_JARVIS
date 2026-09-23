@@ -378,7 +378,8 @@ function loadLegacyInstructions() {
       "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
       "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
       "Keep the register low and full, with crisp consonants, measured rhythm, restrained emotion, and a subtle synthetic edge. Do not imitate any real actor or copyrighted character. " +
-      "TOOLS: use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or any multi-step task; " +
+      "ACT, NEVER ADVISE: you control this computer directly through your tools. If the user asks you to do something you have a tool for (open/close an app, play something, search, move a file, run a task), DO IT immediately — never describe manual steps, never say you cannot do it on 'this device' or 'this OS', and never give generic instructions instead of acting. Only explain manual steps if no tool covers it after you actually tried. " +
+      "TOOLS: use fast_action for a supported one-step computer action; use close_app to quit any named app; use web_open for playing/searching/opening a site; use file_op for file moves/writes/deletes; use run_task for browser interaction, coding, forms, or any multi-step task; " +
       "use see_screen when the user asks about what is visible; use recall_memory for older personal context; use ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). " +
       "Call fast tools silently and speak only their result. A run_task may receive one brief acknowledgement, then report the actual result when available. " +
       "MEMORY: treat the recent activity and user profile below as facts you already remember. Use them naturally without saying that you read a memory file. " +
@@ -747,6 +748,13 @@ function buildTools() {
     }
   });
 
+  tools.push({
+    type: 'function',
+    name: 'close_app',
+    description: "INSTANT (under ~1s): quit any named application by its exact name (e.g. 'Telegram', 'Visual Studio Code', 'Spotify'). " +
+      "Always use this instead of describing manual steps to the user — you can close apps directly. Tries a graceful quit, force-closes if it does not respond.",
+    parameters: { type: 'object', properties: { name: { type: 'string', description: "the app's name as the user said it" } }, required: ['name'] }
+  });
   tools.push({
     type: 'function',
     name: 'file_op',
@@ -1163,6 +1171,7 @@ class RealtimeSession extends EventEmitter {
     this._speakText = typeof options.speakText === 'function'
       ? options.speakText : null;
     this._undoStack = options.undoStack || sharedUndo;
+    this._closeApp = typeof options.closeApp === 'function' ? options.closeApp : name => require('../../core/app-actions').closeApp(name);
     this._webOpener = typeof options.webOpener === 'function' ? options.webOpener : args => require('../../core/web-actions').openWeb(args);
     this._fastActionRunner = typeof options.fastActionRunner === 'function'
       ? options.fastActionRunner : require('../fast-actions').runFastAction;
@@ -2176,6 +2185,7 @@ class RealtimeSession extends EventEmitter {
     if (msg.name === 'fast_action') { this._handleFastAction(msg); return; }
     if (msg.name === 'web_open') { this._handleWebOpen(msg); return; }
     if (msg.name === 'file_op' || msg.name === 'undo_last') { this._handleFileTool(msg); return; }
+    if (msg.name === 'close_app') { this._handleCloseApp(msg); return; }
     if (msg.name === 'see_screen') { this._handleSeeScreen(msg); return; }
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
@@ -2337,6 +2347,19 @@ class RealtimeSession extends EventEmitter {
   // jarvis_daemon.js'dagi mavjud rtTaskStarted/rtTaskCompleted kuzatuvi
   // (dashboard "JONLI VAZIFALAR" paneli) buni ham avtomatik ko'rsatadi,
   // qo'shimcha ulash shart emas.
+  async _handleCloseApp(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    this.emit('tool_call', 'close_app: ' + String(args.name || '').slice(0, 60), msg.call_id);
+    let output;
+    try { output = (await this._closeApp(args.name)).said; } catch (e) { output = 'Error: ' + e.message; }
+    this.emit('tool_result', output, msg.call_id);
+    try {
+      this.ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: msg.call_id, output: output.slice(0, 300) } }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
   async _handleFileTool(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}

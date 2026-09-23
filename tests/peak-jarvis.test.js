@@ -117,3 +117,24 @@ test('confirm modes: off asks nothing, payments asks only for money, strict keep
     delete process.env.JARVIS_CONFIRM_MODE; // .env/standart -> off
   } finally { if (prev === undefined) delete process.env.JARVIS_CONFIRM_MODE; else process.env.JARVIS_CONFIRM_MODE = prev; }
 });
+
+test('closeApp quits gracefully then force-kills only if still running', async () => {
+  const { closeApp } = require('../core/app-actions');
+  const calls = [];
+  const quick = { osa: async s => calls.push(['osa', s]), findPids: async () => [], killPids: async p => calls.push(['kill', p]), sleep: async ms => calls.push(['sleep', ms]) };
+  const r1 = await closeApp('Telegram', quick);
+  assert.equal(r1.said, 'Closed Telegram.'); assert.equal(r1.forced, false);
+  assert.deepEqual(calls.filter(c => c[0] === 'kill'), []);
+
+  const stuck = { osa: async () => {}, findPids: async () => ['111', '222'], killPids: async p => calls.push(['kill', p]), sleep: async () => {} };
+  const r2 = await closeApp('Spotify', stuck);
+  assert.equal(r2.forced, true);
+  assert.deepEqual(calls.pop(), ['kill', ['111', '222']]);
+
+  await assert.rejects(closeApp('', quick));
+});
+
+test('voice model is offered close_app and told to act instead of advise', () => {
+  const names = require('../skills/realtime-voice').buildTools().map(t => t.name);
+  assert.ok(names.includes('close_app'));
+});
