@@ -94,6 +94,9 @@ const telegramPoller = createTelegramPoller({
         bot.sendMessage(ownerId, 'Paired. This chat now controls JARVIS. Restarting my services once so everything picks it up.').catch(() => {});
         // Daemon, mission runner va boshqalar TELEGRAM_CHAT_ID ni yangi o'qishi uchun bir martalik qayta ishga tushirish.
         setTimeout(() => {
+          // Faqat macOS (launchd). Server/Docker'da mikrofonli daemon yo'q; u yerda
+          // jarayonlarni supervisor boshqaradi va yangi sozlamani o'zi qayta o'qiydi.
+          if (process.platform !== 'darwin') { process.exit(0); return; }
           try { require('child_process').spawn('bash', [path.join(__dirname, 'scripts', 'restart-daemon.sh')], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
           try { require('child_process').spawn('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/com.jarvis.mission-runner`], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
         }, 2500);

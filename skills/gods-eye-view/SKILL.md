@@ -3,9 +3,9 @@
 God's Eye View is a localhost-only 3D globe integration.
 
 The upstream Vite/Cesium application is isolated at:
-`/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/vendor/gods-eye-view`.
+`vendor/gods-eye-view` (loyiha ildizida).
 Install or restore that local checkout with:
-`/Users/mirazizerkinaliyev_dev/projects/OPEN_CREW_JARVIS/scripts/install-gods-eye-view.sh`.
+`scripts/install-gods-eye-view.sh`.
 
 ## Capabilities
 

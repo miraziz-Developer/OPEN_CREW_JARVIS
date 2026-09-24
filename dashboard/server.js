@@ -15,6 +15,8 @@ const { PROJECT_DIR } = require('../core/paths');
 const { findMatchingProcesses } = require('../core/runtime-health');
 
 const PORT = parseInt(process.env.DASHBOARD_PORT, 10) || 7890;
+// Standart faqat lokal. Docker'da konteyner ichida 0.0.0.0 qilinadi, lekin host tomonda faqat 127.0.0.1 ga e'lon qilinadi.
+const HOST = process.env.DASHBOARD_HOST || '127.0.0.1';
 
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
@@ -255,6 +257,6 @@ function json(res, obj, status) {
   res.end(JSON.stringify(obj));
 }
 
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, HOST, () => {
   console.log('Jarvis Dashboard: http://localhost:' + PORT);
 });

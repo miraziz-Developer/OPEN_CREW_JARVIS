@@ -1,236 +1,111 @@
-# 🤖 JARVIS — Mac uchun shaxsiy AI-yordamchi (ovoz + avtonom missiyalar)
+# 🤖 JARVIS
 
-> Azure Voice Live (tez, chuqur Onyx ovozi, gap bo'lish) + doim eshitish ("Jarvis") + soatlab/kunlab mustaqil ishlaydigan missiya dvigateli (BabyAGI, AutoGPT, Open Interpreter, Browser-use) + Telegram + Obsidian xotira.
+Shaxsiy AI-yordamchi: **tez ovozli suhbat**, soatlab/kunlab **mustaqil ishlaydigan missiyalar**, **Telegram** orqali masofadan boshqaruv, xotira va iPhone/Mac boshqaruvi.
 
-## 🚀 O'rnatish (bitta buyruq, macOS)
+Azure Voice Live (ovoz) · OpenClaw agent · BabyAGI / AutoGPT / Open Interpreter / Browser-use ishchilari · Obsidian xotira
+
+## Ikki ishlash rejimi
+
+| | 🖥 **Mac** (to'liq) | 🐳 **Server** (Docker) |
+|---|---|---|
+| Ovozli suhbat, "Jarvis" chaqiruvi, gap bo'lish | ✅ | ❌ (mikrofon yo'q) |
+| Ekran / ilova boshqaruvi, iPhone Mirroring | ✅ | ❌ |
+| Telegram bot (matn, ovoz, fayl) | ✅ | ✅ |
+| Avtonom missiyalar + agent ishchilari | ✅ | ✅ |
+| Brauzer ishchisi | ✅ (Chrome profilingiz bilan) | ✅ (toza headless Chromium) |
+| Ertalabki brifing, Gmail/Calendar | ✅ | ✅ |
+| Dashboard | ✅ `localhost:7890` | ✅ SSH tunnel orqali |
+
+Tavsiya: Mac'da to'liq JARVIS, serverda 24/7 missiyalar va Telegram uchun server rejimi.
+
+## 🐳 Server o'rnatish (bitta buyruq)
+
+Linux server (Ubuntu/Debian), yoki Docker o'rnatilgan har qanday mashina:
+
+```bash
+git clone https://github.com/miraziz-Developer/OPEN_CREW_JARVIS.git && cd OPEN_CREW_JARVIS
+./server.sh          # birinchi marta .env yaratadi va nima to'ldirish kerakligini aytadi
+nano .env            # kalitlarni yozing
+./server.sh          # Docker'ni o'rnatadi (kerak bo'lsa), quradi, ishga tushiradi, tekshiradi
+```
+
+Majburiy kalitlar: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`, `TELEGRAM_BOT_TOKEN` (+ `TELEGRAM_OWNER_IDS` — botni boshqaradigan Telegram ID lar). Gateway tokeni avtomatik yaratiladi.
+
+| Buyruq | Vazifa |
+|---|---|
+| `./server.sh status` | holat |
+| `./server.sh logs` | jonli loglar |
+| `./server.sh restart` | `.env` o'zgargandan keyin |
+| `./server.sh update` | `git pull` + qayta qurish |
+| `./server.sh stop` | to'xtatish (ma'lumotlar saqlanadi) |
+
+Dashboard serverning tashqi tarmog'iga ochilmaydi; ko'rish uchun: `ssh -L 7890:localhost:7890 <server>` → http://localhost:7890.
+Ma'lumotlar (xotira, missiyalar, tokenlar) Docker volume'larda — qayta qurishda yo'qolmaydi. Gmail/Calendar tokenini Mac'da olib (`node scripts/google-oauth-setup.js`), `.google-tokens.json` ni serverga nusxalash mumkin.
+
+## 🖥 Mac o'rnatish
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_JARVIS/main/install.sh)
 ```
 
-Skript o'zi: Homebrew paketlari → Node/Python muhitlari → `.env` (faqat kalitlarni so'raydi) → wake-word → ishchilar → native AEC → launchd xizmatlari → `doctor` tekshiruvi. Qayta ishga tushirish xavfsiz.
-Kerak bo'ladigan narsalar: Azure (Voice Live, OpenAI, Speech) kalitlari; ixtiyoriy — Telegram bot tokeni. Macdagi ruxsatlarni (Mikrofon, Accessibility, Automation, Screen Recording) bir marta o'zingiz berasiz.
+Homebrew paketlari, Node/Python muhitlari, `.env` (faqat kalitlarni so'raydi), wake-word, ishchilar, native aks-sado bekor qilish, launchd xizmatlari va `doctor` tekshiruvi. Qayta ishga tushirish xavfsiz. Keyin "Jarvis" deng.
+Bir marta qo'lda: Tizim sozlamalari → Maxfiylik → Mikrofon, Accessibility, Automation, Screen Recording.
 
-Keyin: "Jarvis" deng. Holat: `npm run doctor` · Loglar: `logs/daemon-YYYYMMDD.log` · Panel: http://localhost:7890
+Kundalik: `npm run doctor` (holat) · `./jarvis restart` · loglar `logs/daemon-YYYYMMDD.log` · panel http://localhost:7890
 
-## 🧭 Nima qila oladi
-| Soha | Tafsilot |
+## ⚙️ Sozlamalar (`.env`)
+
+`.env.example` — barcha kalitlar (sirlar bo'sh). `.env` git'ga tushmaydi.
+
+| Kalit | Ma'nosi |
 |---|---|
-| Ovoz | ~0.5–0.9 s birinchi audio, gap bo'lish (barge-in), "stop/boldi", doim eshitish, shaxsiy wake modeli |
-| Tez amallar | `web_open` (YouTube/Google/Maps ~2 s), `fast_action`, `file_op` + **undo** (fayl/ovoz) |
-| Missiyalar | Uzoq maqsadlar: reja → bajarish → tekshirish → takror; doimiy ruxsatlar, qat'iy xavfsizlik chegaralari |
-| Telegram | Qisqa, tushunarli xabarlar; ikki egasi; tasdiqlash |
-| Xotira | Obsidian + semantik qidiruv, ekran/ilova konteksti, ertalabki brifing |
-| Ishonchlilik | Watchdog o'zini tiklaydi, xarajat nazorati (faqat xabar beradi), kunlik zaxira |
+| `AZURE_OPENAI_*` | agent va missiya modeli |
+| `AZURE_VOICELIVE_*`, `AZURE_SPEECH_*` | ovoz (faqat Mac) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_IDS` | Telegram bot va egalari |
+| `OPENCLAW_GATEWAY_TOKEN` | agent gateway (avtomatik yaratiladi) |
+| `JARVIS_CONFIRM_MODE` | `off` (standart, tasdiqsiz) · `payments` (faqat pul) · `strict` |
+| `MISSION_DAILY_TOKEN_BUDGET` | kunlik token ogohlantirishi (to'xtatmaydi, faqat xabar beradi) |
 
-Chuqurroq: [docs/autonomy.md](docs/autonomy.md). `.env.example` — barcha sozlamalar (sirlar bo'sh). Google (Gmail/Calendar): `node scripts/google-oauth-setup.js --client-file …`.
+> ⚠️ `JARVIS_CONFIRM_MODE=off` da JARVIS to'lov va o'chirishni ham so'ramasdan bajaradi. Ehtiyot bo'lsangiz `payments` qo'ying.
 
----
+## 🧭 Imkoniyatlar
 
-# 🤖 JARVIS — O'zbek tilidagi Jarvis-darajali AI-yordamchi
+- **Ovoz:** ~0.5–0.9 s birinchi audio, gap bo'lish (barge-in), "stop/boldi", doim eshitish, shaxsiy wake-model.
+- **Tez amallar:** `web_open` (YouTube/Google/Maps), `close_app`, `file_op` + **undo**, ilova/ovoz boshqaruvi.
+- **Missiyalar:** uzoq maqsad → reja → bajarish → dalil bilan tekshirish → takror. Ishchilar: `agent`, `interpreter`, `browser`, `gui`, `phone`, `babyagi`, `autogpt`, `think`.
+- **Telefon:** iPhone Mirroring orqali ekranni ko'rish, bosish, yozish (Mac + bog'langan iPhone kerak).
+- **Xotira:** Obsidian + semantik qidiruv, ekran/ilova konteksti, ertalabki brifing (missiyalar + kalendar + pochta).
+- **Ishonchlilik:** watchdog o'zini tiklaydi, xarajat monitoringi, kunlik zaxira, xavfsizlik chegaralari.
 
-## Tarif
-**Jarvis** — Mac kompyuteringizda 24/7 doimiy ishlaydigan, ovoz bilan chaqiriladigan, kompyuteringizni avtonom boshqaradigan shaxsiy AI-agent.
+## 🗂 Tuzilma
 
-> **Texnologiyalar:** OpenClaw + GPT-6 Astra (Azure Responses API) + Azure Realtime/Speech (uz-UZ) + macOS Desktop Control + Telegram
+```
+jarvis_daemon.js      Mac: ovozli daemon (mikrofon, wake, realtime)
+telegram-bot.js       Telegram bot
+core/                 missiyalar, ishchilar, LLM, xavfsizlik siyosati, telefon/ilova boshqaruvi
+skills/               agent va ovoz ko'nikmalari (memory, gmail, calendar, desktop/phone-control, ...)
+dashboard/            veb-panel
+server/               Docker (server) rejimi: supervisor + fon ishlari
+server.sh · Dockerfile · docker-compose.yml
+scripts/              o'rnatish, doctor, zaxira, launchd, wake-model o'qitish
+requirements/         Python muhitlari (aniq versiyalar)
+tests/                `npm test`
+docs/                 chuqur hujjatlar (autonomiya, xotira, egalik boshqaruvi)
+```
 
----
-
-## ✨ Imkoniyatlar
-
-### 🎙 Ovozli boshqaruv
-- **"Jarvis"** deb chaqiring → eshitib turadi
-- Buyruqingizni eshitadi, tushunadi, bajaradi
-- Javobni ovozli (SardorNeural) qaytaradi
-- Past latency asosiy yo‘l: **Azure Realtime (`gpt-realtime-2.1`) → native English STT/VAD → streaming voice**
-- Deterministik desktop amallari lokal fast-action yo‘lidan, murakkab reasoning va grounded savollar esa GPT-6 Astra orqali bajariladi
-- Xavfli/destructive amallar explicit, scoped, expiring va one-shot confirmation talab qiladi
-
-### 📱 Telegram Bot
-- **Matnli:** suhbat + buyruqlar + fayl topish/yuborish
-- **Ovozli:** xabarni matnga aylantirib javob beradi
-- **Skrinshot:** "skrinshot ol" buyrug'i bilan ekranni oladi
-
-### 🖥 Kompyuter nazorati
-- Ekranni tahlil qiladi
-- Brauzer, ilovalar ochadi
-- Fayllar bilan ishlash
-- Skrinshot olish
-
-### 🔭 Proactive (avtonom) rejim
-- Har 30 daqiquda ekranni tahlil qiladi
-- Muhim eslatmalarni avtomatik yuboradi
-- Vazifalarni o'zi boshqaradi
-
----
-
-## 🚀 Tez ishga tushirish
-
-### Bitta buyruq bilan to'liq o'rnatish
+## 🧪 Tekshiruv
 
 ```bash
-bash install.sh   # (setup.sh — eski, faqat LaunchAgent va health)
+npm test             # testlar (haqiqiy .env, tarmoq, Telegram'siz — izolyatsiyalangan)
+npm run doctor       # Mac: tizim holati
+npm run security:scan
 ```
 
-Bu skript avtomatik ravishda `.env` yaratadi, kalitlar to'g'rligini tekshiradi, OpenClaw config validatsiyasini o'tkazadi, macOS LaunchAgent o'rnatadi, gateway health-check qiladi va "Jarvis tayyor" ovozli tasdiq beradi.
+## 🔒 Xavfsizlik
 
-### Qo'lda boshqarish (LaunchAgent)
+- `.env`, tokenlar va shaxsiy ma'lumotlar (`job-search/`, ovoz yozuvlari, modellar) git'ga tushmaydi.
+- Telegram bot faqat `TELEGRAM_OWNER_IDS` dagilarga javob beradi.
+- Dashboard autentifikatsiyasiz — tashqariga ochmang (faqat loopback / SSH tunnel).
+- Ochiq repoga kalit tushib qolsa — darhol almashtiring.
 
-| Buyruq | Vazifa |
-|--------|--------|
-| `launchctl kickstart -k gui/$(id -u)/com.jarvis.openclaw` | Qayta ishga tushirish |
-| `launchctl bootout gui/$(id -u)/com.jarvis.openclaw` | Joriy agentni to'xtatish |
-| `./scripts/disable-autostart.sh` | Avtostartni o'chirish |
-| `./scripts/enable-autostart.sh` | Avtostartni qayta yoqish |
-| `npm run doctor` | Butun tizim uchun read-only health diagnostika |
-
-### Tizim diagnostikasi
-
-JARVIS holatini config, secret permission, binary, launchd, process ownership,
-runtime heartbeat, gateway va dashboard API darajasida bitta buyruqda tekshiring:
-
-```bash
-npm run doctor
-```
-
-Monitoring yoki avtomatlashtirish uchun machine-readable natija:
-
-```bash
-npm run doctor -- --json
-npm run doctor -- --strict   # warning mavjud bo‘lsa ham non-zero exit
-```
-
-Diagnostika read-only: servislarni restart qilmaydi va secret qiymatlarini
-chiqarmaydi. Oddiy rejimda faqat error exit code `1` beradi; `--strict` rejimida
-warning ham failure hisoblanadi.
-
----
-
-## 📋 Tuzilma
-
-```
-OPEN_CREW_JARVIS/
-├── .env                    # Maxfiy sozlamalar (gitignore)
-├── .env.example            # Namuna
-├── openclaw.json           # OpenClaw konfiguratsiyasi
-├── telegram-bot.js         # Telegram bot (v8)
-├── jarvis_daemon.js        # Doimiy eshitish daemon
-└── skills/
-    ├── azure-tts/          # Ovoz chiqarish (uz-UZ-SardorNeural)
-    └── azure-stt/          # Ovozni tushunish (uz-UZ)
-```
-
----
-
-## 🔧 Sozlamalar
-
-`.env` faylga quyidagilarni kiriting:
-
-```bash
-# AZURE SPEECH
-AZURE_SPEECH_KEY=...
-AZURE_SPEECH_REGION=eastus2
-AZURE_SPEECH_VOICE=uz-UZ-SardorNeural
-
-# AZURE AI Foundry reasoning tiers
-AZURE_OPENAI_KEY=...
-AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
-AZURE_OPENAI_DEPLOYMENT=gpt-5.6-sol
-DEEP_THINK_FAST_MODEL=grok-4-1-fast-reasoning
-DEEP_THINK_COMPLEX_MODEL=gpt-5.6-sol
-
-# TELEGRAM
-TELEGRAM_BOT_TOKEN=...
-JARVIS_CHAT_ID=...         # Sizning Telegram chat ID
-
-# OPENCLAW GATEWAY (openssl rand -hex 32 bilan yarating)
-OPENCLAW_GATEWAY_TOKEN=...
-```
-
-### Ixtiyoriy: local whisper.cpp wake transcript fallback
-
-Azure Realtime asosiy streaming STT, VAD va audio javob yo‘li bo‘lib qoladi.
-`whisper.cpp` faqat idle `listening` holatida “Jarvis” transcriptini aniqlash
-uchun opt-in fallbackdir; faol realtime suhbatda unga audio berilmaydi.
-
-`whisper.cpp` binary va Tiny modelni alohida o‘rnating, keyin `.env`ga absolute
-yo‘llarni yozing:
-
-```bash
-WHISPER_WAKE_ENABLED=true
-WHISPER_WAKE_BINARY=/absolute/path/to/whisper-cli
-WHISPER_WAKE_MODEL=/absolute/path/to/ggml-tiny.en.bin
-WHISPER_WAKE_LANGUAGE=en
-```
-
-U 3 soniyalik bounded audio oynani transkripsiya qiladi va `Jarvis` alohida
-so‘z sifatida uchragandagina wake signal yuboradi. Model/binary yo‘q bo‘lsa
-feature’ni `false` holatda qoldiring; u daemon yoki Azure voice pipeline’ni
-to‘xtatmaydi.
-
----
-
-## 🧪 Sinov
-
-1. **Telegramda:** `@JarvisOzbekBot` ga `/start` yozing
-2. **Ovozli:** "Jarvis, skrinshot ol" deb ayting
-3. **Proactive:** 30 daqiqa kuting — avtomatik xabar keladi
-
-### Shaxsiy audio kalibratsiya va real benchmark
-
-```bash
-npm run voice:calibrate
-```
-
-Kalibratsiya xona jimligi, tabiiy nutq va qisqa karnay probe'i orqali gain,
-noise gate, barge-in hamda echo lag qiymatlarini o‘lchaydi. Xom audio
-saqlanmaydi yoki bulutga yuborilmaydi; faqat raqamli profil
-`.run/audio-calibration.json` ichida `0600` ruxsat bilan qoladi. So‘ng daemonni
-restart qiling. `.env` ichidagi explicit qiymatlar profil ustidan ustun turadi.
-
-Foydalanuvchi tekshirgan real natijalarni raw audio saqlamasdan private
-benchmark corpusga qo‘shish:
-
-```bash
-npm run voice:sample -- --stt --expected="Chrome ni och" --recognized="Chrome och"
-npm run voice:sample -- --wake --expected=true --detected=true --hours=1
-npm run benchmark
-```
-
-Corpus `benchmarks/private/voice-corpus.json`da saqlanadi, Git’dan chiqarilgan
-va `0600`. U WER/STT accuracy, wake recall va false-wake/day gate’larini real
-namunalar bilan hisoblaydi.
-
-Default benchmark faqat joriy daemon ishga tushganidan keyingi telemetry’ni
-baholaydi. Shu sabab yangi build eski pipeline latency’si bilan aralashmaydi;
-yangi live turn hali bo‘lmasa metric `not_measured` bo‘lib qoladi va false-green
-release bermaydi. Tarixiy trendni alohida ko‘rish uchun:
-
-```bash
-node scripts/benchmark.js --all-history
-node scripts/benchmark.js --since=1788854053767  # Unix epoch millisecond
-```
-
-`reports/quality-latest.json` latency’ni route (`realtime-conversation`,
-`direct-fast-action`, `grounded-answer`, `expert-answer`) bo‘yicha ham ajratadi.
-`voiceTelemetry.latency.stages` va `stagesByRoute` esa command acceptance’dan
-routing, provider request/acknowledgement, first text, first server audio va
-haqiqiy playback start’gacha bo‘lgan P50/P95 bosqichlarni ko‘rsatadi. Shu bilan
-server/model kechikishi playback prebuffer yoki lokal action vaqtiga
-aralashtirilmaydi; sample yo‘q bosqichlar `null` bo‘lib qoladi.
-
----
-
-## ⚠️ Eslatmalar
-
-- Mac-da **Accessibility**, **Screen Recording**, **Microphone** ruxsatlari kerak
-- `.env` faylni **HECH QACHON** gitga qo'shmang
-- Chat, issue yoki logga yuborilgan API key'ni darhol revoke/rotate qiling
-- `openclaw.json` faqat `${OPENCLAW_GATEWAY_TOKEN}` environment reference saqlaydi; plaintext token commit qilmang
-- Secret sizib chiqsa yangi qiymat yarating, servisni restart qiling va Git tarixini alohida tozalang
-- Hotword eshitish mikrofonni doimiy ishlatadi
-
----
-
-## 📜 Litsenziya
-Loyiha maxfiy. FAQAT shaxsiy foydalanish uchun.
+Chuqur hujjatlar: [docs/autonomy.md](docs/autonomy.md) · [docs/memory-postgresql-migration.md](docs/memory-postgresql-migration.md) · [docs/owner-task-controls.md](docs/owner-task-controls.md)

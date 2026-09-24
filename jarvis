@@ -11,7 +11,7 @@ usage() {
 
 case "${1:-start}" in
   install)
-    exec "$ROOT/setup.sh"
+    exec "$ROOT/install.sh"
     ;;
   start)
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
