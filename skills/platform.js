@@ -110,6 +110,12 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
     return { normalizeElements: input => vision.normalizeVisionResult(input.result) };
   });
   platform.register({
+    id: 'visual-executor', version: '1.0.0', capabilities: ['screen.read', 'desktop.write', 'action.verify'],
+    actions: {
+      execute: { permissions: ['screen.read', 'desktop.write'], input: { required: ['target', 'expect'] }, timeoutMs: 90000 }
+    }
+  }, async () => require('./visual-executor').createVisualExecutor());
+  platform.register({
     id: 'gods-eye-view', version: '1.0.0', capabilities: ['web.open', 'geospatial.visualization'],
     actions: {
       show: { permissions: ['web.open'], input: { required: ['place'], properties: { place: 'string', altitude: 'number', layers: 'array' } }, timeoutMs: 45000 },

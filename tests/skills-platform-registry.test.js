@@ -35,6 +35,9 @@ test('createSkillPlatform registers fast-actions and azure-tts with expected sha
   assert.deepEqual(byId['desktop-control'].actions.toggleElement.input, { required: ['query'] });
   assert.deepEqual(byId['desktop-control'].actions.scroll.input, { required: ['direction'] });
   assert.ok(byId['screen-vision']);
+  assert.ok(byId['visual-executor']);
+  assert.deepEqual(byId['visual-executor'].actions.execute.input, { required: ['target', 'expect'] });
+  assert.deepEqual(byId['visual-executor'].actions.execute.permissions, ['screen.read', 'desktop.write']);
   assert.ok(byId['gods-eye-view']);
   assert.deepEqual(Object.keys(byId['gods-eye-view'].actions).sort(), ['availableLayers', 'show', 'status']);
   assert.deepEqual(byId['gods-eye-view'].actions.show.input, { required: ['place'], properties: { place: 'string', altitude: 'number', layers: 'array' } });
