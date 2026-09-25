@@ -84,7 +84,15 @@ function similarity(a, b) {
   return common / Math.max(aa.size, bb.size);
 }
 
+// Foydalanuvchi o'zbek/ingliz (lotin) yoki rus (kirill) tilida gapiradi. Xitoy/yapon/koreys/arab va
+// boshqa yozuvlar deyarli har doim xona shovqini yoki noto'g'ri tanilgan nutq (loglarda: "啊，star of those…").
+const FOREIGN_SCRIPT = /[\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
+// Boshqa ovozli yordamchiga murojaat (TV/telefon "Hey Siri", "Hey Cortana") — JARVIS'ga emas.
+const OTHER_ASSISTANT = /\b(?:hey|hi|ok|okay)[,\s]+(?:cortana|siri|alexa|google|gemini|bixby)\b/i;
+
 function classifyUserTurn(text, context = {}) {
+  if (FOREIGN_SCRIPT.test(String(text || ''))) return { accept: false, reason: 'foreign-script' };
+  if (OTHER_ASSISTANT.test(String(text || ''))) return { accept: false, reason: 'other-assistant' };
   const value = normalize(text);
   if (!value) return { accept: false, reason: 'empty' };
   // A short acknowledgement is usually microphone/crosstalk noise when there
@@ -100,8 +108,12 @@ function classifyUserTurn(text, context = {}) {
   const tokens = value.split(' ').filter(Boolean);
   // Bir bo'g'inli shovqin yoki STTning tasodifiy bitta so'zli taxmini Jarvisni
   // o'zidan-o'zi gapirtirmasin. Haqiqiy bir-so'zli buyruqlar whitelistda.
-  if (tokens.length === 1 && !SINGLE_WORD_INTENTS.has(tokens[0]) && tokens[0].length < 5) {
-    return { accept: false, reason: 'low-information' };
+  // Bitta tushunarsiz so'z ("Können.", "Controller.", "Relegates.") — shovqin. Faqat ma'lum bir so'zli buyruqlar
+  // yoki JARVIS hozirgina savol bergan bo'lsa (masalan "Qaysi ilova?" → "Telegram") qabul qilinadi.
+  if (tokens.length === 1 && !SINGLE_WORD_INTENTS.has(tokens[0])) {
+    // "Jarvis" deb chaqirilgandan keyingi birinchi gap (explicitUserTrigger) — ataylab murojaat, masalan "Salaam".
+    const answeringQuestion = Boolean(context.conversationActive) && /\?\s*$/.test(String(context.lastAssistant || ''));
+    if (!(answeringQuestion || context.explicitUserTrigger) || tokens[0].length < 3) return { accept: false, reason: 'low-information' };
   }
   if (context.mediaMode && !context.explicitUserTrigger && !looksLikeAddressedTurn(value)) {
     return { accept: false, reason: 'media-background' };

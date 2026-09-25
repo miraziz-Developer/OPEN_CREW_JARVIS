@@ -160,7 +160,7 @@ const REALTIME_STALE_SESSION_MS = Math.max(75000, parseInt(env('REALTIME_STALE_S
 // bloklamasligi uchun bitta nutq turni qancha davom etishi mumkinligini cheklaymiz.
 const REALTIME_MAX_USER_SPEECH_MS = Math.max(30000, parseInt(env('REALTIME_MAX_USER_SPEECH_MS'), 10) || 45000);
 const REALTIME_WAKE_PREROLL_MS = parseInt(env('REALTIME_WAKE_PREROLL_MS'), 10) || 1800;
-const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 60000;
+const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 30000; // "Jarvis"siz davom etish oynasi (JARVIS javobidan keyin)
 const ACTION_CONFIRMATION_TTL_MS = parseInt(env('ACTION_CONFIRMATION_TTL_MS'), 10) || 30000;
 const TURN_STALE_TIMEOUT_MS = Math.max(30000, parseInt(env('TURN_STALE_TIMEOUT_MS'), 10) || 600000);
 
@@ -667,11 +667,17 @@ async function mainLoop() {
   // normal reasoning, GPT-5.6 Sol handles complex reasoning and executable tasks.
   function startRealtimeSession(reason, trigger = {}) {
     if (_activeRealtimeSession || state !== 'listening') return false;
+    // Wake so'zidan keyingi birinchi buyruq uchun suhbat oynasini ochamiz.
+    if (trigger.addressedWake) conversationContext.touch();
 
     const session = new RealtimeSession({
       // Fon missiyalari bilan ko'prik: start/status/control millisekundlarda qaytadi (ovozli suhbat bloklanmaydi).
       missions: goalMissionApi,
-      wakeRequired: Boolean(trigger.alwaysOn),
+      // "Jarvis" bilan uyg'otilgan sessiya ham: birinchi buyruqdan keyin faqat qisqa suhbat oynasida
+      // (JARVIS javobidan keyin CONVERSATION_FOLLOWUP_MS) yoki qayta "Jarvis" deyilganda javob beradi.
+      // Avval bu faqat always-on uchun yoqiq edi — wake sessiyasida xonadagi har qanday gap
+      // (TV, boshqa odamlar, noto'g'ri eshitilgan so'zlar) JARVIS'ga qaratilgan deb qabul qilinardi.
+      wakeRequired: Boolean(trigger.alwaysOn || trigger.addressedWake),
       // Fn hands-free trigger butun ochiq sessiya davomida foydalanuvchi
       // Jarvisga murojaat qilayotganini tasdiqlaydi. Shuning uchun media
       // background gate follow-up gaplarni bloklamaydi. Wake-word trigger
@@ -790,7 +796,9 @@ async function mainLoop() {
       const delay = conversationIdleDelay({
         now: Date.now(),
         idleMs: REALTIME_IDLE_MS,
-        followupMs: CONVERSATION_FOLLOWUP_MS,
+        // Ulanish sukunatda REALTIME_IDLE_MS ochiq qoladi (qayta ulanish kutilmasin); "Jarvis"siz javob
+        // berish oynasi esa alohida — conversationContext (CONVERSATION_FOLLOWUP_MS) boshqaradi.
+        followupMs: Math.max(CONVERSATION_FOLLOWUP_MS, REALTIME_IDLE_MS),
         playbackUntil: session._playbackUntil,
         awaitingFollowup
       });

@@ -167,11 +167,12 @@ const ownerTaskCommands = createOwnerTaskCommands({
   send: (chatId, text) => bot.sendMessage(chatId, text)
 });
 
-function askAgent(message, chatId) {
+function askAgent(message, chatId, routeText) {
   return telegramAgentBridge.askAgent(message, 'agent:main:telegram', {
-    source: 'telegram',
-    onProgress: text => bot.sendMessage(chatId, '⏳ ' + text),
-    onLongRunning: text => bot.sendMessage(chatId, '⏳ ' + text)
+    source: 'telegram', routeText,
+    // Har bosqich uchun "⏳" xabari yuborilmaydi — faqat natija. Uzoq ish bo'lsa bir marta qisqa eslatma.
+    onProgress: () => {},
+    onLongRunning: (() => { let told = false; return () => { if (!told) { told = true; bot.sendMessage(chatId, '⏳ Still working on it.').catch(() => {}); } }; })()
   });
 }
 
@@ -307,6 +308,8 @@ function enqueueVideoNote(msg) {
   });
 }
 
+const { isPlainScreenshotRequest } = require('./core/telegram-routing');
+
 async function takeScreenshot(chatId) {
   const p = os.homedir() + '/Desktop/jarvis_screenshot_' + Date.now() + '.png';
   try {
@@ -374,11 +377,11 @@ async function handleMessage(chatId, userText, isVoice) {
   console.log('[' + chatId + '] ' + (isVoice ? 'VOICE→' : '') + 'TEXT: "' + userText.substring(0, 60) + '"');
   await bot.sendChatAction(chatId, 'typing');
 
-  // 1. Skrinshot so'rovi
-  if (/skrinshot|screenshot|ekran|rasmi?/i.test(userText)) {
+  // 1. Faqat "skrinshot yubor" kabi sof so'rov — darhol. Boshqa amal bilan birga bo'lsa ("Claude'ni och, keyin
+  //    skrinshot yubor") agentga boradi: avval u holda Claude ochilmasdan darhol skrinshot olinar edi.
+  if (isPlainScreenshotRequest(userText)) {
     const r = await takeScreenshot(chatId);
-    await bot.sendMessage(chatId, r);
-    await sendVoiceReply(chatId, r);
+    if (!/sent/i.test(r)) await bot.sendMessage(chatId, r);   // rasmning o'zi javob; muvaffaqiyatda qo'shimcha matn yo'q
     return;
   }
 
@@ -388,8 +391,7 @@ async function handleMessage(chatId, userText, isVoice) {
     if (url) {
       try {
         execSync('open "https://' + url[1] + '"');
-        await bot.sendMessage(chatId, url[1] + ' opened in the browser.');
-        await sendVoiceReply(chatId, 'Opening ' + url[1] + '.');
+        await bot.sendMessage(chatId, url[1] + ' opened.');
       } catch (e) {
         await bot.sendMessage(chatId, 'I could not open that website.');
       }
@@ -430,16 +432,17 @@ async function handleMessage(chatId, userText, isVoice) {
   }
 
   // 3d. UNIVERSAL: AI agentga yuborish
-  let enrichedMessage = '[Reply only in natural English.]\n' + memoryContext + userText;
+  let enrichedMessage = '[Reply only in natural English. This is a phone chat: give just the result in 1-3 short sentences.]\n' + memoryContext + userText;
   
   // Agar avvalgi suhbat bosa — kontekst bilan
   const history = chatHistory[chatId];
   if (history && history.length > 0) {
-    const lastMsgs = history.slice(-3).map(h => 'F: ' + h.user + '\nJ: ' + h.agent).join('\n---\n');
+    // Faqat kontekst uchun: eski javoblar qisqartiriladi (to'liq javoblar so'rovni o'nlab ming belgiga cho'zardi).
+    const lastMsgs = history.slice(-3).map(h => 'F: ' + String(h.user).slice(0, 300) + '\nJ: ' + String(h.agent).slice(0, 300)).join('\n---\n');
     enrichedMessage = 'Oldingi suhbat:\n' + lastMsgs + '\n---\n' + enrichedMessage;
   }
 
-  const reply = await askAgent(enrichedMessage, chatId);
+  const reply = await askAgent(enrichedMessage, chatId, userText);
 
   if (!reply) {
     await bot.sendMessage(chatId, 'I cannot respond right now. Please try again shortly.');
@@ -477,13 +480,11 @@ async function handleMessage(chatId, userText, isVoice) {
     if (sentCount === 0 && realFiles.length > 0) {
       await bot.sendMessage(chatId, 'I found the files but could not send them. You can retrieve them here:\n' +
         realFiles.slice(0, 3).map(f => '• ' + f).join('\n'));
-    } else if (sentCount > 0) {
-      await bot.sendMessage(chatId, sentCount + (sentCount === 1 ? ' file sent.' : ' files sent.'));
     }
   }
 
-  // 7. Ovozli javob (agar qisqa bo'lsa)
-  if (reply.length < 300 && !hasPaths && !isVoice) {
+  // 7. Ovozli nusxa: har matnli javobni yana ovozli xabar qilib yuborish ortiqcha edi — faqat so'ralsa (TELEGRAM_VOICE_REPLIES=true).
+  if (getEnv('TELEGRAM_VOICE_REPLIES') === 'true' && reply.length < 300 && !hasPaths) {
     await sendVoiceReply(chatId, reply);
   }
 

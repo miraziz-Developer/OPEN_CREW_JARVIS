@@ -5,6 +5,34 @@
  * uzun matnni "nima bo'ldi / natija / sizdan nima kerak" ko'rinishiga keltirish. Faqat tizim boshlagan xabarlarga qo'llanadi.
  */
 const EMOJI_LEAD = /^\s*((?:\p{Extended_Pictographic}️?)+)\s*/u;
+const fs = require('fs');
+const path = require('path');
+
+// Foydalanuvchi so'ramagan, qaror talab qilmaydigan tizim xabarlari — standart holatda yuborilmaydi
+// (TELEGRAM_VERBOSE=true bilan qaytadi). Qoladi: ☀️ ertalabki brifing, 🚨 shoshilinch, missiya natijalari,
+// siz qo'ygan kunlik vazifalar natijasi, bot'ning sizga bergan javoblari.
+const NOISE = [
+  { re: /^\s*🚀/u, why: 'startup' },
+  { re: /^\s*⏳/u, why: 'progress' },
+  { re: /^\s*⚡/u, why: 'fast-actions-learned' },
+  { re: /^\s*🧠/u, why: 'patterns-learned' },
+  { re: /^\s*📊/u, why: 'daily-report' },
+  { re: /^\s*💡/u, why: 'suggestion' },
+  { re: /voice session disconnected/i, why: 'voice-disconnect' },
+  { re: /^\s*✅\s*Remembered\.?\s*$/iu, why: 'remembered' }
+];
+
+function outboxFile() {
+  try { return path.join(require('./paths').PROJECT_DIR, '.run', 'telegram-outbox.jsonl'); } catch (_) { return null; }
+}
+function logOutbox(entry, file = outboxFile()) {
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try { if (fs.statSync(file).size > 2 * 1024 * 1024) fs.writeFileSync(file, '', { mode: 0o600 }); } catch (_) {}
+    fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', { mode: 0o600 });
+  } catch (_) {}
+}
 
 const CONDENSE_SYSTEM =
   'You rewrite a long automated notification for a phone lock screen. Rules: at most 3 short lines and under 300 characters in total; plain everyday words; ' +
@@ -35,6 +63,8 @@ class TelegramBrief {
     this.llm = options.llm || null;
     this.now = options.now || Date.now;
     this.mirrorVoice = Boolean(options.mirrorVoice);
+    this.verbose = options.verbose !== undefined ? Boolean(options.verbose) : process.env.TELEGRAM_VERBOSE === 'true';
+    this.log = options.log || logOutbox;
     this.longThreshold = options.longThreshold || 520;
     this.dedupeMs = options.dedupeMs || 30 * 60000;
     this.progressGapMs = options.progressGapMs || 15 * 60000;
@@ -51,12 +81,24 @@ class TelegramBrief {
   }
 
   async prepare(text) {
+    const result = await this._prepare(text);
+    const raw = String(text ?? '').trim();
+    if (raw) this.log({ sent: Boolean(result), reason: this._lastDrop || null, chars: raw.length, preview: cleanText(raw).slice(0, 160) });
+    this._lastDrop = null;
+    return result;
+  }
+
+  async _prepare(text) {
     const raw = String(text ?? '').trim();
     if (!raw) return null;
     const at = this.now();
+    if (!this.verbose) {
+      const noise = NOISE.find(n => n.re.test(raw));
+      if (noise) { this._lastDrop = noise.why; return null; }
+    }
 
     // Ovozli suhbatning har bir gapini Telegramga nusxalash — yolg'on shovqin (TELEGRAM_MIRROR_VOICE=true bilan yoqiladi).
-    if (/^\s*(?:🎙|🤖)/u.test(raw) && !this.mirrorVoice) return null;
+    if (/^\s*(?:🎙|🤖)/u.test(raw) && !this.mirrorVoice) { this._lastDrop = 'voice-mirror'; return null; }
     if (/^\s*⏳/u.test(raw)) {
       if (this.lastProgressAt !== null && at - this.lastProgressAt < this.progressGapMs) return null;
       this.lastProgressAt = at;
@@ -69,7 +111,7 @@ class TelegramBrief {
     const body = cleanText(raw);
     const key = body.toLowerCase().replace(/\W+/g, ' ').slice(0, 200);
     for (const [k, when] of this.recent) if (at - when > this.dedupeMs) this.recent.delete(k);
-    if (this.recent.has(key)) return null;
+    if (this.recent.has(key)) { this._lastDrop = 'duplicate'; return null; }
     this.recent.set(key, at);
 
     const max = this._maxFor(raw);
@@ -90,4 +132,4 @@ class TelegramBrief {
   }
 }
 
-module.exports = { TelegramBrief, cleanText, deterministicBrief };
+module.exports = { TelegramBrief, cleanText, deterministicBrief, NOISE };

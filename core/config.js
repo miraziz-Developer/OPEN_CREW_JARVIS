@@ -95,7 +95,7 @@ const CONFIG_SCHEMA = Object.freeze({
   HOTWORD_COOLDOWN_MS: { type: 'integer', default: 3000, min: 500, max: 60000 },
   COMMAND_DEDUP_MS: { type: 'integer', default: 5000, min: 500, max: 60000 },
   RESPONSE_DEDUP_MS: { type: 'integer', default: 15000, min: 1000, max: 120000 },
-  CONVERSATION_FOLLOWUP_MS: { type: 'integer', default: 60000, min: 5000, max: 120000 },
+  CONVERSATION_FOLLOWUP_MS: { type: 'integer', default: 30000, min: 5000, max: 120000 },
   ACTION_CONFIRMATION_TTL_MS: { type: 'integer', default: 30000, min: 5000, max: 120000 },
   JARVIS_FULL_AUTONOMY: { type: 'boolean', default: false },
   TELEGRAM_OWNER_IDS: { type: 'string', default: '' },

@@ -33,7 +33,7 @@ const { createAgentBridge, needsPersistentExecution } = require('../../core/agen
 const { createSkillPlatform } = require('../platform');
 
 const { PROJECT_DIR } = require('../../core/paths');
-const { fastThinkingArgs } = require('../../core/agent-bridge');
+const { fastThinkingArgs, agentPolicyPreamble } = require('../../core/agent-bridge');
 const { sharedUndo, fileOps, captureSetting } = require('../../core/undo');
 const { ambientBlock } = require('../../core/ambient-context');
 const execFileAsync = promisify(execFile);
@@ -382,6 +382,9 @@ function loadLegacyInstructions() {
       "Keep the register low and full, with crisp consonants, measured rhythm, restrained emotion, and a subtle synthetic edge. Do not imitate any real actor or copyrighted character. " +
       "NEVER PLAY DUMB: you have a rich remembered history and profile about this user (injected above, or reachable via recall_memory). Before saying 'I don't know', 'I don't have that information', or answering generically about something that touches the user's own life, work, projects, people or past — silently call recall_memory first and answer from what it returns. Only say you truly don't know after that search comes up empty. " +
       "ACT, NEVER ADVISE: you control this computer directly through your tools. If the user asks you to do something you have a tool for (open/close an app, play something, search, move a file, run a task), DO IT immediately — never describe manual steps, never say you cannot do it on 'this device' or 'this OS', and never give generic instructions instead of acting. Only explain manual steps if no tool covers it after you actually tried. " +
+      "NEVER REPORT UNFINISHED WORK AS DONE: say a task is done, opened, sent or finished ONLY after its tool result confirms it. While a background task is still running, say it is still running. " +
+      "NEVER HAND WORK BACK: do not tell the user to press, open, click or type something themselves. If a task really failed, say in one short sentence what blocked it and retry or try another route. " +
+      "UNCLEAR SPEECH: if the words look garbled, half-heard or make no sense, say only 'Say again?' — never guess, never start a task or mission from it. " +
       "TOOLS: use fast_action for a supported one-step computer action; use close_app to quit any named app; use web_open for playing/searching/opening a site; use file_op for file moves/writes/deletes; use run_task for browser interaction, coding, forms, or any multi-step task; " +
       "use see_screen when the user asks about what is visible; use recall_memory whenever a question touches the user's own life, work, projects, people or past and you do not already have the answer above — never guess and never say you don't know without checking first; use ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). " +
       "Call fast tools silently and speak only their result. A run_task may receive one brief acknowledgement, then report the actual result when available. " +
@@ -821,7 +824,7 @@ const RUN_TASK_TIMEOUT_MS = OPENCLAW_AGENT_TIMEOUT_MS;
 function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onProgress, bridge = VOICE_AGENT_BRIDGE) {
   if (bridge !== VOICE_AGENT_BRIDGE || spawnAgent !== spawn) {
     return new Promise((resolve) => {
-      const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n' + description, '--agent', 'main', ...fastThinkingArgs(description)], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR }, timeout: RUN_TASK_TIMEOUT_MS });
+      const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n' + agentPolicyPreamble() + '\n\n' + description, '--agent', 'main', ...fastThinkingArgs(description)], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR }, timeout: RUN_TASK_TIMEOUT_MS });
       if (typeof onProc === 'function') onProc(proc);
       let out = ''; proc.stdout.on('data', d => out += d);
       proc.on('close', () => resolve(out.trim() || 'Kechirasiz, bajara olmadim.'));
@@ -832,7 +835,7 @@ function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onPro
   /* Legacy spawn lifecycle intentionally retained below for compatibility reference. */
   /* c8 ignore start */
   return new Promise((resolve) => {
-    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n\n';
+    const englishOnly = '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n' + agentPolicyPreamble() + '\n\n';
     const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', englishOnly + description, '--agent', 'main', ...fastThinkingArgs(description)], {
       cwd: PROJECT_DIR,
       env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR },

@@ -75,7 +75,9 @@ function createWorkers(options = {}) {
   const agent = {
     async run({ prompt, mission, task, timeoutMs }) {
       const sessionKey = `agent:main:mission-${mission.id}-${task.id}`;
-      const result = await runProcess('openclaw', ['agent', '--session-key', sessionKey, '--message', prompt, '--agent', 'main'], {
+      // Missiya ishchisi: egasi siyosati (tasdiq/avtonomiya) — lekin qisqalik talabisiz, chunki tekshiruv dvigateli dalilga muhtoj.
+      const policy = require('../agent-bridge').agentPolicyPreamble({ brief: false });
+      const result = await runProcess('openclaw', ['agent', '--session-key', sessionKey, '--message', policy + '\n\n' + prompt, '--agent', 'main'], {
         spawn: spawnFn, cwd: PROJECT_DIR, timeoutMs, stallMs: 15 * 60 * 1000,
         env: openClawEnv()
       });

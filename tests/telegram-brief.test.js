@@ -8,7 +8,8 @@ function brief(options = {}) {
   let now = 1000000;
   const calls = [];
   const llm = options.llm === undefined ? { complete: async request => { calls.push(request); return '✅ Report written. Nothing needed from you.'; } } : options.llm;
-  const instance = new TelegramBrief({ llm, now: () => now, ...options.config });
+  // Eski xulq testlari verbose rejimda (filtrsiz); standart filtr pastdagi alohida testda. Log yozilmaydi.
+  const instance = new TelegramBrief({ llm, now: () => now, verbose: true, log: () => {}, ...options.config });
   return { instance, calls, tick: ms => { now += ms; } };
 }
 
@@ -62,4 +63,18 @@ test('cleanText removes code fences, raw JSON and IDs', () => {
   assert.equal(cleanText('{"a":1,"b":[2,3]}'), 'Structured result received.');
   assert.doesNotMatch(cleanText('task 5f11b09ecd5822b94cd4d8ad4e2fb31 finished'), /5f11b09/);
   assert.ok(deterministicBrief('First sentence here. '.repeat(40), 100).length <= 101);
+});
+
+test('by default, noise the user never asked for is dropped and every decision is logged', async () => {
+  const logged = [];
+  const b = new TelegramBrief({ llm: null, now: () => 1, verbose: false, log: e => logged.push(e) });
+  for (const noise of ['🚀 JARVIS v5.0 is online.', '⏳ still working on step 2', '⚡ I added new fast actions: x', '🧠 Patterns learned from yesterday:\n- a',
+    '📊 Today’s report:\n\nlots of text', '💡 You might want to…', '⚠️ The voice session disconnected unexpectedly.', '✅ Remembered.']) {
+    assert.equal(await b.prepare(noise), null, noise);
+  }
+  for (const keep of ['☀️ Good morning. Wednesday.', '🚨 Urgent email from your bank', '✅ "Gym plan": Today is B day.', 'Mission 3 completed: shortlist saved.']) {
+    assert.ok(await b.prepare(keep), keep);
+  }
+  assert.equal(logged.length, 12);
+  assert.deepEqual(logged.filter(e => !e.sent).map(e => e.reason), ['startup', 'progress', 'fast-actions-learned', 'patterns-learned', 'daily-report', 'suggestion', 'voice-disconnect', 'remembered']);
 });

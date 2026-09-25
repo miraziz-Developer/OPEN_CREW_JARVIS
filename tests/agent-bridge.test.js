@@ -9,20 +9,20 @@ const path = require('node:path');
 const {
   buildOpenClawAgentArgs, checkpointSessionKey, createAgentBridge,
   ENGLISH_ONLY_INSTRUCTION, OpenClawEmptyResponseError,
-  needsCheckpointedExecution, needsPersistentExecution, classifyProviderError
+  needsCheckpointedExecution, needsPersistentExecution, classifyProviderError, agentPolicyPreamble
 } = require('../core/agent-bridge');
 const { createCheckpointStore } = require('../core/agent-task-checkpoints');
 
 test('agent bridge forwards an explicit session key to OpenClaw', () => {
   assert.deepEqual(buildOpenClawAgentArgs('Davom et', 'agent:main:jarvis-project-alpha'), [
     'agent', '--session-key', 'agent:main:jarvis-project-alpha',
-    '--message', ENGLISH_ONLY_INSTRUCTION + '\n\nDavom et', '--agent', 'main', '--thinking', 'off'
+    '--message', ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n\nDavom et', '--agent', 'main', '--thinking', 'off'
   ]);
 });
 
 test('agent bridge preserves one-shot behavior without a session key', () => {
   assert.deepEqual(buildOpenClawAgentArgs('Salom'), [
-    'agent', '--message', ENGLISH_ONLY_INSTRUCTION + '\n\nSalom', '--agent', 'main', '--thinking', 'off'
+    'agent', '--message', ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n\nSalom', '--agent', 'main', '--thinking', 'off'
   ]);
 });
 
@@ -268,4 +268,21 @@ test('visual/phone-precision tasks keep full reasoning (thinking not forced off)
   }
   assert.equal(needsCarefulReasoning('open my downloads folder'), false);
   assert.ok(buildOpenClawAgentArgs('open my downloads folder', 'k').includes('off'));
+});
+
+test('owner policy follows JARVIS_CONFIRM_MODE and is sent with every agent call', () => {
+  assert.match(agentPolicyPreamble({ mode: 'off' }), /never ask the user for confirmation/);
+  assert.match(agentPolicyPreamble({ mode: 'payments' }), /only before spending money/);
+  assert.match(agentPolicyPreamble({ mode: 'strict' }), /before sending messages, deleting data/);
+  for (const mode of ['off', 'payments', 'strict']) assert.match(agentPolicyPreamble({ mode }), /Never tell the user to click, open, type/);
+  assert.match(agentPolicyPreamble({ mode: 'off' }), /at most 3 short plain sentences/);
+  assert.doesNotMatch(agentPolicyPreamble({ mode: 'off', brief: false }), /at most 3 short/);  // missiya ishchisi dalil bersin
+  assert.ok(buildOpenClawAgentArgs('x').some(arg => arg.includes('[Owner policy:')));
+});
+
+test('heavy multi-step routing and thinking follow the user request, not the memory/history-enriched message', () => {
+  const enriched = 'Oldingi suhbat:\n' + 'x '.repeat(600) + '\nSend me screenshot';
+  assert.equal(needsCheckpointedExecution(enriched), true);          // eski xulq: uzun matn → og'ir yo'l
+  assert.equal(needsCheckpointedExecution('Send me screenshot'), false);
+  assert.ok(buildOpenClawAgentArgs(enriched, 'k', 'Send me screenshot').includes('off'));  // thinking o'chiq — oddiy so'rov
 });

@@ -13,6 +13,24 @@ const { extractMissingDependency, runSelfHeal, formatSelfHealEscalation } = requ
 const { boundedCall } = require('./bounded-call');
 
 const ENGLISH_ONLY_INSTRUCTION = '[Language policy: Reply to the user only in natural English, regardless of the language of the request or stored context. Never answer in Uzbek or imitate an Uzbek accent. Preserve names, quoted text, and file contents when necessary.]';
+// Egasi belgilagan siyosat har agent chaqiruviga qo'shiladi. SOUL.md'dagi umumiy qoidalar emas, shu qator
+// ustun: avval SOUL.md "har doim tasdiq ol" derdi va JARVIS_CONFIRM_MODE=off bo'lsa ham agent confirm so'rardi.
+function confirmModeFromEnv() {
+  let value = process.env.JARVIS_CONFIRM_MODE;
+  if (value === undefined) {
+    try { const m = fs.readFileSync(path.join(require('./paths').PROJECT_DIR, '.env'), 'utf8').match(/^JARVIS_CONFIRM_MODE\s*=\s*(.*)$/m); if (m) value = m[1]; } catch (_) {}
+  }
+  value = String(value ?? 'payments').trim().toLowerCase();
+  return ['off', 'payments', 'strict'].includes(value) ? value : 'payments';
+}
+function agentPolicyPreamble({ brief = true, mode = confirmModeFromEnv() } = {}) {
+  const confirm = mode === 'off' ? 'Full autonomy is granted: never ask the user for confirmation or permission — do the task directly.'
+    : mode === 'strict' ? 'Ask for confirmation only before sending messages, deleting data, submitting applications, payments or other irreversible external actions; do everything else directly.'
+      : 'Do tasks directly without asking; ask for confirmation only before spending money or making a payment.';
+  const act = 'Never tell the user to click, open, type or do a step themselves — you have desktop-control, phone-control and the browser; do it yourself. If something truly blocks you, say what blocked it in one sentence.';
+  const style = brief ? ' Reply with the result in at most 3 short plain sentences: no markdown lists, no step-by-step guides, no offers of further help.' : '';
+  return `[Owner policy: ${confirm} ${act}${style}]`;
+}
 const RETRY_DELAYS_MS = [5000, 15000, 45000, 135000];
 const RECOVERED_STEP_INSTRUCTION = 'RECOVERY SAFETY: This recovered checkpoint step may have partially executed before the prior worker stopped. Verify the current external and local state before acting. Do not repeat a side-effecting action unless verification shows it is still required. Report what you verified and any uncertainty.';
 
@@ -54,14 +72,14 @@ function fastThinkingArgs(message) {
   return !needsCarefulReasoning(message) && (process.env.AGENT_FAST_THINKING || 'off') !== 'default' ? ['--thinking', 'off'] : [];
 }
 
-function buildOpenClawAgentArgs(message, sessionKey) {
+function buildOpenClawAgentArgs(message, sessionKey, routeText) {
   const args = ['agent'];
   const key = String(sessionKey || '').trim();
   if (key) args.push('--session-key', key);
-  args.push('--message', ENGLISH_ONLY_INSTRUCTION + '\n\n' + String(message || ''), '--agent', 'main');
+  args.push('--message', ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n\n' + String(message || ''), '--agent', 'main');
   // Oddiy vazifalarda "thinking" ni o'chirish ~40% tezroq (19s → 11s o'lchangan);
   // murakkab (reja/tahlil/tadqiqot) vazifalarda chuqur fikrlash saqlanadi.
-  args.push(...fastThinkingArgs(message));
+  args.push(...fastThinkingArgs(routeText || message));
   return args;
 }
 
@@ -220,7 +238,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
         diagnosticSummary: null
       };
       const childEnvironment = openClawEnvironment || resolveOpenClawEnvironment({ projectDir, env: openClawBaseEnvironment || process.env });
-      const proc = spawnProcess('openclaw', buildOpenClawAgentArgs(message, sessionKey), {
+      const proc = spawnProcess('openclaw', buildOpenClawAgentArgs(message, sessionKey, options.routeText), {
         cwd: projectDir,
         env: childEnvironment,
         timeout: openClawTimeoutMs
@@ -430,13 +448,16 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
   const agentProviders = new ProviderPool([
     {
       id: 'openclaw', priority: 0, timeoutMs: openClawTimeoutMs + 5000,
-      invoke: (message, context) => needsCheckpointedExecution(message)
+      // Og'ir (ko'p bosqichli) rejim foydalanuvchining o'z so'rovi bo'yicha tanlanadi. Avval Telegram'da xotira va
+      // eski suhbat qo'shilgan matn 700 belgidan oshib, "skrinshot yubor" kabi oddiy so'rovlar ham 4-5 bosqichli
+      // og'ir yo'lga tushardi (o'rtacha 82 s, 37 ta holat).
+      invoke: (message, context) => needsCheckpointedExecution(context.routeText || message)
         ? askCheckpointedAgent(message, context.sessionKey, {
-          persistent: Boolean(context.persistent) || needsPersistentExecution(message),
+          persistent: Boolean(context.persistent) || needsPersistentExecution(context.routeText || message),
           onProgress: context.onProgress || (text => sendTelegram('⏳ ' + text)),
           onLongRunning: context.onLongRunning || (text => sendTelegram('⏳ ' + text))
         })
-        : askOpenClaw(message, context.sessionKey)
+        : askOpenClaw(message, context.sessionKey, { routeText: context.routeText })
     },
     {
       id: 'azure-deep-think', priority: 1, timeoutMs: deepThinkTimeoutMs + 5000,
@@ -463,7 +484,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     const startedAt = Date.now();
     try {
       inf(`openclaw timeout=${openClawTimeoutMs}ms; deep-think timeout=${deepThinkTimeoutMs}ms`);
-      const response = await agentProviders.invoke(message, { sessionKey, persistent: options.persistent, onProgress: options.onProgress, onLongRunning: options.onLongRunning });
+      const response = await agentProviders.invoke(message, { sessionKey, routeText: options.routeText, persistent: options.persistent, onProgress: options.onProgress, onLongRunning: options.onLongRunning });
       telemetry?.latency({ requestId: options.requestId, source: options.source || 'agent', provider: response.provider, agent_ms: Date.now() - startedAt });
       console.log(JSON.stringify({ event: 'response_latency', requestId: options.requestId, source: options.source || 'agent', provider: response.provider, stt_ms: null, agent_ms: Date.now() - startedAt, tts_ms: null, total_ms: Date.now() - startedAt }));
       return response.value;
@@ -510,7 +531,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
 }
 
 module.exports = {
-  createAgentBridge, buildOpenClawAgentArgs, fastThinkingArgs, checkpointSessionKey,
+  createAgentBridge, buildOpenClawAgentArgs, fastThinkingArgs, agentPolicyPreamble, checkpointSessionKey,
   OpenClawEmptyResponseError, ENGLISH_ONLY_INSTRUCTION,
   needsCheckpointedExecution, needsPersistentExecution, needsCarefulReasoning,
   classifyProviderError, RETRY_DELAYS_MS, RECOVERED_STEP_INSTRUCTION

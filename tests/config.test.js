@@ -56,7 +56,7 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.AZURE_TRANSCRIBE_DEPLOYMENT, 'gpt-live-transcribe');
   assert.equal(result.values.AZURE_EMBEDDING_DEPLOYMENT, 'text-embedding-3-large-2');
   assert.equal(result.values.TURN_STALE_TIMEOUT_MS, 600000);
-  assert.equal(result.values.CONVERSATION_FOLLOWUP_MS, 60000);
+  assert.equal(result.values.CONVERSATION_FOLLOWUP_MS, 30000);
   assert.equal(result.values.ACTION_CONFIRMATION_TTL_MS, 30000);
   assert.equal(result.values.JARVIS_FULL_AUTONOMY, false);
   assert.equal(result.values.TURN_JOURNAL_MAX_BYTES, 8388608);

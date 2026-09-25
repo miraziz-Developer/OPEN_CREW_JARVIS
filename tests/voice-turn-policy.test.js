@@ -59,7 +59,8 @@ test('media mode rejects foreign playback but preserves concise Uzbek commands',
     accept: true,
     reason: 'speech'
   });
-  assert.equal(classifyUserTurn('Salaam.', { mediaMode: true }).reason, 'media-background');
+  // Chaqiruvsiz bitta so'z media paytida ham rad etiladi (sababi: bir so'zli shovqin filtri birinchi ishlaydi).
+  assert.equal(classifyUserTurn('Salaam.', { mediaMode: true }).accept, false);
 });
 
 test('English questions and commands are accepted while passive media dialogue stays blocked', () => {
@@ -91,4 +92,12 @@ test('conversation follow-up window starts after queued assistant playback', () 
     now: 1000, idleMs: 20000, followupMs: 30000,
     playbackUntil: 5000, awaitingFollowup: false
   }), 24000);
+});
+test('room noise from the logs is rejected; real commands and answers to a question are kept', () => {
+  const reject = [['啊，star of those per an end 。Cool tonight, we sound cool', {}, 'foreign-script'], ['Hey, Cortana.', { conversationActive: true }, 'other-assistant'],
+    ['Können.', { conversationActive: true }, 'low-information'], ['Controller.', { conversationActive: true }, 'low-information'], ['山にやってますが', {}, 'foreign-script']];
+  for (const [text, ctx, reason] of reject) assert.deepEqual(classifyUserTurn(text, ctx), { accept: false, reason }, text);
+  for (const [text, ctx] of [['open safari', {}], ['what is on my calendar today', { conversationActive: true }], ['Telegram', { conversationActive: true, lastAssistant: 'Which app?' }], ['stop', {}]]) {
+    assert.equal(classifyUserTurn(text, ctx).accept, true, text);
+  }
 });
