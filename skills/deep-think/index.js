@@ -27,8 +27,9 @@ function env(k, def) {
   return m ? m[1].trim() : def;
 }
 
-const FAST_MODEL = env('DEEP_THINK_FAST_MODEL', 'grok-4-1-fast-reasoning');
-const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL', 'gpt-5.6-sol');
+const MAIN_DEPLOYMENT = env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini');
+const FAST_MODEL = env('DEEP_THINK_FAST_MODEL') || MAIN_DEPLOYMENT; // mavjud bo'lmagan nomga urinib, keyin zaxiraga tushmaymiz
+const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL') || MAIN_DEPLOYMENT;
 const TIMEOUT_MS = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
 const MAX_TOKENS = parseInt(env('DEEP_THINK_MAX_TOKENS'), 10) || 1200;
 

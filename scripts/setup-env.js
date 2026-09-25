@@ -126,29 +126,42 @@ async function runWizard({ envPath = ENV, reconfigure = false, interactive = pro
     return { ok: true, missing: [] };
   }
 
+  const failed = [];
   const rl = io.ask === ask ? readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true }) : null;
   try {
     for (const section of SECTIONS) {
-      const needs = section.fields.filter(f => reconfigure || !val(f.key));
-      if (!needs.length) continue;
+      // Bo'lim bir marta ham to'ldirilmagan bo'lsa (yoki --reconfigure), undagi HAMMA maydon so'raladi —
+      // oldindan yozilgan standartlar (deployment nomi, region) ham ko'rsatiladi va Enter bilan qabul qilinadi.
+      const trigger = f => (f.required || f.copyFrom || f.optional) && !val(f.key);
+      if (!reconfigure && !section.fields.some(trigger)) continue;
       io.log('\n' + c.b(section.title)); io.log(c.d('   ' + section.help));
-      for (const f of needs) {
-        const fallback = f.def || (f.copyFrom ? val(f.copyFrom) : '');
-        const shown = f.secret ? (f.copyFrom && fallback ? ' [Enter = yuqoridagi]' : '') : (fallback ? ` [${fallback}]` : (f.optional ? ' [Enter = o‘tkazish]' : ''));
-        let answer = await io.ask(rl, `   ${f.label}${shown}: `, f.secret);
-        if (!answer) answer = fallback;
-        while (!answer && f.required) { io.log(c.y('   Bu majburiy.')); answer = await io.ask(rl, `   ${f.label}: `, f.secret); }
-        if (answer) text = setKey(text, f.key, answer);
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        for (const f of section.fields) {
+          const current = val(f.key);
+          const fallback = current || f.def || (f.copyFrom ? val(f.copyFrom) : '');
+          const shown = f.secret
+            ? (current ? ' [Enter = saqlangan]' : (f.copyFrom && fallback ? ' [Enter = yuqoridagi]' : (f.optional ? ' [Enter = o‘tkazish]' : '')))
+            : (fallback ? ` [${fallback}]` : (f.optional ? ' [Enter = o‘tkazish]' : ''));
+          let answer = await io.ask(rl, `   ${f.label}${shown}: `, f.secret);
+          if (!answer) answer = fallback;
+          while (!answer && f.required) { io.log(c.y('   Bu majburiy.')); answer = await io.ask(rl, `   ${f.label}: `, f.secret); }
+          text = setKey(text, f.key, answer || '');
+        }
+        save();
+        let result = null;
+        if (section.id === 'llm') result = await validateAzureOpenAI({ endpoint: val('AZURE_OPENAI_ENDPOINT'), key: val('AZURE_OPENAI_KEY'), deployment: val('AZURE_OPENAI_DEPLOYMENT') || 'gpt-5-mini' }, request);
+        if (section.id === 'speech') result = await validateSpeech({ key: val('AZURE_SPEECH_KEY'), region: val('AZURE_SPEECH_REGION') }, request);
+        if (section.id === 'telegram' && val('TELEGRAM_BOT_TOKEN')) result = await validateTelegram(val('TELEGRAM_BOT_TOKEN'), request);
+        if (section.id === 'voice') { text = setKey(text, 'AZURE_VOICELIVE_API_KEY', val('AZURE_VOICELIVE_KEY')); save(); }
+        if (section.id === 'telegram' && val('TELEGRAM_OWNER_IDS')) { text = setKey(text, 'TELEGRAM_CHAT_ID', val('TELEGRAM_OWNER_IDS').split(/[,\s;]+/)[0]); save(); }
+        if (!result) break;
+        if (result.ok === true) { io.log('   ' + c.g('✅ ' + result.message)); break; }
+        if (result.ok === null) { io.log('   ' + c.y('⚠️  ' + result.message + ' — keyinroq tekshiriladi')); break; }
+        io.log('   ' + c.r('❌ ' + result.message));
+        if (attempt === 3) { failed.push(section.title.replace(/^\S+\s+/, '')); break; }
+        const again = await io.ask(rl, '   Qayta kiritasizmi? [Y/n]: ');
+        if (/^n/i.test(again)) { failed.push(section.title.replace(/^\S+\s+/, '')); break; }
       }
-      save();
-      // Tekshiruv
-      let result = null;
-      if (section.id === 'llm') result = await validateAzureOpenAI({ endpoint: val('AZURE_OPENAI_ENDPOINT'), key: val('AZURE_OPENAI_KEY'), deployment: val('AZURE_OPENAI_DEPLOYMENT') || 'gpt-5-mini' }, request);
-      if (section.id === 'speech') result = await validateSpeech({ key: val('AZURE_SPEECH_KEY'), region: val('AZURE_SPEECH_REGION') }, request);
-      if (section.id === 'telegram' && val('TELEGRAM_BOT_TOKEN')) result = await validateTelegram(val('TELEGRAM_BOT_TOKEN'), request);
-      if (section.id === 'voice') { text = setKey(text, 'AZURE_VOICELIVE_API_KEY', val('AZURE_VOICELIVE_KEY')); save(); }
-      if (result) io.log('   ' + (result.ok === true ? c.g('✅ ' + result.message) : result.ok === false ? c.r('❌ ' + result.message + ' — keyinroq .env da tuzating yoki ./install.sh --reconfigure') : c.y('⚠️  ' + result.message)));
-      if (section.id === 'telegram' && val('TELEGRAM_OWNER_IDS')) { text = setKey(text, 'TELEGRAM_CHAT_ID', val('TELEGRAM_OWNER_IDS').split(/[,\s;]+/)[0]); save(); }
     }
 
     if (reconfigure || !parse(text).has('JARVIS_CONFIRM_MODE') || !val('JARVIS_CONFIRM_MODE')) {
@@ -159,8 +172,10 @@ async function runWizard({ envPath = ENV, reconfigure = false, interactive = pro
     }
   } finally { if (rl) rl.close(); }
   const stillMissing = SECTIONS.flatMap(s => s.fields).filter(f => f.required && !val(f.key)).map(f => f.key);
-  io.log(stillMissing.length ? c.y('\n⚠️  Hali bo‘sh: ' + stillMissing.join(', ')) : c.g('\n✅ .env tayyor'));
-  return { ok: !stillMissing.length, missing: stillMissing };
+  if (stillMissing.length) io.log(c.y('\n⚠️  Hali bo‘sh: ' + stillMissing.join(', ')));
+  else if (failed.length) io.log(c.y('\n⚠️  .env to‘ldirildi, lekin tekshiruvdan o‘tmadi: ' + failed.join('; ') + '\n   Tuzatish: ./install.sh --reconfigure (yoki .env ni tahrirlab ./jarvis restart)'));
+  else io.log(c.g('\n✅ .env tayyor'));
+  return { ok: !stillMissing.length, missing: stillMissing, failed };
 }
 
 if (require.main === module) {

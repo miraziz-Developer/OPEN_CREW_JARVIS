@@ -57,7 +57,7 @@ if ! xcode-select -p >/dev/null 2>&1; then
   die "Xcode Command Line Tools o'rnatilmoqda (oyna ochildi). Tugagach ./install.sh ni qayta ishga tushiring."
 fi
 if ! command -v brew >/dev/null 2>&1; then
-  read -r -p "Homebrew o'rnatilmagan. Hozir o'rnataymi? [Y/n] " a
+  a="Y"; [[ -t 0 ]] && { read -r -p "Homebrew o'rnatilmagan. Hozir o'rnataymi? [Y/n] " a || a="Y"; }
   [[ "${a:-Y}" =~ ^[Yy]$ ]] || die "Homebrew kerak: https://brew.sh"
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   [[ -x /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)" || { [[ -x /usr/local/bin/brew ]] && eval "$(/usr/local/bin/brew shellenv)"; }
@@ -65,7 +65,17 @@ fi
 BREW_PREFIX="$(brew --prefix)"; export PATH="$BREW_PREFIX/bin:$PATH"
 
 step "2/8 Dasturlar (Homebrew: node, python, sox, uv, yt-dlp, cliclick, whisper-cpp)"
-brew bundle --file=Brewfile --no-lock >/dev/null 2>&1 || brew bundle --file=Brewfile --no-lock || warn "ba'zi brew paketlari o'rnatilmadi"
+# Faqat yetishmayotganini o'rnatamiz; mavjudlarini yangilamaymiz (ishlab turgan tizim buzilmasin).
+# (brew bundle yangi Homebrew'da --no-lock ni qabul qilmaydi va sukut bo'yicha hammasini yangilaydi.)
+BREW_FAILED=()
+while read -r formula; do
+  [[ -z "$formula" ]] && continue
+  cmd="${formula%%@*}"; case "$formula" in python@*) cmd="python${formula#python@}";; whisper-cpp) cmd="whisper-cli";; esac
+  if brew list --formula "$formula" >/dev/null 2>&1 || command -v "$cmd" >/dev/null 2>&1; then echo "  ✓ $formula"; continue; fi
+  echo "  ⏳ $formula o'rnatilmoqda…"
+  brew install "$formula" >/dev/null 2>&1 && echo "  ✓ $formula" || BREW_FAILED+=("$formula")
+done < <(sed -n 's/^brew "\([^"]*\)".*/\1/p' Brewfile)
+if ((${#BREW_FAILED[@]})); then warn "o'rnatilmadi: ${BREW_FAILED[*]} (qo'lda: brew install ${BREW_FAILED[*]})"; fi
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 (( NODE_MAJOR >= 22 )) || die "Node 22+ kerak (hozir $(node --version)): brew upgrade node"
 command -v openclaw >/dev/null || { warn "openclaw o'rnatilmoqda"; npm install -g openclaw >/dev/null; }
@@ -107,7 +117,7 @@ npm run -s doctor || warn "doctor ogohlantirish berdi — yuqoridagini ko'ring"
 
 # ── macOS ruxsatlari: Apple ularni faqat foydalanuvchi bera oladi ──
 echo -e "\n${B}macOS ruxsatlari${N} (bir marta, faqat siz bera olasiz):\n  Mikrofon · Accessibility · Automation · Screen Recording — Terminal/node uchun"
-read -r -p "Tegishli sozlama oynalarini hozir ochaymi? [Y/n] " a
+a="n"; [[ -t 0 ]] && { read -r -p "Tegishli sozlama oynalarini hozir ochaymi? [Y/n] " a || a="n"; }
 if [[ "${a:-Y}" =~ ^[Yy]$ ]]; then
   for pane in Privacy_Microphone Privacy_Accessibility Privacy_Automation Privacy_ScreenCapture; do open "x-apple.systempreferences:com.apple.preference.security?$pane" 2>/dev/null || true; sleep 1; done
 fi

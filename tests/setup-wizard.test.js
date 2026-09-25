@@ -50,6 +50,11 @@ test('wizard writes keys, copies voice defaults, generates a gateway token, sets
   assert.equal(env.get('AZURE_VOICELIVE_API_KEY'), 'OPENAI-KEY');
   assert.equal(env.get('AZURE_VOICELIVE_MODEL'), 'gpt-realtime');
   assert.equal(env.get('JARVIS_CONFIRM_MODE'), 'payments');
+  // Har bir javob o'z maydoniga tushganini tekshiramiz (avval javoblar siljib, Telegram tokeniga region yozilib qolgan edi).
+  assert.equal(env.get('AZURE_SPEECH_KEY'), 'SPEECH-KEY');
+  assert.equal(env.get('AZURE_SPEECH_REGION'), 'swedencentral');
+  assert.equal(env.get('TELEGRAM_BOT_TOKEN') || '', '');
+  assert.equal(env.get('TELEGRAM_OWNER_IDS') || '', '');
   assert.match(env.get('OPENCLAW_GATEWAY_TOKEN'), /^[0-9a-f]{48}$/);
   assert.equal((fs.statSync(envPath).mode & 0o777).toString(8), '600');
 });
@@ -71,4 +76,29 @@ test('Azure validation calls the same endpoint the missions use (/openai/v1/resp
   await validateAzureOpenAI({ endpoint: 'https://x.services.ai.azure.com/api/projects/p', key: 'K', deployment: 'd' }, async req => { seen = req; return { status: 200 }; });
   assert.equal(seen.url, 'https://x.services.ai.azure.com/openai/v1/responses');
   assert.equal(seen.headers['api-key'], 'K');
+});
+
+test('a rejected key can be re-entered in place, and deployment/region defaults are shown and editable', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiz-'));
+  const envPath = path.join(dir, '.env');
+  const prompts = [];
+  const queue = ['https://r.services.ai.azure.com', 'BAD-KEY', 'my-deploy',     // llm, 1-urinish (kalit noto'g'ri)
+                 'y', '', 'GOOD-KEY', '',                                        // qayta: endpoint saqlanadi, yangi kalit, deployment saqlanadi
+                 '', '', '',                                                     // voice
+                 'S', 'westeurope',                                              // speech
+                 '', '',                                                         // telegram
+                 '3'];                                                           // strict
+  const io = { ask: async (_rl, q) => { prompts.push(q); return queue.length ? queue.shift() : ''; }, log: () => {} };
+  const request = async req => ({ status: req.url.includes('/openai/v1/responses') ? (req.headers['api-key'] === 'GOOD-KEY' ? 200 : 401) : 200, body: '{}' });
+  const r = await runWizard({ envPath, interactive: true, request, io });
+  assert.equal(r.ok, true);
+  const env = parse(fs.readFileSync(envPath, 'utf8'));
+  assert.equal(env.get('AZURE_OPENAI_KEY'), 'GOOD-KEY');
+  assert.equal(env.get('AZURE_OPENAI_DEPLOYMENT'), 'my-deploy');
+  assert.equal(env.get('AZURE_SPEECH_REGION'), 'westeurope');
+  assert.equal(env.get('JARVIS_CONFIRM_MODE'), 'strict');
+  assert.ok(prompts.some(p => /Model deployment nomi \[gpt-5-mini\]/.test(p)), 'deployment default shown');
+  assert.ok(prompts.some(p => /Speech region/.test(p)), 'region asked');
+  assert.ok(prompts.some(p => /Qayta kiritasizmi/.test(p)), 'retry offered');
+  assert.ok(prompts.some(p => /API key \[Enter = saqlangan\]/.test(p)), 'saved secret offered as default on retry');
 });
