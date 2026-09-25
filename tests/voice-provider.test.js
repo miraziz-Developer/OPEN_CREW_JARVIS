@@ -6,18 +6,18 @@ const { buildVoiceProviders } = require('../core/voice-provider');
 
 function from(values) { return (key, fallback) => values[key] ?? fallback; }
 
-test('Voice Live is primary and direct realtime is stable fallback', () => {
+test('direct Foundry realtime is primary and Voice Live is fallback', () => {
   const providers = buildVoiceProviders(from({
     AZURE_VOICELIVE_ENDPOINT: 'https://voice.services.ai.azure.com/',
     AZURE_VOICELIVE_KEY: 'voice-key',
     AZURE_REALTIME_ENDPOINT: 'https://stable.openai.azure.com/openai/v1',
     AZURE_REALTIME_KEY: 'realtime-key'
   }));
-  assert.deepEqual(providers.map(provider => provider.id), ['voice-live', 'azure-realtime']);
-  assert.equal(providers[0].url, 'wss://voice.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime');
-  assert.equal(providers[0].voice.name, 'en-US-OnyxTurboMultilingualNeural');
-  assert.equal(providers[1].voice, 'shimmer');
-  assert.equal(providers[1].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5');
+  assert.deepEqual(providers.map(provider => provider.id), ['azure-realtime', 'voice-live']);
+  assert.equal(providers[0].voice, 'shimmer');
+  assert.equal(providers[0].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1');
+  assert.equal(providers[1].url, 'wss://voice.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime');
+  assert.equal(providers[1].voice.name, 'en-US-OnyxTurboMultilingualNeural');
 });
 
 test('incomplete or placeholder provider credentials are ignored', () => {
@@ -26,12 +26,12 @@ test('incomplete or placeholder provider credentials are ignored', () => {
 
 test('Foundry full realtime WebSocket endpoint is normalized without duplicating its path', () => {
   const providers = buildVoiceProviders(from({
-    AZURE_REALTIME_ENDPOINT: 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5',
+    AZURE_REALTIME_ENDPOINT: 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1',
     AZURE_REALTIME_KEY: 'realtime-key',
-    AZURE_REALTIME_DEPLOYMENT: 'gpt-realtime-1.5'
+    AZURE_REALTIME_DEPLOYMENT: 'gpt-realtime-2.1'
   }));
 
-  assert.equal(providers[0].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5');
+  assert.equal(providers[0].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1');
 });
 test('OpenAI voices are passed to Voice Live natively while Azure neural voices keep the azure-standard shape', () => {
   const base = { AZURE_VOICELIVE_ENDPOINT: 'https://voice.services.ai.azure.com/', AZURE_VOICELIVE_KEY: 'k' };

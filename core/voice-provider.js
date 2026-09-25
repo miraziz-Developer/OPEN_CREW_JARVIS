@@ -43,10 +43,26 @@ function azureVoice(name, env) {
 
 function buildVoiceProviders(env) {
   const providers = [];
+  const realtimeEndpoint = env('AZURE_REALTIME_ENDPOINT');
+  const realtimeKey = env('AZURE_REALTIME_KEY');
   const voiceLiveEndpoint = env('AZURE_VOICELIVE_ENDPOINT');
   const voiceLiveKey = env('AZURE_VOICELIVE_KEY');
   // Bitta ovoz hamma joyda (Voice Live + TTS) — "ikki xil ovoz" xatosini oldini oladi.
   const unifiedVoice = env('JARVIS_VOICE') || env('AZURE_VOICELIVE_VOICE') || env('AZURE_SPEECH_VOICE') || 'en-US-OnyxTurboMultilingualNeural';
+
+  // Direct Foundry Realtime is primary. Voice Live remains a provider-level fallback.
+  if (configured(realtimeEndpoint) && configured(realtimeKey)) {
+    const base = websocketEndpoint(realtimeEndpoint)
+      .replace(/\/openai\/v1\/realtime(?:\?.*)?$/, '')
+      .replace(/\/openai\/v1(?:\?.*)?$/, '');
+    const deployment = env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1');
+    providers.push({
+      id: 'azure-realtime',
+      url: `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}`,
+      headers: { 'api-key': realtimeKey },
+      voice: getRealtimeVoice(env('AZURE_REALTIME_VOICE'), unifiedVoice)
+    });
+  }
 
   if (configured(voiceLiveEndpoint) && configured(voiceLiveKey)) {
     const base = websocketEndpoint(voiceLiveEndpoint)
@@ -62,21 +78,6 @@ function buildVoiceProviders(env) {
       voice: REALTIME_VOICES.includes(String(unifiedVoice).trim().toLowerCase())
         ? String(unifiedVoice).trim().toLowerCase()
         : azureVoice(unifiedVoice, env)
-    });
-  }
-
-  const realtimeEndpoint = env('AZURE_REALTIME_ENDPOINT');
-  const realtimeKey = env('AZURE_REALTIME_KEY');
-  if (configured(realtimeEndpoint) && configured(realtimeKey)) {
-    const base = websocketEndpoint(realtimeEndpoint)
-      .replace(/\/openai\/v1\/realtime(?:\?.*)?$/, '')
-      .replace(/\/openai\/v1(?:\?.*)?$/, '');
-    const deployment = env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-1.5');
-    providers.push({
-      id: 'azure-realtime',
-      url: `${base}/openai/v1/realtime?model=${encodeURIComponent(deployment)}`,
-      headers: { 'api-key': realtimeKey },
-      voice: getRealtimeVoice(env('AZURE_REALTIME_VOICE'), unifiedVoice)
     });
   }
 

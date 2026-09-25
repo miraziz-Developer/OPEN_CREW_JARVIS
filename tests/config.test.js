@@ -55,7 +55,7 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.AZURE_TERRA_DEPLOYMENT, 'gpt-5.6-terra');
   assert.equal(result.values.AZURE_VOICELIVE_MODEL, 'gpt-realtime');
   assert.equal(result.values.AZURE_VOICELIVE_VOICE, 'en-US-OnyxTurboMultilingualNeural');
-  assert.equal(result.values.AZURE_REALTIME_DEPLOYMENT, 'gpt-realtime-1.5');
+  assert.equal(result.values.AZURE_REALTIME_DEPLOYMENT, 'gpt-realtime-2.1');
   assert.equal(result.values.AZURE_TRANSCRIBE_DEPLOYMENT, 'gpt-live-transcribe');
   assert.equal(result.values.AZURE_EMBEDDING_DEPLOYMENT, 'text-embedding-3-large-2');
   assert.equal(result.values.TURN_STALE_TIMEOUT_MS, 600000);
@@ -130,12 +130,12 @@ test('new provider secrets are redacted and partial credential pairs fail', () =
 test('Foundry realtime WebSocket endpoints are valid configuration', () => {
   const result = validateConfig({
     ...valid,
-    AZURE_REALTIME_ENDPOINT: 'wss://realtime.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5',
+    AZURE_REALTIME_ENDPOINT: 'wss://realtime.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1',
     AZURE_REALTIME_KEY: 'realtime-secret'
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.values.AZURE_REALTIME_ENDPOINT, 'wss://realtime.openai.azure.com/openai/v1/realtime?model=gpt-realtime-1.5');
+  assert.equal(result.values.AZURE_REALTIME_ENDPOINT, 'wss://realtime.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1');
 });
 
 test('opt-in whisper wake requires both deployed binary and model paths', () => {

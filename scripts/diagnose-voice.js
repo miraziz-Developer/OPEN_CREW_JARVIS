@@ -155,8 +155,8 @@ function main() {
   add('config:azure-openai', Boolean(env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY), 'realtime/agent key ' + (env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY ? 'mavjud' : 'yetishmaydi'));
   const voiceLiveReady = Boolean(env.AZURE_VOICELIVE_ENDPOINT && env.AZURE_VOICELIVE_KEY);
   const realtimeReady = Boolean(env.AZURE_REALTIME_ENDPOINT && env.AZURE_REALTIME_KEY);
-  add('config:voice-live', voiceLiveReady, voiceLiveReady ? 'primary provider tayyor' : 'endpoint/key yetishmaydi', 'warn');
-  add('config:realtime-fallback', realtimeReady, realtimeReady ? 'gpt-realtime-1.5 fallback tayyor' : 'endpoint/key yetishmaydi', 'warn');
+  add('config:realtime-primary', realtimeReady, realtimeReady ? `${env.AZURE_REALTIME_DEPLOYMENT || 'gpt-realtime-2.1'} primary provider tayyor` : 'endpoint/key yetishmaydi', 'warn');
+  add('config:voice-live-fallback', voiceLiveReady, voiceLiveReady ? 'fallback provider tayyor' : 'endpoint/key yetishmaydi', 'warn');
   const daemonProcesses = findMatchingProcesses(path.join(ROOT, 'jarvis_daemon.js'));
   const sentinelProcesses = findMatchingProcesses(path.join(ROOT, 'scripts', 'pause-sentinel.js'));
   add('process:voice-daemon', daemonProcesses.length === 1, daemonProcesses.length ? `pid=${daemonProcesses.map(p => p.pid).join(',')}` : 'ishlamayapti', 'warn');

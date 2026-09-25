@@ -51,7 +51,7 @@ const CONFIG_SCHEMA = Object.freeze({
   AZURE_VOICELIVE_API_VERSION: { type: 'string', default: '2026-04-10' },
   AZURE_REALTIME_ENDPOINT: { type: 'websocket-url' },
   AZURE_REALTIME_KEY: { type: 'secret' },
-  AZURE_REALTIME_DEPLOYMENT: { type: 'string', default: 'gpt-realtime-1.5' },
+  AZURE_REALTIME_DEPLOYMENT: { type: 'string', default: 'gpt-realtime-2.1' },
   AZURE_REALTIME_VOICE: { type: 'string', default: 'cedar' },
   AZURE_TRANSCRIBE_ENDPOINT: { type: 'url' },
   AZURE_TRANSCRIBE_KEY: { type: 'secret' },

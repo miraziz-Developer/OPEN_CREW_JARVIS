@@ -2,7 +2,7 @@
 /**
  * REALTIME VOICE — multilingual low-latency voice pipeline.
  *
- * Voice Live gpt-realtime (primary) or gpt-realtime-1.5 (fallback) handles
+ * Foundry gpt-realtime-2.1 (primary) or Voice Live (fallback) handles
  * STT, VAD, conversation and speech directly.
  * Complex/grounded questions use the tiered Grok/GPT-5.6 Sol reasoning path and are spoken by
  * the same Realtime session, avoiding a second STT/TTS provider round-trip.
