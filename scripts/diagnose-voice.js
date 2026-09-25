@@ -75,7 +75,8 @@ function checkWhisperWake(env) {
 
   let flagsReady = false;
   if (binaryReady) {
-    const result = spawnSync(binary, ['--help'], { encoding: 'utf8', timeout: 5000 });
+    const coldStartTimeoutMs = Number(env.WHISPER_WAKE_COLD_START_TIMEOUT_MS) || 45000;
+    const result = spawnSync(binary, ['--help'], { encoding: 'utf8', timeout: coldStartTimeoutMs });
     const help = `${result.stdout || ''}\n${result.stderr || ''}`;
     // Homebrew's Apple Metal build can return a non-zero code after it has
     // already printed valid help while initializing a backend. The supported
@@ -83,7 +84,7 @@ function checkWhisperWake(env) {
     flagsReady = !result.error && ['-m', '-f', '-l', '-nt', '-otxt', '-of'].every(flag => help.includes(flag));
   }
   add('wakeword:whisper-cli-flags', flagsReady,
-    flagsReady ? 'kerakli -m -f -l -nt -otxt -of flaglari mavjud' : 'whisper-cli flaglari mos emas yoki --help ishlamadi');
+    flagsReady ? 'kerakli -m -f -l -nt -otxt -of flaglari mavjud' : 'whisper-cli flaglari mos emas yoki cold-start timeout ichida --help ishlamadi');
 }
 
 function checkMic(env) {

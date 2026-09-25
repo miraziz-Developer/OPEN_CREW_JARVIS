@@ -79,6 +79,7 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.OPENWAKEWORD_MODELS, 'hey_jarvis');
   assert.equal(result.values.WHISPER_WAKE_ENABLED, false);
   assert.equal(result.values.WHISPER_WAKE_WINDOW_MS, 3000);
+  assert.equal(result.values.WHISPER_WAKE_COLD_START_TIMEOUT_MS, 45000);
   assert.equal(result.values.AZURE_SPEECH_KEY, 'speech-secret-value');
 });
 

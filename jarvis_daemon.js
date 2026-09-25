@@ -138,6 +138,7 @@ const WHISPER_WAKE_WINDOW_MS = parseInt(env('WHISPER_WAKE_WINDOW_MS'), 10) || 30
 const WHISPER_WAKE_INTERVAL_MS = parseInt(env('WHISPER_WAKE_INTERVAL_MS'), 10) || 1500;
 const WHISPER_WAKE_COOLDOWN_MS = parseInt(env('WHISPER_WAKE_COOLDOWN_MS'), 10) || 5000;
 const WHISPER_WAKE_TIMEOUT_MS = parseInt(env('WHISPER_WAKE_TIMEOUT_MS'), 10) || 15000;
+const WHISPER_WAKE_COLD_START_TIMEOUT_MS = parseInt(env('WHISPER_WAKE_COLD_START_TIMEOUT_MS'), 10) || 45000;
 const WAKE_STT_SILENCE_MS = 420;
 const WAKE_STT_MAX_MS = 2200;
 const WAKE_STT_PREROLL_MS = 450;
@@ -551,6 +552,7 @@ async function mainLoop() {
       intervalMs: WHISPER_WAKE_INTERVAL_MS,
       cooldownMs: WHISPER_WAKE_COOLDOWN_MS,
       timeoutMs: WHISPER_WAKE_TIMEOUT_MS,
+      coldStartTimeoutMs: WHISPER_WAKE_COLD_START_TIMEOUT_MS,
       onReady: () => ok('whisper.cpp lokal wake transcript detector tayyor'),
       onError: error => wrn('whisper.cpp wake detector: ' + error.message),
       onWake: ({ transcript }) => {

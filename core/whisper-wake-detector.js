@@ -19,6 +19,10 @@ function isJarvisWakeTranscript(transcript) {
   return /(?:^|\s)jarvis(?:\s|$)/.test(normalizeTranscript(transcript));
 }
 
+function invocationTimeoutMs(invocationCount, timeoutMs, coldStartTimeoutMs) {
+  return invocationCount === 0 ? Math.max(timeoutMs, coldStartTimeoutMs) : timeoutMs;
+}
+
 // whisper.cpp CLI stdin uchun barqaror streaming protocol bermaydi. Shu sabab
 // audio capture persistent qoladi, worker esa vaqt bo'yicha chegaralangan eng
 // so'nggi PCM oynani bitta CLI invocation bilan taniydi. Eski oynalar queue
@@ -33,6 +37,7 @@ class WhisperWakeDetector {
     this.intervalMs = options.intervalMs || 1500;
     this.cooldownMs = options.cooldownMs || 5000;
     this.timeoutMs = options.timeoutMs || 15000;
+    this.coldStartTimeoutMs = options.coldStartTimeoutMs || 45000;
     this.now = options.now || Date.now;
     this.spawn = options.spawn || spawn;
     this.onWake = options.onWake || (() => {});
@@ -45,6 +50,7 @@ class WhisperWakeDetector {
     this.lastWakeAt = 0;
     this.buffers = [];
     this.bufferBytes = 0;
+    this.invocationCount = 0;
     this.maxBytes = Math.ceil(this.sampleRate * 2 * this.windowMs / 1000);
   }
 
@@ -102,6 +108,8 @@ class WhisperWakeDetector {
   _runCli(wavFile, outputBase) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      const timeoutMs = invocationTimeoutMs(this.invocationCount, this.timeoutMs, this.coldStartTimeoutMs);
+      this.invocationCount += 1;
       const child = this.spawn(this.binaryPath, ['-m', this.modelPath, '-f', wavFile, '-l', this.language, '-nt', '-otxt', '-of', outputBase], { stdio: ['ignore', 'ignore', 'pipe'] });
       let stderr = '';
       const finish = error => {
@@ -112,8 +120,8 @@ class WhisperWakeDetector {
       };
       const timer = setTimeout(() => {
         try { child.kill('SIGKILL'); } catch (_) {}
-        finish(new Error(`whisper.cpp ${this.timeoutMs}ms ichida tugamadi`));
-      }, this.timeoutMs);
+        finish(new Error(`whisper.cpp ${timeoutMs}ms ichida tugamadi`));
+      }, timeoutMs);
       timer.unref?.();
       child.stderr?.on('data', data => { stderr = (stderr + data).slice(-1000); });
       child.once('error', error => finish(error));
@@ -128,4 +136,4 @@ class WhisperWakeDetector {
   }
 }
 
-module.exports = { WhisperWakeDetector, normalizeTranscript, isJarvisWakeTranscript };
+module.exports = { WhisperWakeDetector, normalizeTranscript, isJarvisWakeTranscript, invocationTimeoutMs };

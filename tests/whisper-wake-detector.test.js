@@ -6,7 +6,7 @@ const EventEmitter = require('node:events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { WhisperWakeDetector, normalizeTranscript, isJarvisWakeTranscript } = require('../core/whisper-wake-detector');
+const { WhisperWakeDetector, normalizeTranscript, isJarvisWakeTranscript, invocationTimeoutMs } = require('../core/whisper-wake-detector');
 
 async function waitForIdle(detector) {
   while (detector.inFlight) await new Promise(resolve => setImmediate(resolve));
@@ -17,6 +17,12 @@ test('whisper wake matching accepts Jarvis as a standalone normalized word only'
   assert.equal(isJarvisWakeTranscript('Hey, Jarvis!'), true);
   assert.equal(isJarvisWakeTranscript('jarvisning'), false);
   assert.equal(isJarvisWakeTranscript('jarvis2'), false);
+});
+
+test('whisper wake allows a larger Metal cold-start budget only for the first invocation', () => {
+  assert.equal(invocationTimeoutMs(0, 15000, 45000), 45000);
+  assert.equal(invocationTimeoutMs(1, 15000, 45000), 15000);
+  assert.equal(invocationTimeoutMs(0, 60000, 45000), 60000);
 });
 
 test('whisper wake detector transcribes bounded windows and debounces repeated wake transcripts', async () => {

@@ -135,6 +135,7 @@ const CONFIG_SCHEMA = Object.freeze({
   WHISPER_WAKE_INTERVAL_MS: { type: 'integer', default: 1500, min: 500, max: 10000 },
   WHISPER_WAKE_COOLDOWN_MS: { type: 'integer', default: 5000, min: 1000, max: 60000 },
   WHISPER_WAKE_TIMEOUT_MS: { type: 'integer', default: 15000, min: 1000, max: 60000 },
+  WHISPER_WAKE_COLD_START_TIMEOUT_MS: { type: 'integer', default: 45000, min: 1000, max: 120000 },
   WAKEWORD_THRESHOLD: { type: 'number', default: 0.35, min: 0.01, max: 0.99 },
   CLAP_TRIGGER_ENABLED: { type: 'boolean', default: false },
   CLAP_SPIKE_RATIO: { type: 'number', default: 4, min: 1.1, max: 30 },
