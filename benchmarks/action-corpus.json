@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "visual-accessibility-verified",
+      "kind": "visual",
+      "fixture": {
+        "observations": ["Before", "Saved"],
+        "semanticMatches": [[{ "title": "Save", "path": [0, 1], "score": 90 }]],
+        "visualMatches": []
+      },
+      "request": { "target": { "name": "Save" }, "action": "press", "expect": { "windowTitle": "Saved", "changed": true } },
+      "expected": { "status": "completed", "verified": true, "evidenceType": "accessibility", "attempts": 1, "semanticActs": 1, "visualActs": 0, "visualCenters": [] }
+    },
+    {
+      "id": "visual-fallback-verified",
+      "kind": "visual",
+      "fixture": {
+        "observations": ["Before", "Saved"],
+        "semanticMatches": [[]],
+        "visualMatches": [[{ "name": "Continue", "confidence": 0.95, "center": { "x": 100, "y": 200 } }]]
+      },
+      "request": { "target": { "name": "Continue" }, "action": "press", "expect": { "windowTitle": "Saved" } },
+      "expected": { "status": "completed", "verified": true, "evidenceType": "screenshot", "attempts": 1, "semanticActs": 0, "visualActs": 1, "visualCenters": [100] }
+    },
+    {
+      "id": "visual-retry-relocalizes",
+      "kind": "visual",
+      "fixture": {
+        "observations": ["Before", "Before", "Before", "Saved"],
+        "semanticMatches": [[], []],
+        "visualMatches": [
+          [{ "name": "Save", "confidence": 0.95, "center": { "x": 100, "y": 200 } }],
+          [{ "name": "Save", "confidence": 0.96, "center": { "x": 140, "y": 200 } }]
+        ]
+      },
+      "request": { "target": { "name": "Save" }, "action": "press", "expect": { "windowTitle": "Saved" } },
+      "expected": { "status": "completed", "verified": true, "evidenceType": "screenshot", "attempts": 2, "semanticActs": 0, "visualActs": 2, "visualCenters": [100, 140] }
+    },
+    {
+      "id": "visual-ambiguous-target-blocked",
+      "kind": "visual",
+      "fixture": {
+        "observations": ["Before"],
+        "semanticMatches": [[
+          { "title": "Delete", "path": [0, 1], "score": 50 },
+          { "title": "Delete", "path": [0, 2], "score": 47 }
+        ]],
+        "visualMatches": []
+      },
+      "request": { "target": { "name": "Delete" }, "action": "press", "expect": { "changed": true } },
+      "expected": { "status": "blocked", "verified": false, "evidenceType": null, "attempts": 0, "semanticActs": 0, "visualActs": 0, "visualCenters": [] }
+    },
+    {
+      "id": "completion-without-evidence-rejected",
+      "kind": "verifier",
+      "input": {
+        "version": 1,
+        "status": "completed",
+        "actions": [{ "id": "attempt-1", "description": "press Continue", "status": "completed" }],
+        "verification": { "passed": true, "method": "agent-claim" },
+        "evidence": [],
+        "summary": "Continue press completed.",
+        "error": null
+      },
+      "expected": false
+    }
+  ]
+}
