@@ -1,6 +1,7 @@
 'use strict';
 
 const https = require('https');
+const { createKeyedTaskQueue } = require('./keyed-task-queue');
 
 function telegramRequest(token, method, params = {}, options = {}) {
   const request = options.request || https.request;
@@ -72,6 +73,11 @@ function createTelegramPoller(options) {
   let failureCount = 0;
   let retryTimer = null;
   let activeController = null;
+  const updateQueue = options.updateQueue || createKeyedTaskQueue();
+
+  function updateKey(update) {
+    return String(update?.message?.chat?.id ?? update?.edited_message?.chat?.id ?? 'global');
+  }
 
   function schedule(delayMs) {
     if (stopped) return;
@@ -92,14 +98,16 @@ function createTelegramPoller(options) {
       });
       if (failureCount > 0) log.log('Telegram native polling reconnected.');
       failureCount = 0;
-      for (const update of updates) {
-        offset = Math.max(offset, update.update_id + 1);
+      await Promise.all(updates.map(update => updateQueue.enqueue(updateKey(update), async () => {
         try {
-          onUpdate(update);
+          await onUpdate(update);
         } catch (error) {
           log.error('Telegram update processing failed:', error.message || error);
         }
-      }
+      })));
+      // Failed updates are acknowledged after logging so one poison message
+      // cannot permanently block every later Telegram update.
+      for (const update of updates) offset = Math.max(offset, update.update_id + 1);
       schedule(0);
     } catch (error) {
       failureCount++;

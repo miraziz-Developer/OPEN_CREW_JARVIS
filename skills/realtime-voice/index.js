@@ -30,6 +30,8 @@ const { ActionSafetyPolicy } = require('../../core/action-safety-policy');
 const { recordHighRiskCompletion } = require('../../core/autonomous-action-audit');
 const { buildVoiceProviders } = require('../../core/voice-provider');
 const { createAgentBridge, needsPersistentExecution } = require('../../core/agent-bridge');
+const { verifyActionResult, actionResultText } = require('../../core/action-result');
+const { ActionFailureCorpus, sanitizeVerifierFailure } = require('../../core/action-failure-corpus');
 const { createSkillPlatform } = require('../platform');
 
 const { PROJECT_DIR } = require('../../core/paths');
@@ -957,10 +959,29 @@ function needsBackgroundAgentTask(text) {
   const value = String(text || '').trim();
   if (HEDGED_UTTERANCE.test(value)) return false;
   if (LONG_HORIZON.test(value)) return false;
-  if (!value || /\?|\b(?:why|how|what|which|should i|advice|explain|nega|qanday|nima|qaysi|maslahat|tushuntir)\b/i.test(value)) return false;
-  const action = /\b(?:open|close|click|type|write|create|edit|update|fix|debug|build|test|install|configure|deploy|run|start|launch|search|research|send|upload|download|fill|submit|och|yop|bos|yoz|yarat|tahrir|yangila|tuzat|tekshir|o'rnat|ornat|sozla|ishga tushir|qidir|izla|yubor|yukla|to'ldir|jo'nat|jonat|bajar)\b/i.test(value);
+  if (!value) return false;
+  // Polite commands are often transcribed as questions ("Can you install
+  // Word?", "Could you check my last five emails?"). A blanket `?` check
+  // incorrectly left those actions with the speech model, which then claimed
+  // it could not operate the computer. Keep genuine how/why questions in the
+  // conversational route, but execute explicit capability requests.
+  const politeActionRequest = /^(?:(?:jarvis|please|iltimos)[, ]+)*(?:can|could|would|will)\s+you\b/i.test(value);
+  const informationQuestion = /\b(?:why|how|what|which|should i|advice|explain|nega|qanday|nima|qaysi|maslahat|tushuntir)\b/i.test(value);
+  if (informationQuestion || (/\?/.test(value) && !politeActionRequest)) return false;
+  const action = /\b(?:open|close|quit|click|type|write|create|edit|update|fix|debug|build|test|install|configure|deploy|run|start|launch|search|research|check|read|list|summarize|capture|take|send|upload|download|fill|submit|set|och|yop|bos|yoz|yarat|tahrir|yangila|tuzat|tekshir|o'q|oqi|ro'yxat|royxat|xulosa|suratga ol|skrinshot ol|o'rnat|ornat|sozla|ishga tushir|qidir|izla|yubor|yukla|to'ldir|jo'nat|jonat|bajar)\b/i.test(value);
   const work = value.length >= 12 || /\b(?:file|code|project|browser|form|email|report|website|app|fayl|kod|loyiha|brauzer|forma|hisobot|sayt|dastur)\b/i.test(value);
   return action && work;
+}
+
+// Action agentining capability rad javobi bajarilgan/tekshirilgan natija emas.
+// Bunday matnni Realtime'ga qayta o'qitish aynan foydalanuvchi eshitmasligi
+// kerak bo'lgan "I can't; do it manually" javobini yana ovozga chiqaradi.
+function isUnverifiedAgentResult(text) {
+  const value = String(text || '').trim();
+  if (!value) return true;
+  return /\b(?:i (?:can(?:not|'t|’t)|am unable to|could(?: not|n't|n’t))|unable to|cannot directly|can(?:not|'t|’t) directly|do it (?:yourself|manually)|you(?:'ll| will) need to)\b/i.test(value)
+    || /\b(?:qila olmayman|bajara olmadim|qo['‘’]?limdan kelmaydi|o['‘’]?zingiz (?:qiling|bajaring))\b/i.test(value)
+    || /^(?:error|failed)\b/i.test(value);
 }
 
 // Eng ko'p ishlatiladigan, xavfsiz va bitta ma'noli desktop buyruqlarni
@@ -1203,9 +1224,14 @@ class RealtimeSession extends EventEmitter {
     this._backgroundTaskResults = [];
     this._backgroundAgentRunner = typeof options.backgroundAgentRunner === 'function'
       ? options.backgroundAgentRunner
-      : (description, sessionKey, onProgress) => VOICE_AGENT_BRIDGE.askAgent(description, sessionKey, {
+      : (description, sessionKey, onProgress) => VOICE_AGENT_BRIDGE.askAgent(description +
+        '\n\nReturn the final result as one JSON object only: {"status":"completed|failed|blocked","actions":[{"description":"...","status":"completed|failed|skipped"}],"verification":{"passed":true|false,"method":"..."},"evidence":[{"type":"accessibility|dom|api-response|command-exit|file-stat|process-state|screenshot|test-report","value":"concrete observed value","exitCode":0}],"summary":"brief user-facing result","error":null}. Set verification.passed=true only after independently observing the requested end state. Plain claims and text-only evidence are not verification.', sessionKey, {
         source: 'voice-background-agent', persistent: true, onProgress, onLongRunning: onProgress
       });
+    this._actionResultVerifier = typeof options.actionResultVerifier === 'function' ? options.actionResultVerifier : verifyActionResult;
+    this._actionFailureCorpus = options.actionFailureCorpus || new ActionFailureCorpus({
+      file: process.env.JARVIS_TEST === '1' ? null : path.join(PROJECT_DIR, '.run', 'action-failures.json')
+    });
     this._realtimeResponseActive = false;
     this._recentConversation = [];
     // Hozir ishlayotgan run_task jarayonlari (call_id -> {proc, description}).
@@ -1672,7 +1698,10 @@ class RealtimeSession extends EventEmitter {
         return true;
       }
       this.emit('telemetry', 'router.decision', { route: 'realtime-with-background-agent' });
-      this._respondWithRealtimeBackgroundTask();
+      // Do not let the speech model improvise an acknowledgement here. In
+      // production it sometimes ignored the acknowledgement instruction and
+      // said "I can't; do it manually" while the real agent was already
+      // working. Stay silent and speak only the agent's verified result.
       this._startBackgroundAgentTask(this.userTranscript, authorization.assessment);
       return true;
     }
@@ -1701,14 +1730,6 @@ class RealtimeSession extends EventEmitter {
     });
   }
 
-  _respondWithRealtimeBackgroundTask() {
-    return this._sendResponseCreate({
-      max_output_tokens: REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS,
-      tool_choice: 'none',
-      instructions: "Briefly acknowledge that the requested task has started in the background. Do not call tools, do not claim it is complete, and do not add advice or a long explanation. Speak natural English by default unless the user explicitly requested another named language."
-    });
-  }
-
   _startBackgroundAgentTask(description, assessment) {
     const callId = 'background-agent-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
     const sessionKey = 'agent:main:voice-background-' + callId;
@@ -1719,10 +1740,21 @@ class RealtimeSession extends EventEmitter {
         this.emit('telemetry', 'background_agent.progress', { callId, progress: String(text || '').slice(0, 500) });
       }, { persistent: true }))
       .then(async result => {
-        const output = String(result || "I couldn't complete that task.").trim();
+        const verified = this._actionResultVerifier(result);
+        const output = actionResultText(verified);
+        this.emit('tool_result', JSON.stringify(verified), callId);
+        if (verified.verification?.passed !== true || isUnverifiedAgentResult(output)) {
+          try {
+            this._actionFailureCorpus.record({
+              kind: 'verifier', input: sanitizeVerifierFailure(verified), expected: false,
+              reason: 'background-agent-unverified'
+            });
+          } catch (_) {}
+          this.emit('telemetry', 'background_agent.failed', { callId, reason: 'unverified-result' });
+          return;
+        }
         if (assessment) await this._auditHighRiskCompletion(assessment, { source: 'voice-background-agent', requestId: callId });
-        this.emit('tool_result', output, callId);
-        this.emit('telemetry', 'background_agent.completed', { callId, ok: !/^(?:error|failed|i couldn't)/i.test(output) });
+        this.emit('telemetry', 'background_agent.completed', { callId, ok: true });
         this._backgroundTaskResults.push({ answer: output.slice(0, 7000) });
         this._deliverReadyBackgroundWork();
       })
@@ -1730,8 +1762,6 @@ class RealtimeSession extends EventEmitter {
         const output = 'Error: ' + String(error?.message || error || 'background task failed').slice(0, 500);
         this.emit('tool_result', output, callId);
         this.emit('telemetry', 'background_agent.failed', { callId });
-        this._backgroundTaskResults.push({ answer: output });
-        this._deliverReadyBackgroundWork();
       });
   }
 
@@ -2904,6 +2934,6 @@ class RealtimeSession extends EventEmitter {
 
 module.exports = {
   RealtimeSession, resample16to24, needsGroundedAnswer, needsContextGrounding,
-  needsExpertAnswer, needsBackgroundAgentTask, collectGrounding, matchDirectFastAction, prepareSpokenAnswer,
-  buildSessionUpdate, loadInstructions, runFullAgent, confirmationPrompt, buildTools
+  needsExpertAnswer, needsBackgroundAgentTask, isUnverifiedAgentResult, collectGrounding, matchDirectFastAction, prepareSpokenAnswer,
+  buildSessionUpdate, loadInstructions, runFullAgent, confirmationPrompt, buildTools, verifyActionResult
 };

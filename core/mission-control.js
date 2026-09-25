@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { atomicWriteJson } = require('./jarvis-runtime');
+const { verifyActionResult, actionResultText } = require('./action-result');
+const { planCommand } = require('./mission-planner');
 
 const TERMINAL = new Set(['verified', 'failed', 'cancelled']);
 const STEP_TERMINAL = new Set(['verified', 'failed', 'cancelled']);
@@ -58,6 +60,11 @@ class MissionControl extends EventEmitter {
     return clone(mission);
   }
 
+  createPlannedMission(command, options = {}) {
+    const plan = planCommand(command, options);
+    return this.createMission(plan.goal, { ...options, steps: plan.steps, metadata: { ...options.metadata, planVersion: plan.version, planMode: plan.mode } });
+  }
+
   claimNext(missionId, worker = 'default') {
     const mission = this._mission(missionId);
     this._recoverMission(mission);
@@ -100,6 +107,18 @@ class MissionControl extends EventEmitter {
     this._record('step.verified', mission, { stepId, method: verification.method || 'unspecified' });
     this._refreshMission(mission);
     return clone(step);
+  }
+
+  completeStep(missionId, stepId, actionResult, options = {}) {
+    const verified = verifyActionResult(actionResult, options);
+    this.submitResult(missionId, stepId, verified, verified.evidence);
+    return this.verifyStep(missionId, stepId, {
+      ok: verified.verification.passed === true,
+      passed: verified.verification.passed === true,
+      method: verified.verification.method,
+      checks: verified.verification.checks,
+      error: verified.error || (verified.verification.passed ? null : actionResultText(verified))
+    });
   }
 
   failStep(missionId, stepId, error, options = {}) {

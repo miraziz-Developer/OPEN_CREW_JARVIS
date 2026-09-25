@@ -240,6 +240,12 @@ function beginSingleStepMission(goal, options = {}) {
 
 function recordMissionResult(missionId, stepId, result, evidence = {}) {
   if (!stepId) return null;
+  if (result && typeof result === 'object') return missions.completeStep(missionId, stepId, result);
+  if (typeof result === 'string' && /^\s*\{/.test(result)) {
+    let structured = null;
+    try { structured = JSON.parse(result); } catch (_) {}
+    if (structured) return missions.completeStep(missionId, stepId, structured);
+  }
   if (!resultLooksSuccessful(result)) return missions.failStep(missionId, stepId, result || 'Bo‘sh natija');
   missions.submitResult(missionId, stepId, result, evidence);
   return missions.verifyStep(missionId, stepId, { ok: true, method: evidence.type || 'agent-result' });
@@ -1038,7 +1044,9 @@ async function mainLoop() {
       markRealtimeActivity();
       activeToolCount = Math.max(0, activeToolCount - 1);
       flightRecorder.event('tool.completed', { result, callId });
-      try { runtime.completeTask(callId, result); } catch (e) { wrn('Task ledger: ' + e.message); }
+      let ledgerResult = result;
+      if (typeof result === 'string' && /^\s*\{/.test(result)) try { ledgerResult = JSON.parse(result); } catch (_) {}
+      try { runtime.completeTask(callId, ledgerResult); } catch (e) { wrn('Task ledger: ' + e.message); }
       try {
         const missionId = stableId('realtime', callId);
         const mission = missions.getMission(missionId);
@@ -1462,7 +1470,7 @@ async function processCommand(command) {
 // ════════════════════════════════════════════
 // GRACEFUL EXIT
 // ════════════════════════════════════════════
-function cleanup() {
+function cleanup(exitCode = 0) {
   inf('To\'xtatilmoqda...');
   if (_activeRealtimeSession) { try { _activeRealtimeSession.close(); } catch(e){} }
   if (_sox) { try { _sox.kill(); } catch(e){} }
@@ -1470,10 +1478,10 @@ function cleanup() {
   if (_whisperWakeDetector) { try { _whisperWakeDetector.release(); } catch(e){} }
   if (_sttPool) { _sttPool.killAll(); }
   try { runtime.close(); } catch(e) {}
-  process.exit(0);
+  process.exit(exitCode);
 }
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
+process.on('SIGINT', () => cleanup(0));
+process.on('SIGTERM', () => cleanup(0));
 process.on('SIGHUP', () => inf('SIGHUP qabul qilindi: keyingi action safety tekshiruvi .env dan yangi autonomy holatini o‘qiydi.'));
 
 // ════════════════════════════════════════════
@@ -1484,6 +1492,6 @@ process.on('SIGHUP', () => inf('SIGHUP qabul qilindi: keyingi action safety teks
     await mainLoop();
   } catch (e) {
     er('FATAL: ' + e.message);
-    cleanup();
+    cleanup(1);
   }
 })();

@@ -14,7 +14,7 @@ Mac uchun shaxsiy AI-yordamchi: **tez ovozli suhbat** ("Jarvis" deb chaqirasiz),
 
 | Nima | Nima uchun | Qayerdan olinadi |
 |---|---|---|
-| **Azure OpenAI** — endpoint, kalit, model nomi (`gpt-5-mini`) | JARVIS ning "miyasi": agent va missiyalar | [Azure AI Foundry](https://ai.azure.com) → project → *Endpoints and keys* → *Deploy model* |
+| **Azure OpenAI** — endpoint, kalit va deploymentlar | JARVIS ning "miyasi": oddiy so'rovlar uchun `gpt-6-astra`, murakkab/tool vazifalari uchun `gpt-6-sol` | [Azure AI Foundry](https://ai.azure.com) → project → *Endpoints and keys* → *Deploy model* |
 | **Azure Voice Live** — realtime model (`gpt-realtime`) | ovozli suhbat | xuddi shu Foundry project'da `gpt-realtime` ni deploy qiling |
 | **Azure Speech** — kalit va region | eshitish va gapirish | Azure portal → *Speech service* → *Keys and Endpoint* |
 | **Telegram bot** *(ixtiyoriy)* | telefondan boshqarish, xabarnomalar | Telegram'da [@BotFather](https://t.me/BotFather) → `/newbot` |
@@ -145,6 +145,8 @@ Loglar: `logs/daemon-YYYYMMDD.log`, `logs/mission-runner.stdout.log`.
 | Kalit | Ma'nosi |
 |---|---|
 | `AZURE_OPENAI_*` | agent va missiya modeli |
+| `AGENT_FAST_MODEL` | oddiy, tez va sifatli agent so'rovlari (`gpt-6-astra`) |
+| `AGENT_STRONG_MODEL`, `AGENT_STRONG_FALLBACK_MODELS` | coding, tool va murakkab vazifalar uchun primary/fallback deploymentlar |
 | `AZURE_VOICELIVE_*`, `AZURE_SPEECH_*` | ovoz |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_IDS` | Telegram bot va egalari (faqat ular boshqara oladi) |
 | `JARVIS_CONFIRM_MODE` | tasdiq rejimi (yuqoriga qarang) |
@@ -180,6 +182,7 @@ docs/                        chuqur hujjatlar
 ```bash
 npm test                 # testlar (haqiqiy .env, tarmoq va Telegram'siz ishlaydi)
 npm run security:scan    # maxfiy ma'lumot skaneri
+npm run benchmark:model  # model routing benchmarki (tarmoqsiz); --live varianti Azure latency/sifatni o'lchaydi
 ```
 
 Chuqur hujjatlar: [docs/autonomy.md](docs/autonomy.md) · [docs/memory-postgresql-migration.md](docs/memory-postgresql-migration.md) · [docs/owner-task-controls.md](docs/owner-task-controls.md)

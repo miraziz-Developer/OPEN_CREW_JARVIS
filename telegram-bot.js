@@ -13,6 +13,8 @@ const path = require('path');
 const os = require('os');
 const { writeMemory, searchMemory, readProfile } = require('./skills/memory');
 const { createTelegramPoller } = require('./core/telegram-poller');
+const { createKeyedTaskQueue } = require('./core/keyed-task-queue');
+const { prepareVoiceMessage, transcodeVoiceReply } = require('./core/telegram-media');
 const { analyzeVideoNote, validateVideoNote } = require('./core/video-note-analysis');
 const { createAgentBridge } = require('./core/agent-bridge');
 const { resolveOpenClawEnvironment } = require('./core/openclaw-credentials');
@@ -43,23 +45,11 @@ const TELEGRAM_VIDEO_NOTE_MAX_SECONDS = Number(getEnv('TELEGRAM_VIDEO_NOTE_MAX_S
 const chatHistory = {};
 const MAX_HISTORY = 10;
 const CONTEXT_TTL_MS = 10 * 60 * 1000;
-const videoNoteQueues = new Map();
 const processedVideoNotes = new Set();
 const MAX_PROCESSED_VIDEO_NOTES = 1000;
 const runtimeTelemetry = new RuntimeTelemetry({ file: path.join(PROJECT_DIR, '.run', 'telemetry.json') });
-
-// MUHIM: tarmoq vaqtincha uzilib qolsa (DNS/WiFi), node-telegram-bot-api'ning
-// ichki polling xatoligi ILGARI butun jarayonni yiqitib yuborardi (uncaught
-// promise rejection) — shu daqiqada kelgan har qanday buyruq (masalan
-// "davom et") "o'lik" jarayonga tushib, hech qachon javob bermas edi, va
-// jarayon qayta ishga tushganda oldingi suhbat konteksti butunlay yo'qolardi.
-// Global handler bilan bunday hodisalar endi jarayonni o'ldirmaydi.
-process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT (jarayon TIRIK qoladi):', err.message || err);
-});
-process.on('unhandledRejection', (err) => {
-  console.error('UNHANDLED REJECTION (jarayon TIRIK qoladi):', (err && err.message) || err);
-});
+const messageQueue = createKeyedTaskQueue();
+const updateTasks = new WeakMap();
 
 console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
 // node-telegram-bot-api@1.2.0 ning fetch asosidagi getUpdates transporti shu
@@ -73,7 +63,13 @@ let ownerIds = parseOwnerIds(getEnv('TELEGRAM_CHAT_ID'), getEnv('TELEGRAM_OWNER_
 let ownerId = ownerIds[0] || '';
 const { createPairing } = require('./core/telegram-pairing');
 const pairing = createPairing({ file: path.join(__dirname, '.run', 'telegram-pair-code.json'), envFile: path.join(__dirname, '.env') });
-const buildOwnerHandler = ids => createOwnerUpdateHandler({ ownerIds: ids.join(','), dispatch: update => bot.processUpdate(update) });
+const buildOwnerHandler = ids => createOwnerUpdateHandler({
+  ownerIds: ids.join(','),
+  dispatch: update => {
+    bot.processUpdate(update);
+    return updateTasks.get(update?.message) || Promise.resolve();
+  }
+});
 const isPaired = () => ownerIds.length > 0;
 let ownerHandler = buildOwnerHandler(ownerIds);
 if (!isPaired()) {
@@ -103,7 +99,8 @@ const telegramPoller = createTelegramPoller({
       }
       return false;
     }
-    return ownerHandler(update);
+    const accepted = ownerHandler(update);
+    return accepted ? (updateTasks.get(update?.message) || Promise.resolve()) : false;
   }
 });
 
@@ -229,21 +226,24 @@ async function sendDocument(chatId, filePath, caption) {
 }
 
 async function sendVoiceReply(chatId, text) {
+  let audioPath;
+  let ogg;
   try {
     const safe = text.substring(0, 400);
-    const audioPath = await ttsToFile(safe, { source: 'telegram-voice-reply' });
+    audioPath = await ttsToFile(safe, { source: 'telegram-voice-reply' });
     if (!audioPath || !fs.existsSync(audioPath)) {
       console.error('Voice reply skipped: TTS did not produce an audio file for chat ' + chatId + '.');
       return;
     }
-    const ogg = audioPath.replace('.mp3', '.ogg');
-    execSync('ffmpeg -y -i "' + audioPath + '" -c:a libopus "' + ogg + '" 2>/dev/null');
+    ogg = await transcodeVoiceReply(audioPath);
     if (fs.existsSync(ogg)) {
       await bot.sendVoice(chatId, ogg);
-      fs.unlinkSync(ogg);
     }
   } catch (e) {
     console.error('Voice error:', e.message);
+  } finally {
+    if (ogg) await fs.promises.rm(ogg, { force: true }).catch(() => {});
+    if (audioPath) await fs.promises.rm(audioPath, { force: true }).catch(() => {});
   }
 }
 
@@ -300,12 +300,7 @@ function enqueueVideoNote(msg) {
   if (processedVideoNotes.size > MAX_PROCESSED_VIDEO_NOTES) {
     processedVideoNotes.delete(processedVideoNotes.values().next().value);
   }
-  const previous = videoNoteQueues.get(chatId) || Promise.resolve();
-  const current = previous.catch(() => {}).then(() => handleVideoNote(msg));
-  videoNoteQueues.set(chatId, current);
-  return current.finally(() => {
-    if (videoNoteQueues.get(chatId) === current) videoNoteQueues.delete(chatId);
-  });
+  return handleVideoNote(msg);
 }
 
 const { isPlainScreenshotRequest } = require('./core/telegram-routing');
@@ -514,57 +509,67 @@ bot.onText(/\/cancel/, (msg) => {
   bot.sendMessage(msg.chat.id, 'Conversation history cleared. What shall I do next?');
 });
 
-bot.on('message', async (msg) => {
+bot.on('message', (msg) => {
   const chatId = msg.chat.id;
-  if (await ownerTaskCommands(msg)) return;
-  console.log('Telegram message received: chat=' + chatId + ', from=' + (msg.from?.id || 'unknown') + ', type=' + (msg.video_note ? 'video_note' : msg.voice ? 'voice' : msg.text ? 'text' : 'other'));
+  const task = messageQueue.enqueue(String(chatId), async () => {
+    if (await ownerTaskCommands(msg)) return;
+    console.log('Telegram message received: chat=' + chatId + ', from=' + (msg.from?.id || 'unknown') + ', type=' + (msg.video_note ? 'video_note' : msg.voice ? 'voice' : msg.text ? 'text' : 'other'));
 
-  // Matnli xabar
-  if (msg.text && !msg.text.startsWith('/')) {
-    await handleMessage(chatId, msg.text.trim(), false);
-    return;
-  }
-
-  // Telegram dumaloq video (video_note): audio nutq + video kadrlari birga tahlil qilinadi.
-  if (msg.video_note) {
-    await enqueueVideoNote(msg);
-    return;
-  }
-
-  // Ovozli xabar
-  if (msg.voice) {
-    console.log('[' + chatId + '] VOICE received');
-    await bot.sendChatAction(chatId, 'typing');
-    try {
-      const fileLink = await bot.getFileLink(msg.voice.file_id);
-      const ogaPath = '/tmp/tg_voice_' + Date.now() + '.oga';
-      const wavPath = ogaPath.replace('.oga', '.wav');
-      
-      execSync('curl -sL "' + fileLink + '" -o "' + ogaPath + '"');
-      execSync('ffmpeg -y -i "' + ogaPath + '" -ar 16000 -ac 1 -sample_fmt s16 "' + wavPath + '" 2>/dev/null');
-      
-      const stt = await sttFromFile(wavPath, { source: 'telegram-voice' });
-      if (stt && stt.status === 'ok' && stt.text) {
-        const transcript = stt.text;
-        await bot.sendMessage(chatId, 'I heard: “' + transcript.substring(0, 200) + '”');
-        await handleMessage(chatId, transcript, true);
-      } else {
-        await bot.sendMessage(chatId, 'I could not understand the voice message. Please speak clearly in English and try again.');
-      }
-      
-      try { fs.unlinkSync(ogaPath); } catch (e) {}
-      try { fs.unlinkSync(wavPath); } catch (e) {}
-    } catch (e) {
-      console.error('Voice processing error:', e.message);
-      await bot.sendMessage(chatId, 'An error occurred while processing the voice message.');
+    // Matnli xabar
+    if (msg.text && !msg.text.startsWith('/')) {
+      await handleMessage(chatId, msg.text.trim(), false);
+      return;
     }
-    return;
-  }
+
+    // Telegram dumaloq video (video_note): audio nutq + video kadrlari birga tahlil qilinadi.
+    if (msg.video_note) {
+      await enqueueVideoNote(msg);
+      return;
+    }
+
+    // Ovozli xabar
+    if (msg.voice) {
+      console.log('[' + chatId + '] VOICE received');
+      await bot.sendChatAction(chatId, 'typing');
+      let media;
+      try {
+        const fileLink = await bot.getFileLink(msg.voice.file_id);
+        media = await prepareVoiceMessage(fileLink);
+        const stt = await sttFromFile(media.wavPath, { source: 'telegram-voice' });
+        if (stt && stt.status === 'ok' && stt.text) {
+          const transcript = stt.text;
+          await bot.sendMessage(chatId, 'I heard: “' + transcript.substring(0, 200) + '”');
+          await handleMessage(chatId, transcript, true);
+        } else {
+          await bot.sendMessage(chatId, 'I could not understand the voice message. Please speak clearly in English and try again.');
+        }
+      } catch (e) {
+        console.error('Voice processing error:', e.message);
+        await bot.sendMessage(chatId, 'An error occurred while processing the voice message.');
+      } finally {
+        if (media) await media.cleanup().catch(() => {});
+      }
+      return;
+    }
+  });
+  updateTasks.set(msg, task);
+  task.catch(error => console.error('Telegram message processing failed:', error.message || error));
 });
 
 telegramPoller.start();
-process.once('SIGTERM', () => telegramPoller.stop());
-process.once('SIGINT', () => telegramPoller.stop());
+let shuttingDown = false;
+function shutdown(exitCode, reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  if (reason) console.error('Telegram bot fatal error:', reason.message || reason);
+  telegramPoller.stop();
+  process.exitCode = exitCode;
+  setTimeout(() => process.exit(exitCode), 100).unref();
+}
+process.once('SIGTERM', () => shutdown(0));
+process.once('SIGINT', () => shutdown(0));
+process.once('uncaughtException', error => shutdown(1, error));
+process.once('unhandledRejection', error => shutdown(1, error));
 
 console.log('Bot tayyor! v8 (Universal AI + Kontekst)');
 console.log('Ctrl+C bosib toxtatishingiz mumkin');

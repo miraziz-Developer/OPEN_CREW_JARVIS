@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const {
   RealtimeSession, needsGroundedAnswer, needsContextGrounding,
-  needsExpertAnswer, needsBackgroundAgentTask, collectGrounding, matchDirectFastAction, buildSessionUpdate,
+  needsExpertAnswer, needsBackgroundAgentTask, isUnverifiedAgentResult, collectGrounding, matchDirectFastAction, buildSessionUpdate,
   loadInstructions, runFullAgent
 } = require('../skills/realtime-voice');
 
@@ -140,7 +140,7 @@ test('contextual questions start a realtime reply while grounding and expert wor
   assert.match(followUp.response.instructions, /Verified project status/);
 });
 
-test('explicit complex action starts a background agent while realtime immediately acknowledges it', async () => {
+test('explicit complex action stays silent until the background agent has a verified result', async () => {
   let releaseTask;
   const calls = [];
   const session = new RealtimeSession({
@@ -159,23 +159,65 @@ test('explicit complex action starts a background agent while realtime immediate
 
   assert.equal(needsBackgroundAgentTask('Fix the project build error and run the tests'), true);
   assert.equal(needsBackgroundAgentTask('How do I fix the project build error?'), false);
+  assert.equal(needsBackgroundAgentTask('Can you install Microsoft Word?'), true);
+  assert.equal(needsBackgroundAgentTask('Could you check and summarize my last five emails?'), true);
+  assert.equal(needsBackgroundAgentTask('Can you explain how Microsoft Word works?'), false);
   session._acceptTranscript('Fix the project build error and run the tests');
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
-  assert.equal(sent[0].response.tool_choice, 'none');
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 0);
   assert.equal(calls.length, 1);
   assert.match(calls[0].sessionKey, /^agent:main:voice-background-/);
   assert.equal(events[0][0], 'start');
 
-  releaseTask('Build fixed and tests passed.');
+  releaseTask({
+    status: 'completed',
+    actions: [{ description: 'Fixed the build and ran tests', status: 'completed' }],
+    verification: { passed: true, method: 'test-report' },
+    evidence: [{ type: 'test-report', value: { passed: true, total: 74, failed: 0 } }],
+    summary: 'Build fixed and tests passed.'
+  });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(events.at(-1)[0], 'done');
   assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
+  const result = sent.filter(message => message.type === 'response.create').at(-1);
+  assert.match(result.response.instructions, /Build fixed and tests passed/);
+});
 
-  session._onMessage({ data: JSON.stringify({ type: 'response.done', response: { status: 'completed' } }) });
+test('background capability refusal is not spoken as a verified action result', async () => {
+  const telemetry = [];
+  const session = new RealtimeSession({
+    backgroundAgentRunner: async () => 'Actually, I can’t directly close a website tab. You’ll need to close it manually.'
+  });
+  const sent = [];
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+  session.on('telemetry', (type, data) => telemetry.push({ type, data }));
+
+  assert.equal(isUnverifiedAgentResult("I can't do that directly."), true);
+  assert.equal(isUnverifiedAgentResult('YouTube tab closed and the result was visually verified.'), false);
+  session._acceptTranscript('Close the YouTube website tab');
   await new Promise(resolve => setImmediate(resolve));
-  const followUp = sent.filter(message => message.type === 'response.create').at(-1);
-  assert.match(followUp.response.instructions, /Build fixed and tests passed/);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 0);
+  assert.equal(session._backgroundTaskResults.length, 0);
+  assert.ok(telemetry.some(event => event.type === 'background_agent.failed' && event.data.reason === 'unverified-result'));
+});
+
+test('background runner failure remains silent instead of speaking an error as a result', async () => {
+  const session = new RealtimeSession({
+    backgroundAgentRunner: async () => { throw new Error('agent offline'); }
+  });
+  const sent = [];
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+
+  session._acceptTranscript('Check the project build and run tests');
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 0);
+  assert.equal(session._backgroundTaskResults.length, 0);
 });
 
 test('YouTube search is a direct realtime route and never invokes deep-think', async () => {
@@ -565,6 +607,7 @@ test('injectable authoritative recovery can replace a native transcript', async 
       assert.ok(pcm.length > 0);
       return { text: 'Telegramni yop', confidence: 0.93 };
     },
+    backgroundAgentRunner: () => new Promise(() => {}),
     fastActionRunner: async () => ({ status: 'ok', message: 'Telegram yopildi' }),
     speakText: async () => {}
   });
@@ -591,8 +634,9 @@ test('injectable authoritative recovery can replace a native transcript', async 
   assert.deepEqual(transcripts, ['Telegramni yop']);
   assert.ok(sent.some(message => message.type === 'conversation.item.delete' && message.item_id === 'bad-audio-item'));
   assert.ok(sent.some(message => message.type === 'conversation.item.create' && message.item.content[0].text === 'Telegramni yop'));
-  assert.equal(sent.filter(message => message.type === 'response.create').length, 1);
-  assert.match(sent.find(message => message.type === 'response.create').response.instructions, /natural English by default/i);
+  // A recovered computer action is delegated silently; the speech model must
+  // not improvise a capability refusal while the agent is working.
+  assert.equal(sent.filter(message => message.type === 'response.create').length, 0);
 });
 
 test('wake recovery selects an Uzbek direct action over a wrong native transcript', async () => {

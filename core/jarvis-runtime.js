@@ -3,6 +3,7 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
+const { verifyActionResult, actionResultText } = require('./action-result');
 
 const TERMINAL_TASK_STATES = new Set(['verified', 'failed', 'cancelled']);
 const ALLOWED_TASK_TRANSITIONS = {
@@ -182,6 +183,13 @@ class JarvisRuntime extends EventEmitter {
   }
 
   completeTask(id, result, verification) {
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      const structured = verifyActionResult(result);
+      if (structured.verification.passed !== true) {
+        return this.transitionTask(id, 'failed', { result: structured, error: structured.error || actionResultText(structured) });
+      }
+      return this.transitionTask(id, 'verified', { result: structured, verification: structured.verification });
+    }
     const text = String(result || '').trim();
     const failed = !text || /(^|\b)(error|xatolik|failed|bajarilmadi|muvaffaqiyatsiz)(\b|:)/i.test(text);
     if (failed) return this.transitionTask(id, 'failed', { result: text, error: text || 'Bo\'sh natija' });

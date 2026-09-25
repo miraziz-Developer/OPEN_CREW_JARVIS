@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { PROJECT_DIR } = require('./paths');
+const { modelConfig } = require('./model-routing');
 
 let cachedEnv = null;
 function env(key, fallback) {
@@ -73,25 +74,26 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort }) {
 }
 
 async function complete(options = {}) {
-  // "Qiyin" chaqiruvlar (reja, yakuniy tekshiruv) avval kuchli modelga; limit/xato bo'lsa jim arzon modelga tushadi.
-  if (options.hard) {
-    try {
-      const grok = require('./grok');
-      if (grok.available()) return await grok.chat({ system: options.system, user: options.user, maxTokens: Math.max(options.maxOutputTokens || 0, 6000), timeoutMs: options.timeoutMs || 180000 });
-    } catch (_) { /* fallback below */ }
-  }
   const model = options.model || env('MISSION_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini'));
   const attempts = options.retries ?? 2;
+  const models = options.hard ? modelConfig(env).strongChain : [model];
+  const deadline = Date.now() + (options.timeoutMs || 180000);
   let lastError;
-  for (let attempt = 0; attempt <= attempts; attempt++) {
-    try {
-      return await request({
-        model, system: options.system || '', user: options.user || '',
-        maxOutputTokens: options.maxOutputTokens || 6000, timeoutMs: options.timeoutMs || 180000, effort: options.effort
-      });
-    } catch (error) {
-      lastError = error;
-      await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
+  for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+    const retries = options.hard ? 0 : attempts;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const reserve = options.hard ? Math.min(30000 * (models.length - modelIndex - 1), Math.floor(remaining * 0.4)) : 0;
+      try {
+        return await request({
+          model: models[modelIndex], system: options.system || '', user: options.user || '',
+          maxOutputTokens: options.maxOutputTokens || 6000, timeoutMs: Math.max(5000, remaining - reserve), effort: options.effort
+        });
+      } catch (error) {
+        lastError = error;
+        if (attempt < retries) await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
+      }
     }
   }
   throw lastError;

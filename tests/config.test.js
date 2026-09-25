@@ -37,8 +37,11 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.AZURE_SPEECH_PITCH_PERCENT, -12);
   assert.equal(result.values.REALTIME_BARGE_IN_CONFIRM_MS, 420);
   assert.equal(result.values.REALTIME_BARGE_IN_MAX_GAP_MS, 80);
-  assert.equal(result.values.DEEP_THINK_FAST_MODEL, 'grok-4-1-fast-reasoning');
-  assert.equal(result.values.DEEP_THINK_COMPLEX_MODEL, 'gpt-5.6-sol');
+  assert.equal(result.values.AGENT_FAST_MODEL, 'gpt-6-astra');
+  assert.equal(result.values.AGENT_STRONG_MODEL, 'gpt-6-sol');
+  assert.equal(result.values.AGENT_STRONG_FALLBACK_MODELS, 'gpt-6-astra,gpt-5.6-sol,gpt-5-mini');
+  assert.equal(result.values.DEEP_THINK_FAST_MODEL, 'gpt-6-astra');
+  assert.equal(result.values.DEEP_THINK_COMPLEX_MODEL, 'gpt-6-sol');
   assert.equal(result.values.OPENCLAW_AGENT_TIMEOUT_MS, 300000);
   assert.equal(result.values.DEEP_THINK_TIMEOUT_MS, 240000);
   assert.equal(result.values.AGENT_LONG_TASK_NOTICE_MS, 270000);

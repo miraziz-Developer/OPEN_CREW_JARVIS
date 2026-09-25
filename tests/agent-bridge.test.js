@@ -26,6 +26,11 @@ test('agent bridge preserves one-shot behavior without a session key', () => {
   ]);
 });
 
+test('agent bridge can pin a routed OpenClaw turn to the selected deployment', () => {
+  const args = buildOpenClawAgentArgs('Run the tests', 'agent:main:test', 'Run the tests', 'gpt-6-sol');
+  assert.deepEqual(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2), ['--model', 'gpt-6-sol']);
+});
+
 test('complex requests select checkpointed execution while simple requests do not', () => {
   assert.equal(needsCheckpointedExecution('Design a secure migration architecture with a staged rollout and rollback plan.'), true);
   assert.equal(needsCheckpointedExecution('What time is it?'), false);
@@ -275,7 +280,8 @@ test('owner policy follows JARVIS_CONFIRM_MODE and is sent with every agent call
   assert.match(agentPolicyPreamble({ mode: 'payments' }), /only before spending money/);
   assert.match(agentPolicyPreamble({ mode: 'strict' }), /before sending messages, deleting data/);
   for (const mode of ['off', 'payments', 'strict']) assert.match(agentPolicyPreamble({ mode }), /Never tell the user to click, open, type/);
-  assert.match(agentPolicyPreamble({ mode: 'off' }), /at most 3 short plain sentences/);
+  assert.match(agentPolicyPreamble({ mode: 'off' }), /one or two short plain sentences/);
+  assert.match(agentPolicyPreamble({ mode: 'off' }), /Act before explaining/);
   assert.doesNotMatch(agentPolicyPreamble({ mode: 'off', brief: false }), /at most 3 short/);  // missiya ishchisi dalil bersin
   assert.ok(buildOpenClawAgentArgs('x').some(arg => arg.includes('[Owner policy:')));
 });

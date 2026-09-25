@@ -37,7 +37,10 @@ NODE
 fi
 shift
 
-PATTERN='(token|secret|api[_-]?key|password)["[:space:]]*[:=]["[:space:]]*[A-Za-z0-9_./+-]{24,}'
+# Require a literal assignment value. The old expression allowed arbitrary
+# spaces/quotes before a later ':' or '=', so identifiers such as
+# `fresh.TELEGRAM_BOT_TOKEN || env(...)` were mistaken for secret values.
+PATTERN="(token|secret|api[_-]?key|password)[\"[:space:]]*[:=][[:space:]]*(\"[^\"$]{24,}\"|'[^'$]{24,}'|[A-Za-z0-9_./+-]{24,}([,;[:space:]]|$))"
 SECRET_FRAGMENT_LOG_PATTERN='console\.(log|error|warn|info)[^(]*\([^\n]*(TOKEN|KEY|SECRET)\.(substring|slice)[[:space:]]*\('
 # Browser profiles are generated, machine-specific state (and are ignored by
 # this repository). Their encrypted browser metadata can resemble a secret;
@@ -59,6 +62,20 @@ scan_tree() {
 
   status="${status:-0}"
   if [[ "${status}" -eq 0 ]]; then
+    # `token = config.TELEGRAM_BOT_TOKEN` is a property reference, not a
+    # credential literal. Keep scanning unquoted values, but remove only this
+    # syntactically identifiable identifier form from grep's candidates.
+    local filtered matches
+    filtered="${output}.filtered"
+    matches="${output}.matches"
+    grep -E -o "${PATTERN}" "${output}" >"${matches}" || true
+    grep -E -v '[:=][[:space:]]*[A-Za-z_$][A-Za-z0-9_$]*\.[A-Z][A-Z0-9_]{10,}[[:space:]]*$' "${matches}" >"${filtered}" || true
+    rm -f "${matches}"
+    if [[ ! -s "${filtered}" ]]; then
+      rm -f "${output}" "${filtered}"
+      return 0
+    fi
+    rm -f "${filtered}"
     cat "${output}"
     rm -f "${output}"
     return 1

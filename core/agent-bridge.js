@@ -11,6 +11,7 @@ const { createCheckpointStore } = require('./agent-task-checkpoints');
 const { resolveOpenClawEnvironment } = require('./openclaw-credentials');
 const { extractMissingDependency, runSelfHeal, formatSelfHealEscalation } = require('./self-heal');
 const { boundedCall } = require('./bounded-call');
+const { isComplexTask, needsStrongAgentModel, selectAgentModel } = require('./model-routing');
 
 const ENGLISH_ONLY_INSTRUCTION = '[Language policy: Reply to the user only in natural English, regardless of the language of the request or stored context. Never answer in Uzbek or imitate an Uzbek accent. Preserve names, quoted text, and file contents when necessary.]';
 // Egasi belgilagan siyosat har agent chaqiruviga qo'shiladi. SOUL.md'dagi umumiy qoidalar emas, shu qator
@@ -27,8 +28,8 @@ function agentPolicyPreamble({ brief = true, mode = confirmModeFromEnv() } = {})
   const confirm = mode === 'off' ? 'Full autonomy is granted: never ask the user for confirmation or permission — do the task directly.'
     : mode === 'strict' ? 'Ask for confirmation only before sending messages, deleting data, submitting applications, payments or other irreversible external actions; do everything else directly.'
       : 'Do tasks directly without asking; ask for confirmation only before spending money or making a payment.';
-  const act = 'Never tell the user to click, open, type or do a step themselves — you have desktop-control, phone-control and the browser; do it yourself. If something truly blocks you, say what blocked it in one sentence.';
-  const style = brief ? ' Reply with the result in at most 3 short plain sentences: no markdown lists, no step-by-step guides, no offers of further help.' : '';
+  const act = 'Act before explaining: when the request can be completed with your tools, do the work now instead of describing a plan or teaching the user how to do it. Never tell the user to click, open, type or do a step themselves — you have desktop-control, phone-control and the browser; do it yourself. Report only the verified result. If something truly blocks you, say what blocked it in one sentence.';
+  const style = brief ? ' Reply with the result in one or two short plain sentences: no preamble, markdown lists, step-by-step guides, repeated request, or offers of further help.' : '';
   return `[Owner policy: ${confirm} ${act}${style}]`;
 }
 const RETRY_DELAYS_MS = [5000, 15000, 45000, 135000];
@@ -72,11 +73,12 @@ function fastThinkingArgs(message) {
   return !needsCarefulReasoning(message) && (process.env.AGENT_FAST_THINKING || 'off') !== 'default' ? ['--thinking', 'off'] : [];
 }
 
-function buildOpenClawAgentArgs(message, sessionKey, routeText) {
+function buildOpenClawAgentArgs(message, sessionKey, routeText, model) {
   const args = ['agent'];
   const key = String(sessionKey || '').trim();
   if (key) args.push('--session-key', key);
   args.push('--message', ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n\n' + String(message || ''), '--agent', 'main');
+  if (model) args.push('--model', model);
   // Oddiy vazifalarda "thinking" ni o'chirish ~40% tezroq (19s → 11s o'lchangan);
   // murakkab (reja/tahlil/tadqiqot) vazifalarda chuqur fikrlash saqlanadi.
   args.push(...fastThinkingArgs(routeText || message));
@@ -84,8 +86,7 @@ function buildOpenClawAgentArgs(message, sessionKey, routeText) {
 }
 
 function needsCheckpointedExecution(message) {
-  const text = String(message || '');
-  return text.length > 700 || /\b(architecture|architect|strategy|tradeoffs?|design (?:a|an|the)?|multi[ -]?step|roadmap|migration|root cause|debug(?:ging)?|security review|implementation plan|system design|comprehensive|in[- ]depth|plan|research|analysis)\b/i.test(text);
+  return isComplexTask(message);
 }
 
 function needsPersistentExecution(message) {
@@ -238,7 +239,9 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
         diagnosticSummary: null
       };
       const childEnvironment = openClawEnvironment || resolveOpenClawEnvironment({ projectDir, env: openClawBaseEnvironment || process.env });
-      const proc = spawnProcess('openclaw', buildOpenClawAgentArgs(message, sessionKey, options.routeText), {
+      const routeText = options.routeText || message;
+      const model = options.model || selectAgentModel(routeText, env);
+      const proc = spawnProcess('openclaw', buildOpenClawAgentArgs(message, sessionKey, routeText, model), {
         cwd: projectDir,
         env: childEnvironment,
         timeout: openClawTimeoutMs
@@ -533,6 +536,6 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
 module.exports = {
   createAgentBridge, buildOpenClawAgentArgs, fastThinkingArgs, agentPolicyPreamble, checkpointSessionKey,
   OpenClawEmptyResponseError, ENGLISH_ONLY_INSTRUCTION,
-  needsCheckpointedExecution, needsPersistentExecution, needsCarefulReasoning,
+  needsCheckpointedExecution, needsPersistentExecution, needsCarefulReasoning, needsStrongAgentModel,
   classifyProviderError, RETRY_DELAYS_MS, RECOVERED_STEP_INSTRUCTION
 };

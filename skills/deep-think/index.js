@@ -19,6 +19,7 @@ const path = require('path');
 const https = require('https');
 
 const { PROJECT_DIR } = require('../../core/paths');
+const { isComplexTask, modelConfig } = require('../../core/model-routing');
 let _env = null;
 function env(k, def) {
   if (process.env[k] !== undefined) return process.env[k];
@@ -29,7 +30,7 @@ function env(k, def) {
 
 const MAIN_DEPLOYMENT = env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini');
 const FAST_MODEL = env('DEEP_THINK_FAST_MODEL') || MAIN_DEPLOYMENT; // mavjud bo'lmagan nomga urinib, keyin zaxiraga tushmaymiz
-const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL') || MAIN_DEPLOYMENT;
+const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL') || env('AGENT_STRONG_MODEL', 'gpt-6-sol');
 const TIMEOUT_MS = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
 const MAX_TOKENS = parseInt(env('DEEP_THINK_MAX_TOKENS'), 10) || 1200;
 
@@ -41,27 +42,30 @@ const SYSTEM_PROMPT =
   "You are Jarvis, an English-speaking personal assistant. Your answer will be spoken aloud, so:\n" +
   "- Use no markdown, headings, bullets, tables, or code fences.\n" +
   "- Write natural spoken English. If sequencing is needed, say first, second, and finally.\n" +
-  "- Be concise: at most four to six sentences unless the user explicitly requests detail.\n" +
+  "- Default to one or two short sentences; give more detail only when explicitly requested or necessary for correctness.\n" +
   "- Be specific and actionable; include concrete numbers or steps when useful.\n" +
+  "- Do not narrate a plan, restate the request, or offer additional help.\n" +
   "- Start with the answer, not a preamble such as 'good question' or 'let's examine it'.\n" +
   "- Reply only in English.";
 
 function isComplexReasoningRequest(question) {
-  const text = String(question || '').toLowerCase();
-  return text.length > 700 || /\b(architecture|architect|strategy|tradeoffs?|design (?:a|an|the)?|multi[ -]?step|roadmap|migration|root cause|debug(?:ging)?|security review|implementation plan|system design|comprehensive|in[- ]depth|chuqur|arxitektura|strategiya|taqqosla|reja(?:si|lashtir)?|ko'p bosqich|muammoni tahlil)\b/i.test(text);
+  return isComplexTask(question);
 }
 
 function reasoningProviders(question) {
-  const fast = {
-    name: 'grok-fast', endpoint: env('AZURE_OPENAI_ENDPOINT'), key: env('AZURE_OPENAI_KEY'), model: FAST_MODEL
-  };
-  const complex = {
-    name: 'gpt-sol', endpoint: env('AZURE_OPENAI_ENDPOINT'), key: env('AZURE_OPENAI_KEY'), model: COMPLEX_MODEL
-  };
-  return isComplexReasoningRequest(question) ? [complex, fast] : [fast, complex];
+  const endpoint = env('AZURE_OPENAI_ENDPOINT');
+  const key = env('AZURE_OPENAI_KEY');
+  const configured = modelConfig(env);
+  configured.fast = FAST_MODEL;
+  configured.strong = COMPLEX_MODEL;
+  configured.strongChain = [...new Set([COMPLEX_MODEL, ...configured.strongChain.filter(model => model !== COMPLEX_MODEL), FAST_MODEL])];
+  const models = isComplexReasoningRequest(question)
+    ? configured.strongChain
+    : [...new Set([FAST_MODEL, ...configured.strongChain])];
+  return models.map((model, index) => ({ name: index ? `fallback-${index}` : 'primary', endpoint, key, model }));
 }
 
-function requestExpert(question, context, provider) {
+function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const KEY = provider.key;
     const BASE = String(provider.endpoint || '').replace(/\/$/, '').replace(/\/api\/projects\/[^/]+$/, '').replace(/\/openai\/v1$/, '');
@@ -93,15 +97,22 @@ function requestExpert(question, context, provider) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(TIMEOUT_MS, () => { req.destroy(); reject(new Error('deep-think timeout')); });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error(`deep-think timeout (${provider.model})`)); });
     req.write(payload); req.end();
   });
 }
 
 async function askExpert(question, context) {
   let lastError;
-  for (const provider of reasoningProviders(question)) {
-    try { return await requestExpert(question, context, provider); }
+  const providers = reasoningProviders(question);
+  const deadline = Date.now() + TIMEOUT_MS;
+  for (let index = 0; index < providers.length; index++) {
+    const provider = providers[index];
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const reserved = Math.min(30000 * (providers.length - index - 1), Math.floor(remaining * 0.4));
+    const attemptTimeout = Math.max(5000, remaining - reserved);
+    try { return await requestExpert(question, context, provider, attemptTimeout); }
     catch (error) { lastError = error; }
   }
   throw lastError || new Error('reasoning provider sozlanmagan');

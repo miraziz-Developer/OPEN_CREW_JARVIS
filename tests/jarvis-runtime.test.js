@@ -46,6 +46,19 @@ test('task ledger enforces transitions and only marks non-error output verified'
   assert.equal(runtime.completeTask('call-2', 'Xatolik: ilova topilmadi').state, 'failed');
 });
 
+test('structured tasks are verified only when verification.passed is explicitly true', () => {
+  const runtime = new JarvisRuntime();
+  runtime.requestTask('Open Safari', { id: 'structured-ok' });
+  runtime.transitionTask('structured-ok', 'running');
+  const ok = runtime.completeTask('structured-ok', { status: 'completed', verification: { passed: true }, evidence: [{ type: 'accessibility', value: 'Safari' }], summary: 'observed' });
+  assert.equal(ok.state, 'verified');
+
+  runtime.requestTask('Open Chrome', { id: 'structured-bad' });
+  runtime.transitionTask('structured-bad', 'running');
+  const bad = runtime.completeTask('structured-bad', { status: 'completed', verification: { passed: false }, summary: 'claimed only' });
+  assert.equal(bad.state, 'failed');
+});
+
 test('snapshot contains conversation, health and latency telemetry', () => {
   let now = 5000;
   const runtime = new JarvisRuntime({ now: () => now });

@@ -61,3 +61,25 @@ test('dependency cycles are rejected before execution', () => {
     { id: 'b', description: 'b', dependsOn: ['a'] }
   ] }), /Dependency cycle/);
 });
+
+test('planned multi-command mission persists its dependency DAG and only advances after verified evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-planned-mission-'));
+  const file = path.join(dir, 'state.json');
+  let now = 100;
+  const mc = new MissionControl({ file, now: () => now, retryBaseMs: 10 });
+  const mission = mc.createPlannedMission('Safari-ni och, keyin screenshot ol', { id: 'voice-sequence' });
+  assert.deepEqual(mission.steps.map(step => step.dependsOn), [[], ['step-1']]);
+  const first = mc.claimNext(mission.id);
+  const unverified = mc.completeStep(mission.id, first.id, {
+    status: 'completed', verification: { passed: true }, evidence: ['executor says done'], summary: 'done'
+  });
+  assert.equal(unverified.status, 'retry_wait');
+  now += 10;
+  const retried = mc.claimNext(mission.id);
+  mc.completeStep(mission.id, retried.id, {
+    status: 'completed', verification: { passed: true }, evidence: [{ type: 'accessibility', value: 'Safari' }], summary: 'Safari observed'
+  });
+  assert.equal(mc.claimNext(mission.id).id, 'step-2');
+  const restored = new MissionControl({ file, now: () => now });
+  assert.equal(restored.getMission(mission.id).steps[0].status, 'verified');
+});

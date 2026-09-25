@@ -15,10 +15,13 @@ const CONFIG_SCHEMA = Object.freeze({
   AZURE_OPENAI_ENDPOINT: { type: 'url', required: true },
   AZURE_OPENAI_KEY: { type: 'secret', required: true },
   AZURE_OPENAI_DEPLOYMENT: { type: 'string', required: true },
-  // Foundry project reasoning tiers. Fast answers use Grok; demanding
-  // planning/architecture questions use GPT-5.6 Sol.
-  DEEP_THINK_FAST_MODEL: { type: 'string', default: 'grok-4-1-fast-reasoning' },
-  DEEP_THINK_COMPLEX_MODEL: { type: 'string', default: 'gpt-5.6-sol' },
+  // Foundry reasoning tiers. Keep simple turns on the fast quality model; route tool use,
+  // coding and demanding planning to the strongest healthy deployment.
+  AGENT_FAST_MODEL: { type: 'string', default: 'gpt-6-astra' },
+  AGENT_STRONG_MODEL: { type: 'string', default: 'gpt-6-sol' },
+  AGENT_STRONG_FALLBACK_MODELS: { type: 'string', default: 'gpt-6-astra,gpt-5.6-sol,gpt-5-mini' },
+  DEEP_THINK_FAST_MODEL: { type: 'string', default: 'gpt-6-astra' },
+  DEEP_THINK_COMPLEX_MODEL: { type: 'string', default: 'gpt-6-sol' },
   OPENCLAW_AGENT_TIMEOUT_MS: { type: 'integer', default: 300000, min: 30000, max: 900000 },
   DEEP_THINK_TIMEOUT_MS: { type: 'integer', default: 240000, min: 30000, max: 900000 },
   AGENT_LONG_TASK_NOTICE_MS: { type: 'integer', default: 270000, min: 10000, max: 870000 },

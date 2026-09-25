@@ -76,3 +76,26 @@ test('native Telegram poller aborts an active long poll when stopped', async () 
 
   assert.equal(signal.aborted, true);
 });
+
+test('native Telegram poller waits for async update processing before advancing offset', async () => {
+  let finishUpdate;
+  const updateFinished = new Promise(resolve => { finishUpdate = resolve; });
+  let secondRequestStarted = false;
+  const poller = createTelegramPoller({
+    token: 'test-token', log: { log() {}, error() {} },
+    telegramRequest: async (_token, _method, params) => {
+      if (params.offset === 0) return [{ update_id: 9, message: { chat: { id: 1 } } }];
+      secondRequestStarted = true;
+      return new Promise(() => {});
+    },
+    onUpdate: () => updateFinished
+  });
+
+  poller.start();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(secondRequestStarted, false);
+  finishUpdate();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  poller.stop();
+  assert.equal(secondRequestStarted, true);
+});
