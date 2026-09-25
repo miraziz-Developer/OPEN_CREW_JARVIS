@@ -12,7 +12,7 @@
 #             --skip-workers  og'ir avtonom ishchilarni (BabyAGI, AutoGPT, brauzer) keyinga qoldiradi
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
-G="\033[0;32m"; Y="\033[1;33m"; R="\033[0;31m"; B="\033[1m"; D="\033[2m"; N="\033[0m"
+G=$'\033[0;32m'; Y=$'\033[1;33m'; R=$'\033[0;31m'; B=$'\033[1m'; D=$'\033[2m'; N=$'\033[0m'
 ok(){ echo -e "${G}✅ $1${N}"; }; warn(){ echo -e "${Y}⚠️  $1${N}"; }; die(){ echo -e "${R}❌ $1${N}"; exit 1; }
 step(){ echo -e "\n${B}═══ $1 ═══${N}"; }
 CHECK=false; RECONF=false; SKIP_WORKERS=false
