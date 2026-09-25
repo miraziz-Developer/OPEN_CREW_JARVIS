@@ -1,4 +1,4 @@
-#!/opt/homebrew/opt/python@3.11/bin/python3.11
+#!/usr/bin/env python3
 """Open Interpreter worker (Azure gpt-5-mini) — past reasoning_effort bilan tez.
 
 Kirish (stdin JSON): {"task": "...", "cwd": "/abs/dir"}

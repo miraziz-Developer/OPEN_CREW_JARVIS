@@ -1,6 +1,6 @@
 # open-interpreter
 
-Use the locally installed Open Interpreter worker (`/opt/homebrew/bin/interpreter`) for hands-on Mac work that needs terminal access, shell scripts, Docker, local servers, code changes, or native macOS application automation through AppleScript. It can use its Computer API to inspect and operate local apps such as Finder, Notes, and Calendar.
+Use the locally installed Open Interpreter worker (`.venv-interpreter/bin/interpreter`) for hands-on Mac work that needs terminal access, shell scripts, Docker, local servers, code changes, or native macOS application automation through AppleScript. It can use its Computer API to inspect and operate local apps such as Finder, Notes, and Calendar.
 
 ## When to use it
 

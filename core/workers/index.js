@@ -93,7 +93,7 @@ function createWorkers(options = {}) {
       const cwd = workspace(mission);
       const brief = `Work in ${cwd} unless the task names another absolute path. Do not access secrets or credential stores. ` +
         `Do not send messages, publish, purchase, or delete data outside the task's scope. Finish with a concise summary of commands run, files changed and verified results.\n\nTask: ${prompt}`;
-      const result = await runProcess(env('INTERPRETER_PYTHON', fs.existsSync(path.join(PROJECT_DIR, '.venv-interpreter', 'bin', 'python')) ? path.join(PROJECT_DIR, '.venv-interpreter', 'bin', 'python') : '/opt/homebrew/opt/python@3.11/bin/python3.11'), [path.join(__dirname, 'interpreter_worker.py')], {
+      const result = await runProcess(env('INTERPRETER_PYTHON', fs.existsSync(path.join(PROJECT_DIR, '.venv-interpreter', 'bin', 'python')) ? path.join(PROJECT_DIR, '.venv-interpreter', 'bin', 'python') : 'python3.11'), [path.join(__dirname, 'interpreter_worker.py')], {
         spawn: spawnFn, cwd, input: JSON.stringify({ task: brief, cwd }), timeoutMs, stallMs: parseInt(env('INTERPRETER_STALL_MS'), 10) || 180000,
         env: { ...process.env, OPENAI_API_KEY: azureKey(), OPENAI_API_BASE: azureBase(), INTERPRETER_MODEL: agentModel(), INTERPRETER_REASONING: env('INTERPRETER_REASONING', 'low'), PYTHONWARNINGS: 'ignore' }
       });

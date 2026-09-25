@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
 const { spawn, execSync } = require('child_process');
@@ -106,7 +107,9 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
   const routineAutonomy = /^(?:true|1|yes|on)$/i.test(String(env('JARVIS_FULL_AUTONOMY') || 'false'));
   const selfHealMaxAttempts = Math.max(1, Math.min(3, parseInt(env('SELF_HEAL_MAX_ATTEMPTS'), 10) || 2));
   const selfHealTimeoutMs = Math.max(30000, parseInt(env('SELF_HEAL_TIMEOUT_MS'), 10) || 180000);
-  const selfHealInterpreterPath = env('SELF_HEAL_INTERPRETER_PATH') || '/opt/homebrew/bin/interpreter';
+  const selfHealInterpreterPath = env('SELF_HEAL_INTERPRETER_PATH')
+    || [path.join(projectDir, '.venv-interpreter', 'bin', 'interpreter'), '/opt/homebrew/bin/interpreter', '/usr/local/bin/interpreter'].find(candidate => fs.existsSync(candidate))
+    || 'interpreter'; // PATH'dan
   const checkpoints = createCheckpointStore(projectDir);
   const approvalToken = Symbol('explicit-checkpoint-approval');
 

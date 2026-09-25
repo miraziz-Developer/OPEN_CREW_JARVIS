@@ -30,7 +30,7 @@ const CONFIG_SCHEMA = Object.freeze({
   SELF_HEAL_ENABLED: { type: 'boolean', default: true },
   SELF_HEAL_MAX_ATTEMPTS: { type: 'integer', default: 2, min: 1, max: 3 },
   SELF_HEAL_TIMEOUT_MS: { type: 'integer', default: 180000, min: 30000, max: 900000 },
-  SELF_HEAL_INTERPRETER_PATH: { type: 'string', default: '/opt/homebrew/bin/interpreter' },
+  SELF_HEAL_INTERPRETER_PATH: { type: 'string', default: '' }, // bo'sh = avtomatik topiladi (.venv-interpreter, keyin PATH)
   GMAIL_TASK_NOTIFICATIONS_ENABLED: { type: 'boolean', default: false },
   GMAIL_OWNER_RECIPIENT: { type: 'string' },
   GMAIL_TASK_PROGRESS_MS: { type: 'integer', default: 21600000, min: 60000, max: 604800000 },

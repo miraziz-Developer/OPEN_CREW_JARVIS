@@ -6,12 +6,24 @@ LABEL="com.jarvis.openclaw"
 DOMAIN="gui/$(id -u)"
 
 usage() {
-  echo "Usage: ./jarvis {install|start|stop|restart|status|open|logs}"
+  echo "Usage: ./jarvis {install|start|stop|restart|status|doctor|logs|open|update|reconfigure|uninstall}"
 }
 
 case "${1:-start}" in
   install)
     exec "$ROOT/install.sh"
+    ;;
+  update)
+    exec "$ROOT/scripts/update.sh"
+    ;;
+  reconfigure)
+    exec "$ROOT/install.sh" --reconfigure
+    ;;
+  doctor)
+    cd "$ROOT" && exec npm run -s doctor
+    ;;
+  uninstall)
+    exec "$ROOT/scripts/uninstall.sh"
     ;;
   start)
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then

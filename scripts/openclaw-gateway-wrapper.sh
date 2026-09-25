@@ -21,4 +21,10 @@ if [ -f "$PROJECT_DIR/.env" ]; then
   import_env OPENCLAW_GATEWAY_TOKEN
 fi
 
-exec /opt/homebrew/bin/openclaw "$@"
+OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || true)"
+for candidate in /opt/homebrew/bin/openclaw /usr/local/bin/openclaw "$HOME/.npm-global/bin/openclaw"; do
+  [ -n "$OPENCLAW_BIN" ] && break
+  [ -x "$candidate" ] && OPENCLAW_BIN="$candidate"
+done
+[ -n "$OPENCLAW_BIN" ] || { echo "openclaw topilmadi (npm i -g openclaw)" >&2; exit 127; }
+exec "$OPENCLAW_BIN" "$@"

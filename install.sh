@@ -1,14 +1,25 @@
 #!/bin/bash
-# JARVIS — bitta buyruq bilan o'rnatish (macOS). Qayta ishga tushirsa xavfsiz (idempotent).
+# ═══════════════════════════════════════════════════════════════════════════
+# JARVIS — Mac uchun bitta buyruq bilan o'rnatish. Qayta ishga tushirish xavfsiz.
 #
-#   curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_JARVIS/main/install.sh | bash
-#   yoki repo ichida:  bash install.sh
+#   git clone https://github.com/miraziz-Developer/OPEN_CREW_JARVIS.git && cd OPEN_CREW_JARVIS
+#   ./install.sh
+#
+# yoki repo'siz:  bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_JARVIS/main/install.sh)
+#
+# Bayroqlar:  --check         hech narsani o'zgartirmasdan mashinangizni tekshiradi
+#             --reconfigure   barcha kalitlarni qayta so'raydi
+#             --skip-workers  og'ir avtonom ishchilarni (BabyAGI, AutoGPT, brauzer) keyinga qoldiradi
+# ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
-G="\033[0;32m"; Y="\033[1;33m"; R="\033[0;31m"; N="\033[0m"
+G="\033[0;32m"; Y="\033[1;33m"; R="\033[0;31m"; B="\033[1m"; D="\033[2m"; N="\033[0m"
 ok(){ echo -e "${G}✅ $1${N}"; }; warn(){ echo -e "${Y}⚠️  $1${N}"; }; die(){ echo -e "${R}❌ $1${N}"; exit 1; }
-step(){ echo -e "\n═══ $1 ═══"; }
+step(){ echo -e "\n${B}═══ $1 ═══${N}"; }
+CHECK=false; RECONF=false; SKIP_WORKERS=false
+for a in "$@"; do case "$a" in --check) CHECK=true;; --reconfigure) RECONF=true;; --skip-workers) SKIP_WORKERS=true;; -h|--help) sed -n 2,14p "$0" | sed 's/^# \{0,1\}//'; exit 0;; esac; done
 
-[[ "$(uname)" == "Darwin" ]] || die "JARVIS hozircha faqat macOS uchun"
+[[ "$(uname -s)" == "Darwin" ]] || die "JARVIS hozircha faqat macOS uchun (mikrofon, ekran va iPhone boshqaruvi macOS'ga bog'liq)."
+ARCH="$(uname -m)"; MACOS="$(sw_vers -productVersion)"; MAJOR="${MACOS%%.*}"
 REPO_URL="${JARVIS_REPO_URL:-https://github.com/miraziz-Developer/OPEN_CREW_JARVIS.git}"
 
 # ── Qayerdamiz: repo ichida yoki bo'sh joyda ──
@@ -22,45 +33,69 @@ else
   if [[ -d "$DIR/.git" ]]; then git -C "$DIR" pull --ff-only origin main; else git clone "$REPO_URL" "$DIR"; fi
 fi
 cd "$DIR"
+if [[ ! -t 0 ]] && ( : </dev/tty ) 2>/dev/null; then exec </dev/tty; fi   # curl | bash bo'lsa ham savollar ishlasin
 
-step "1/8 Dasturlar (Homebrew)"
-command -v brew >/dev/null || die "Homebrew kerak: https://brew.sh"
+# ── 0. Mashinani tekshirish ──
+step "0/8 Mashinangiz tekshirilmoqda"
+FREE_GB="$(df -g "$HOME" | awk 'NR==2{print $4}')"
+echo -e "  macOS ${MACOS} · ${ARCH} · bo'sh joy ${FREE_GB} GB · papka: ${DIR}"
+PROBLEMS=0
+(( MAJOR >= 13 )) || { warn "macOS 13+ tavsiya etiladi (sizda ${MACOS})"; PROBLEMS=$((PROBLEMS+1)); }
+(( FREE_GB >= 8 )) || { warn "Kamida ~8 GB bo'sh joy kerak (Python muhitlari, brauzer)"; PROBLEMS=$((PROBLEMS+1)); }
+xcode-select -p >/dev/null 2>&1 || { warn "Xcode Command Line Tools yo'q — o'rnatiladi: xcode-select --install"; PROBLEMS=$((PROBLEMS+1)); }
+command -v brew >/dev/null 2>&1 && echo "  Homebrew: $(brew --prefix)" || { warn "Homebrew yo'q — o'rnatuvchi so'raydi"; PROBLEMS=$((PROBLEMS+1)); }
+command -v node >/dev/null 2>&1 && echo "  Node: $(node --version)" || warn "Node yo'q — Homebrew orqali o'rnatiladi"
+[[ -f .env ]] && echo "  .env: bor" || echo "  .env: yo'q (o'rnatuvchi yaratadi va kalitlarni so'raydi)"
+curl -fsS --max-time 6 -o /dev/null https://api.telegram.org && echo "  Internet: OK" || warn "Internet aloqasi yo'q yoki cheklangan"
+if $CHECK; then echo -e "\n${B}--check tugadi${N}: ${PROBLEMS} ta ogohlantirish. Hech narsa o'zgartirilmadi."; exit 0; fi
+(( PROBLEMS == 0 )) && ok "mashina tayyor"
+
+# ── 1. Xcode CLT va Homebrew ──
+step "1/8 Asosiy vositalar"
+if ! xcode-select -p >/dev/null 2>&1; then
+  xcode-select --install 2>/dev/null || true
+  die "Xcode Command Line Tools o'rnatilmoqda (oyna ochildi). Tugagach ./install.sh ni qayta ishga tushiring."
+fi
+if ! command -v brew >/dev/null 2>&1; then
+  read -r -p "Homebrew o'rnatilmagan. Hozir o'rnataymi? [Y/n] " a
+  [[ "${a:-Y}" =~ ^[Yy]$ ]] || die "Homebrew kerak: https://brew.sh"
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  [[ -x /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)" || { [[ -x /usr/local/bin/brew ]] && eval "$(/usr/local/bin/brew shellenv)"; }
+fi
+BREW_PREFIX="$(brew --prefix)"; export PATH="$BREW_PREFIX/bin:$PATH"
+
+step "2/8 Dasturlar (Homebrew: node, python, sox, uv, yt-dlp, cliclick, whisper-cpp)"
 brew bundle --file=Brewfile --no-lock >/dev/null 2>&1 || brew bundle --file=Brewfile --no-lock || warn "ba'zi brew paketlari o'rnatilmadi"
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 (( NODE_MAJOR >= 22 )) || die "Node 22+ kerak (hozir $(node --version)): brew upgrade node"
 command -v openclaw >/dev/null || { warn "openclaw o'rnatilmoqda"; npm install -g openclaw >/dev/null; }
-command -v swiftc >/dev/null || warn "Xcode Command Line Tools yo'q (native AEC uchun): xcode-select --install"
 ok "asosiy dasturlar"
 
-step "2/8 Node paketlari"
+step "3/8 Node paketlari"
 npm ci --no-audit --no-fund >/dev/null && ok "npm ci"
 
-step "3/8 Sozlamalar (.env)"
-node scripts/setup-env.js || warn ".env ni to'ldiring (nano .env), keyin bu skriptni qayta ishga tushiring"
-touch -a .env; chmod 600 .env
-# Aniqlangan yo'llarni .env ga yozamiz (qayta ishga tushirsa ham xavfsiz)
+# ── 4. Kalitlar ──
+step "4/8 Kalitlar va sozlamalar"
+echo -e "${D}Kalitlar faqat shu kompyuterdagi .env (0600) fayliga yoziladi, git'ga tushmaydi.${N}"
+if $RECONF; then node scripts/setup-env.js --reconfigure; else node scripts/setup-env.js; fi || die "Kalitlar to'liq emas. .env ni to'ldirib, ./install.sh ni qayta ishga tushiring."
+chmod 600 .env
 set_env() { if grep -q "^$1=" .env; then sed -i '' "s#^$1=.*#$1=$2#" .env; else echo "$1=$2" >> .env; fi; }
-WBIN="$(command -v whisper-cli || true)"
-WMODEL="$DIR/models/whisper/ggml-tiny.en.bin"
-if [[ -n "$WBIN" ]]; then
-  mkdir -p models/whisper
-  [[ -s "$WMODEL" ]] || curl -fsSL -o "$WMODEL" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin || rm -f "$WMODEL"
-fi
+# Shu kompyuterga moslash: whisper wake zaxirasi
+WBIN="$(command -v whisper-cli || true)"; WMODEL="$DIR/models/whisper/ggml-tiny.en.bin"
+if [[ -n "$WBIN" ]]; then mkdir -p models/whisper; [[ -s "$WMODEL" ]] || curl -fsSL -o "$WMODEL" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin || rm -f "$WMODEL"; fi
 if [[ -n "$WBIN" && -s "$WMODEL" ]]; then set_env WHISPER_WAKE_ENABLED true; set_env WHISPER_WAKE_BINARY "$WBIN"; set_env WHISPER_WAKE_MODEL "$WMODEL"
 else set_env WHISPER_WAKE_ENABLED false; warn "whisper.cpp modeli yo'q — zaxira wake o'chirildi (openWakeWord asosiy)"; fi
 
-step "4/8 Wake-word (openWakeWord)"
-[[ -x .venv-openwakeword/bin/python ]] || bash scripts/setup-openwakeword.sh >/dev/null 2>&1 || warn "openWakeWord o'rnatilmadi (STT zaxira ishlaydi)"
+step "5/8 Wake-word ('Jarvis' chaqiruvi)"
+[[ -x .venv-openwakeword/bin/python ]] || bash scripts/setup-openwakeword.sh >/dev/null 2>&1 || warn "openWakeWord o'rnatilmadi (STT zaxirasi ishlaydi)"
 if [[ -f models/wake-word/jarvis.onnx ]]; then ok "shaxsiy 'Jarvis' modeli topildi"
-else warn "Shaxsiy wake model yo'q — standart 'hey_jarvis' ishlaydi. Aniqroq bo'lishi uchun: npm run voice:wake-collect && npm run voice:wake-train"; fi
+else warn "Shaxsiy wake modeli yo'q — standart 'hey_jarvis' ishlaydi. Aniqroq bo'lishi uchun (ovozingizda o'qitiladi): npm run voice:wake-collect && npm run voice:wake-train"; fi
 
-step "5/8 Avtonom ishchilar (BabyAGI, AutoGPT, Interpreter, Browser)"
-bash scripts/install-workers.sh || warn "ishchilar to'liq o'rnatilmadi (ovoz ishlaydi, missiyalar cheklangan)"
+step "6/8 Avtonom ishchilar (BabyAGI, AutoGPT, Open Interpreter, Browser-use) va native aks-sado bekor qilish"
+if $SKIP_WORKERS; then warn "--skip-workers: keyinroq bash scripts/install-workers.sh"; else bash scripts/install-workers.sh || warn "ishchilar to'liq o'rnatilmadi (ovoz ishlaydi, missiyalar cheklangan)"; fi
+command -v swiftc >/dev/null && bash scripts/build-voice-io.sh >/dev/null && ok "jarvis-voice-io (aks-sado bekor qilish)" || warn "swiftc yo'q — aks-sado bekor qilish o'tkazib yuborildi"
 
-step "6/8 Native aks-sado bekor qilish"
-command -v swiftc >/dev/null && bash scripts/build-voice-io.sh >/dev/null && ok "jarvis-voice-io" || warn "o'tkazib yuborildi"
-
-step "7/8 Avtostart va xizmatlar"
+step "7/8 Avtostart va xizmatlar (launchd)"
 bash scripts/enable-autostart.sh >/dev/null && ok "launchd xizmatlari"
 BK="$HOME/Library/LaunchAgents/com.jarvis.backup.plist"
 node scripts/render-launchd.js scripts/com.jarvis.backup.plist "$BK" "$DIR" "$(command -v node)" && { launchctl bootout "gui/$(id -u)/com.jarvis.backup" 2>/dev/null || true; launchctl bootstrap "gui/$(id -u)" "$BK" 2>/dev/null || true; }
@@ -70,15 +105,24 @@ step "8/8 Tekshiruv"
 sleep 12
 npm run -s doctor || warn "doctor ogohlantirish berdi — yuqoridagini ko'ring"
 
+# ── macOS ruxsatlari: Apple ularni faqat foydalanuvchi bera oladi ──
+echo -e "\n${B}macOS ruxsatlari${N} (bir marta, faqat siz bera olasiz):\n  Mikrofon · Accessibility · Automation · Screen Recording — Terminal/node uchun"
+read -r -p "Tegishli sozlama oynalarini hozir ochaymi? [Y/n] " a
+if [[ "${a:-Y}" =~ ^[Yy]$ ]]; then
+  for pane in Privacy_Microphone Privacy_Accessibility Privacy_Automation Privacy_ScreenCapture; do open "x-apple.systempreferences:com.apple.preference.security?$pane" 2>/dev/null || true; sleep 1; done
+fi
+
+TG=""; grep -q "^TELEGRAM_BOT_TOKEN=." .env && grep -q "^TELEGRAM_OWNER_IDS=." .env || TG="\n  • Telegram: botingizga /start yozing — birinchi yozgan odam ega bo'lib juftlashadi"
 cat <<MSG
 
-🎉 JARVIS o'rnatildi.  "Jarvis" deb chaqiring.
+🎉 ${B}JARVIS o'rnatildi.${N}  "Jarvis" deb chaqiring.
 
-Bir marta qo'lda (macOS ruxsatlari): Tizim sozlamalari → Maxfiylik va xavfsizlik →
-  Mikrofon, Accessibility, Automation, Screen Recording — Terminal/Node uchun ruxsat bering.
+Endi:
+  • Mikrofon ruxsatini bergach:  ./jarvis restart
+  • Holat:  ./jarvis status   ·   npm run doctor   ·   Panel: http://localhost:7890${TG}
 Ixtiyoriy:
-  • Gmail/Calendar:  node scripts/google-oauth-setup.js --client-file ~/Downloads/client_secret_….json
-  • Telegram:        botga /start yuboring (egasi bog'lanadi)
-  • Chrome profili:  python3 scripts/chrome-profile-sync.py
-Loglar: tail -f $DIR/logs/daemon-\$(date +%Y%m%d).log      Holat: npm run doctor
+  • Gmail/Calendar:   node scripts/google-oauth-setup.js
+  • Chrome profilingiz: python3 scripts/chrome-profile-sync.py
+  • Kalitlarni o'zgartirish: ./install.sh --reconfigure
+To'liq qo'llanma: README.md
 MSG

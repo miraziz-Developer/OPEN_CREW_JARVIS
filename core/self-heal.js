@@ -57,7 +57,7 @@ function runInterpreterJob({ interpreterPath, projectDir, prompt, timeoutMs, spa
   });
 }
 
-async function runSelfHeal({ projectDir, dependency, interpreterPath = '/opt/homebrew/bin/interpreter', timeoutMs = 180000, interpreterRunner, spawnProcess, routineAutonomy = false, approvedCommand }) {
+async function runSelfHeal({ projectDir, dependency, interpreterPath = 'interpreter', timeoutMs = 180000, interpreterRunner, spawnProcess, routineAutonomy = false, approvedCommand }) {
   const plan = buildSafeRepairPlan(dependency, projectDir);
   if (!plan) return { status: 'blocked', escalationReason: 'unsafe_or_ambiguous_dependency' };
   if (plan.requiresProjectVenv) {
