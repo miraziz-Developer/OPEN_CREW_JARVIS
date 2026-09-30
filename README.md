@@ -19,6 +19,7 @@ Mac uchun shaxsiy AI-yordamchi: **tez ovozli suhbat** ("Jarvis" deb chaqirasiz),
 | **Azure Speech** — kalit va region | eshitish va gapirish | Azure portal → *Speech service* → *Keys and Endpoint* |
 | **Telegram bot** *(ixtiyoriy)* | telefondan boshqarish, xabarnomalar | Telegram'da [@BotFather](https://t.me/BotFather) → `/newbot` |
 | **Google OAuth** *(ixtiyoriy)* | Gmail va Calendar | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → OAuth client (Desktop) → JSON yuklab olish |
+| **Home Assistant** *(ixtiyoriy)* | Chiroq, switch, climate, media va boshqa uy qurilmalari | Home Assistant profilidan *Long-Lived Access Token* yarating; `.env` ga lokal URL va tokenni kiriting |
 
 > 💸 Ovozli suhbat va avtonom missiyalar Azure xarajati keltiradi (ayniqsa doim eshitish rejimi). JARVIS xarajat oshsa Telegramga **xabar beradi**, lekin ishni to'xtatmaydi.
 
@@ -153,6 +154,9 @@ Loglar: `logs/daemon-YYYYMMDD.log`, `logs/mission-runner.stdout.log`.
 | `MISSION_DAILY_TOKEN_BUDGET` | kunlik token ogohlantirishi (to'xtatmaydi, faqat xabar beradi) |
 | `JARVIS_ALWAYS_LISTEN` | doim eshitish (`true`) yoki faqat chaqirilganda |
 | `MORNING_BRIEF_HOUR` | ertalabki brifing soati (standart 8) |
+| `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN` | ixtiyoriy Home Assistant API ulanishi |
+| `HOME_ASSISTANT_ALLOWED_DOMAINS`, `HOME_ASSISTANT_ALLOWED_ENTITIES` | JARVIS kira oladigan IoT scope allowlistlari |
+| `HOME_ASSISTANT_ALLOW_SECURITY_ACTIONS` | lock/alarm/cover amallari; default `false`, yoqilganda ham explicit confirmation kerak |
 
 ## 8. Tuzilma
 

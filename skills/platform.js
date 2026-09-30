@@ -124,6 +124,22 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
     }
   }, async () => require('./gods-eye-view'));
   platform.register({
+    id: 'home-assistant', version: '1.0.0', capabilities: ['iot.read', 'iot.write', 'action.verify'],
+    actions: {
+      status: { permissions: ['iot.read'], timeoutMs: 10000 },
+      listEntities: { permissions: ['iot.read'], input: { properties: { domain: 'string', limit: 'number' } }, timeoutMs: 10000 },
+      getEntity: { permissions: ['iot.read'], input: { required: ['entityId'], properties: { entityId: 'string' } }, timeoutMs: 10000 },
+      callService: { permissions: ['iot.write'], input: { required: ['domain', 'service', 'entityId'] }, timeoutMs: 30000 }
+    }
+  }, async () => {
+    const { HomeAssistantClient } = require('./home-assistant');
+    const client = new HomeAssistantClient();
+    return {
+      status: () => client.status(), listEntities: input => client.listEntities(input),
+      getEntity: input => client.getEntity(input.entityId), callService: input => client.callService(input)
+    };
+  });
+  platform.register({
     id: 'azure-tts', version: '1.0.0', capabilities: ['tts'],
     actions: { synthesize: { input: { required: ['text'] }, timeoutMs: 20000 } }
   }, async () => {

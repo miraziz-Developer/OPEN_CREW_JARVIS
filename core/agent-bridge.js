@@ -24,13 +24,23 @@ function confirmModeFromEnv() {
   value = String(value ?? 'payments').trim().toLowerCase();
   return ['off', 'payments', 'strict'].includes(value) ? value : 'payments';
 }
+function envValue(key) {
+  if (process.env[key] !== undefined) return process.env[key];
+  try { const m = fs.readFileSync(path.join(require('./paths').PROJECT_DIR, '.env'), 'utf8').match(new RegExp('^' + key + '\\s*=\\s*(.*)$', 'm')); return m ? m[1] : undefined; } catch (_) { return undefined; }
+}
+// Lokal miya (JARVIS_BRAIN=local): OpenClaw katta SOUL.md/AGENTS.md ni kiritmaydi (contextInjection=never) —
+// Mac'da uzun promptni o'qish daqiqalab vaqt oladi. O'rniga ixcham SOUL.local.md shu yerda, har chaqiruv boshida.
+function localSoul() {
+  if (String(envValue('JARVIS_BRAIN') || '').trim().toLowerCase() !== 'local') return '';
+  try { return fs.readFileSync(path.join(require('./paths').PROJECT_DIR, 'SOUL.local.md'), 'utf8').trim() + '\n'; } catch (_) { return ''; }
+}
 function agentPolicyPreamble({ brief = true, mode = confirmModeFromEnv() } = {}) {
   const confirm = mode === 'off' ? 'Full autonomy is granted: never ask the user for confirmation or permission — do the task directly.'
     : mode === 'strict' ? 'Ask for confirmation only before sending messages, deleting data, submitting applications, payments or other irreversible external actions; do everything else directly.'
       : 'Do tasks directly without asking; ask for confirmation only before spending money or making a payment.';
   const act = 'Act before explaining: when the request can be completed with your tools, do the work now instead of describing a plan or teaching the user how to do it. Never tell the user to click, open, type or do a step themselves — you have desktop-control, phone-control and the browser; do it yourself. Report only the verified result. If something truly blocks you, say what blocked it in one sentence.';
   const style = brief ? ' Reply with the result in one or two short plain sentences: no preamble, markdown lists, step-by-step guides, repeated request, or offers of further help.' : '';
-  return `[Owner policy: ${confirm} ${act}${style}]`;
+  return localSoul() + `[Owner policy: ${confirm} ${act}${style}]`;
 }
 const RETRY_DELAYS_MS = [5000, 15000, 45000, 135000];
 const RECOVERED_STEP_INSTRUCTION = 'RECOVERY SAFETY: This recovered checkpoint step may have partially executed before the prior worker stopped. Verify the current external and local state before acting. Do not repeat a side-effecting action unless verification shows it is still required. Report what you verified and any uncertainty.';

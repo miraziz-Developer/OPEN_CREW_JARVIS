@@ -30,6 +30,8 @@ function createOllamaBackend({ port = 11434, request = jsonRequest } = {}) {
   return {
     port,
     async loaded() { const r = await request({ port, method: 'GET', path: '/api/ps', timeoutMs: 5000 }).catch(() => null); return (r?.models || []).map(m => m.name || m.model); },
+    // Xotiradagi modellar egallagan joy — chiqarishdan oldin "bo'shatsam yetadimi?" deb hisoblash uchun.
+    async footprintBytes() { const r = await request({ port, method: 'GET', path: '/api/ps', timeoutMs: 5000 }).catch(() => null); return (r?.models || []).reduce((sum, m) => sum + (Number(m.size) || 0), 0); },
     // Xotiradagi barcha Ollama modellarini darhol chiqaradi.
     async evict() { for (const model of await this.loaded()) await request({ port, path: '/api/generate', body: { model, keep_alive: 0 }, timeoutMs: 30000 }).catch(() => {}); },
     async chat({ model, system, user, images = [], audio = [], maxTokens = 1024, format, think = false, timeoutMs }) {
@@ -48,9 +50,14 @@ function createOllamaBackend({ port = 11434, request = jsonRequest } = {}) {
 }
 
 // ── Bonsai 27B — alohida jarayon; to'xtatilsa RAM to'liq bo'shaydi ─────────────────
-// Standart: 1-bit Bonsai 27B (til modeli 3.8 GB + rasm uchun 0.63 GB) — PrismML llama.cpp fork'idagi llama-server.
-// Ixtiyoriy: BONSAI_RUNTIME=mlx — Ternary Bonsai 2 27B (8.6 GB, aqlliroq, lekin 16 GB Mac'da ko'pincha sig'maydi).
-function bonsaiCommand({ projectDir, port, runtime = process.env.BONSAI_RUNTIME || 'llamacpp' }) {
+// Standart: Ternary Bonsai 2 27B (PTQ1_0, 5.95 GB — FP16 aqlining ~98%) — PrismML llama.cpp fork'idagi llama-server.
+// U topilmasa 1-bit Bonsai 27B (3.8 GB) ishlatiladi. BONSAI_MODEL=... bilan aniq fayl berish mumkin.
+// Ixtiyoriy: BONSAI_RUNTIME=mlx — MLX paketi (8.6 GB, 16 GB Mac'da ko'pincha sig'maydi).
+const BONSAI_GGUF = [
+  ['ternary-bonsai2-27b-gguf', 'Ternary-Bonsai-2-27B-PTQ1_0.gguf', 'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf'],
+  ['bonsai-27b-gguf', 'Bonsai-27B-Q1_0.gguf', 'Bonsai-27B-mmproj-Q8_0.gguf']
+];
+function bonsaiCommand({ projectDir, port, runtime = process.env.BONSAI_RUNTIME || 'llamacpp', exists = fs.existsSync }) {
   const llm = path.join(projectDir, 'models', 'llm');
   if (runtime === 'mlx') {
     const py = path.join(projectDir, '.venv-bonsai', 'bin', 'python');
@@ -58,11 +65,12 @@ function bonsaiCommand({ projectDir, port, runtime = process.env.BONSAI_RUNTIME 
     return { bin: py, args: [path.join(projectDir, 'scripts', 'bonsai-server.py'), '--model', dir, '--port', String(port)], required: [py, path.join(dir, 'config.json')] };
   }
   const bin = process.env.BONSAI_LLAMA_SERVER || path.join(llm, 'llama.cpp-prism', 'build', 'bin', 'llama-server');
-  const model = path.join(llm, 'bonsai-27b-gguf', 'Bonsai-27B-Q1_0.gguf');
-  const mmproj = path.join(llm, 'bonsai-27b-gguf', 'Bonsai-27B-mmproj-Q8_0.gguf');
+  const packs = BONSAI_GGUF.map(([dir, m, mm]) => ({ model: path.join(llm, dir, m), mmproj: path.join(llm, dir, mm) }));
+  const pick = process.env.BONSAI_MODEL ? { model: process.env.BONSAI_MODEL, mmproj: '' } : (packs.find(p => exists(p.model)) || packs[0]);
+  const { model, mmproj } = pick;
   const args = ['-m', model, '--host', '127.0.0.1', '--port', String(port), '-ngl', '99', '--jinja',
     '-c', process.env.BONSAI_CTX || '16384', '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '-fa', 'on', '--no-webui'];
-  if (fs.existsSync(mmproj)) args.push('--mmproj', mmproj);
+  if (mmproj && exists(mmproj)) args.push('--mmproj', mmproj);
   return { bin, args, required: [bin, model] };
 }
 

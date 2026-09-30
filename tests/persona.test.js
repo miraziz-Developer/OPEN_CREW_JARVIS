@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { CHARACTER_INSTRUCTIONS, personaInstructions } = require('../core/persona');
+const { CHARACTER_INSTRUCTIONS, CINEMATIC_VOICE_INSTRUCTIONS, personaInstructions } = require('../core/persona');
 const { loadInstructions } = require('../skills/realtime-voice');
 
 test('character keeps the wit sparse, the edge loyal, and never overrides safety', () => {
@@ -27,6 +27,17 @@ test('voice instructions include the character by default and JARVIS_PERSONA=pla
   } finally {
     if (previous === undefined) delete process.env.JARVIS_PERSONA; else process.env.JARVIS_PERSONA = previous;
   }
+});
+
+test('cinematic voice style directs a deep controlled performance and can be disabled', () => {
+  assert.match(CINEMATIC_VOICE_INSTRUCTIONS, /deep, warm, resonant register/i);
+  assert.match(CINEMATIC_VOICE_INSTRUCTIONS, /brief intentional pauses/i);
+  assert.match(CINEMATIC_VOICE_INSTRUCTIONS, /never melodramatic/i);
+  assert.match(personaInstructions(() => ''), /VOICE DELIVERY/);
+  assert.doesNotMatch(
+    personaInstructions(key => key === 'JARVIS_VOICE_STYLE' ? 'default' : ''),
+    /VOICE DELIVERY/
+  );
 });
 
 test('hedged musings are conversation, while real commands still start a background task', () => {

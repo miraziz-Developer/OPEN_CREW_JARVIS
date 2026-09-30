@@ -3,7 +3,7 @@
 /**
  * Qaysi "miya" ishlaydi:
  *  - audio            → Gemma 4 E2B (audioni faqat u tushunadi)
- *  - qiyin fikrlash   → Bonsai 2 27B (rasm ham qabul qiladi)
+ *  - qiyin fikrlash   → Ternary Bonsai 2 27B (faqat matn; rasm → Qwen)
  *  - qolgan hammasi   → Qwen 3.5 9B (matn, asboblar va RASM — oddiy skrinshot uchun model almashtirilmaydi)
  */
 const MODELS = {

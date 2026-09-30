@@ -54,10 +54,13 @@ function apply(mode, { ocPath = OC, savedPath = SAVED, write = true } = {}) {
       fs.writeFileSync(savedPath, JSON.stringify(defaults.model || {}, null, 2));
     }
     defaults.model = { primary: 'ollama/qwen3.5:9b', fallbacks: [] };
+    // Katta SOUL.md/AGENTS.md o'rniga ixcham SOUL.local.md (agent-bridge qo'shadi) — prompt ~2 barobar qisqa.
+    defaults.contextInjection = 'never';
   } else if (mode === 'cloud') {
     let previous = null;
     try { previous = JSON.parse(fs.readFileSync(savedPath, 'utf8')); } catch (_) {}
     defaults.model = previous && previous.primary ? previous : { primary: 'azure-openai/gpt-5-mini', fallbacks: [] };
+    delete defaults.contextInjection;
   } else {
     throw new Error('rejim: local | cloud');
   }
@@ -72,7 +75,7 @@ if (require.main === module) {
     setEnv('JARVIS_BRAIN', mode);
     try { execFileSync('openclaw', ['config', 'validate'], { env: { ...process.env, OPENCLAW_CONFIG_PATH: OC, OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN || 'x' }, stdio: 'ignore' }); }
     catch (_) { console.error('⚠️  openclaw config validate xato berdi — openclaw.json ni tekshiring'); process.exitCode = 1; }
-    console.log(mode === 'local' ? '✅ Lokal miya: Qwen 3.5 9B (agent), Gemma 4 (audio), Bonsai 27B (qiyin). Endi: ./jarvis restart'
+    console.log(mode === 'local' ? '✅ Lokal miya: Qwen 3.5 9B (agent), Gemma 4 (audio), Ternary Bonsai 2 27B (qiyin). Endi: ./jarvis restart'
       : '✅ Bulut miya (Azure). Endi: ./jarvis restart');
   } catch (e) { console.error('❌ ' + e.message); process.exit(1); }
 }

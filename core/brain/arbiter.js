@@ -11,7 +11,8 @@ class MemoryPressureError extends Error {
 }
 
 class BrainArbiter {
-  constructor({ backends = {}, availableBytes = async () => Infinity, requirements = {}, log = () => {} } = {}) {
+  constructor({ backends = {}, availableBytes = async () => Infinity, requirements = {}, log = () => {}, settleMs = 8000 } = {}) {
+    this.settleMs = settleMs;
     this.backends = backends;           // { ollama: { evict() }, bonsai: { evict() } }
     this.availableBytes = availableBytes;
     this.requirements = requirements;   // { bonsai: bytes } — yuklashdan oldin kerakli bo'sh xotira
@@ -38,14 +39,28 @@ class BrainArbiter {
       if (this.resident !== backend) {
         await this._waitIdle();
         const previous = this.resident;
+        const need = this.requirements[backend] || 0;
+        // Avval hisob: joriy modelni chiqarsak yetadimi? Yetmasa hech narsaga tegmaymiz — aks holda
+        // Qwen behuda chiqarilib, keyin yana ~60 s qayta yuklanardi (jonli logda kuzatilgan).
+        if (need) {
+          const free = await this.availableBytes();
+          const reclaim = previous && this.backends[previous]?.footprintBytes ? await this.backends[previous].footprintBytes().catch(() => 0) : 0;
+          if (free + reclaim < need) {
+            throw new MemoryPressureError(`not enough free memory for ${backend}: ${((free + reclaim) / 2 ** 30).toFixed(1)} GB < ${(need / 2 ** 30).toFixed(1)} GB`, { free, reclaim, need });
+          }
+        }
         if (previous && this.backends[previous]?.evict) {
           this.log(`evict ${previous} → ${backend}`);
           try { await this.backends[previous].evict(); } catch (e) { this.log(`evict ${previous} failed: ${e.message}`); }
         }
         this.resident = null;
-        const need = this.requirements[backend] || 0;
         if (need) {
-          const free = await this.availableBytes();
+          // Chiqarish asinxron (Ollama xotirani bir necha soniyada qaytaradi) — bo'shashini kutamiz.
+          let free = await this.availableBytes();
+          for (const deadline = Date.now() + this.settleMs; free < need && Date.now() < deadline;) {
+            await new Promise(r => setTimeout(r, 250));
+            free = await this.availableBytes();
+          }
           if (free < need) {
             throw new MemoryPressureError(`not enough free memory for ${backend}: ${(free / 2 ** 30).toFixed(1)} GB < ${(need / 2 ** 30).toFixed(1)} GB`, { free, need });
           }

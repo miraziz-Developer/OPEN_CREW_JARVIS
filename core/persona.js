@@ -24,9 +24,19 @@ const CHARACTER_INSTRUCTIONS =
   "-> 'Online. What do you need?'; 'How are you?' -> 'Fully operational. And you?'; 'Thanks' -> 'Naturally.' or nothing. " +
   "This character never overrides safety, honesty, confirmation requirements, or the English-default language rule. ";
 
+const CINEMATIC_VOICE_INSTRUCTIONS =
+  "VOICE DELIVERY: use a deep, warm, resonant register with quiet authority. Speak at a measured, unhurried pace, " +
+  "with crisp diction, controlled breath, restrained dynamics, and brief intentional pauses before key results. Keep " +
+  "the performance intimate and intelligent rather than loud: composed under pressure, subtly formidable, never " +
+  "melodramatic. Use understated dry wit when appropriate. Avoid singsong cadence, upward inflection on statements, " +
+  "breathiness, cheerleader energy, radio-announcer projection, exaggerated acting, and literal robotic or metallic effects. ";
+
 function personaInstructions(env) {
   const mode = String((typeof env === 'function' ? env('JARVIS_PERSONA') : '') || 'edge').trim().toLowerCase();
-  return BREVITY_INSTRUCTIONS + (mode === 'plain' ? '' : CHARACTER_INSTRUCTIONS);
+  const voiceStyle = String((typeof env === 'function' ? env('JARVIS_VOICE_STYLE') : '') || 'cinematic-robot').trim().toLowerCase();
+  return BREVITY_INSTRUCTIONS +
+    (mode === 'plain' ? '' : CHARACTER_INSTRUCTIONS) +
+    (voiceStyle === 'cinematic-robot' ? CINEMATIC_VOICE_INSTRUCTIONS : '');
 }
 
-module.exports = { CHARACTER_INSTRUCTIONS, BREVITY_INSTRUCTIONS, personaInstructions };
+module.exports = { CHARACTER_INSTRUCTIONS, CINEMATIC_VOICE_INSTRUCTIONS, BREVITY_INSTRUCTIONS, personaInstructions };

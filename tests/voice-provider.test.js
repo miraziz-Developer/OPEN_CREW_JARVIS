@@ -6,18 +6,25 @@ const { buildVoiceProviders } = require('../core/voice-provider');
 
 function from(values) { return (key, fallback) => values[key] ?? fallback; }
 
-test('direct Foundry realtime is primary and Voice Live is fallback', () => {
+test('Voice Live Onyx is primary and direct Foundry realtime is fallback', () => {
   const providers = buildVoiceProviders(from({
     AZURE_VOICELIVE_ENDPOINT: 'https://voice.services.ai.azure.com/',
     AZURE_VOICELIVE_KEY: 'voice-key',
     AZURE_REALTIME_ENDPOINT: 'https://stable.openai.azure.com/openai/v1',
-    AZURE_REALTIME_KEY: 'realtime-key'
+    AZURE_REALTIME_KEY: 'realtime-key',
+    AZURE_SPEECH_PITCH_PERCENT: '-12',
+    AZURE_SPEECH_RATE_PERCENT: '-12'
   }));
-  assert.deepEqual(providers.map(provider => provider.id), ['azure-realtime', 'voice-live']);
-  assert.equal(providers[0].voice, 'shimmer');
-  assert.equal(providers[0].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1');
-  assert.equal(providers[1].url, 'wss://voice.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime');
-  assert.equal(providers[1].voice.name, 'en-US-OnyxTurboMultilingualNeural');
+  assert.deepEqual(providers.map(provider => provider.id), ['voice-live', 'azure-realtime']);
+  assert.equal(providers[0].url, 'wss://voice.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime');
+  assert.deepEqual(providers[0].voice, {
+    type: 'azure-standard',
+    name: 'en-US-OnyxTurboMultilingualNeural',
+    pitch: '-12%',
+    rate: '-12%'
+  });
+  assert.equal(providers[1].voice, 'cedar');
+  assert.equal(providers[1].url, 'wss://stable.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1');
 });
 
 test('incomplete or placeholder provider credentials are ignored', () => {

@@ -41,6 +41,10 @@ test('createSkillPlatform registers fast-actions and azure-tts with expected sha
   assert.ok(byId['gods-eye-view']);
   assert.deepEqual(Object.keys(byId['gods-eye-view'].actions).sort(), ['availableLayers', 'show', 'status']);
   assert.deepEqual(byId['gods-eye-view'].actions.show.input, { required: ['place'], properties: { place: 'string', altitude: 'number', layers: 'array' } });
+  assert.ok(byId['home-assistant']);
+  assert.deepEqual(Object.keys(byId['home-assistant'].actions).sort(), ['callService', 'getEntity', 'listEntities', 'status']);
+  assert.deepEqual(byId['home-assistant'].actions.callService.permissions, ['iot.write']);
+  assert.deepEqual(byId['home-assistant'].actions.getEntity.input, { required: ['entityId'], properties: { entityId: 'string' } });
 });
 
 test('fast-actions.runFastAction rejects when the underlying action reports an error', async () => {

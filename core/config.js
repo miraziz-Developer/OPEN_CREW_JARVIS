@@ -44,6 +44,12 @@ const CONFIG_SCHEMA = Object.freeze({
   AZURE_TERRA_DEPLOYMENT: { type: 'string', default: 'gpt-5.6-terra' },
   OPENCLAW_GATEWAY_TOKEN: { type: 'secret', required: true },
   AZURE_OPENAI_VISION_DEPLOYMENT: { type: 'string', default: 'gpt-4.1' },
+  HOME_ASSISTANT_URL: { type: 'url' },
+  HOME_ASSISTANT_TOKEN: { type: 'secret' },
+  HOME_ASSISTANT_TIMEOUT_MS: { type: 'integer', default: 8000, min: 1000, max: 30000 },
+  HOME_ASSISTANT_ALLOWED_DOMAINS: { type: 'string', default: 'light,switch,fan,climate,media_player,scene,script,automation,input_boolean' },
+  HOME_ASSISTANT_ALLOWED_ENTITIES: { type: 'string', default: '' },
+  HOME_ASSISTANT_ALLOW_SECURITY_ACTIONS: { type: 'boolean', default: false },
   AZURE_VOICELIVE_ENDPOINT: { type: 'url' },
   AZURE_VOICELIVE_KEY: { type: 'secret' },
   AZURE_VOICELIVE_MODEL: { type: 'string', default: 'gpt-realtime' },
@@ -249,9 +255,11 @@ function validateConfig(input, options = {}) {
   const voiceLivePartial = Boolean(values.AZURE_VOICELIVE_ENDPOINT) !== Boolean(values.AZURE_VOICELIVE_KEY);
   const realtimePartial = Boolean(values.AZURE_REALTIME_ENDPOINT) !== Boolean(values.AZURE_REALTIME_KEY);
   const terraPartial = Boolean(values.AZURE_TERRA_ENDPOINT) !== Boolean(values.AZURE_TERRA_KEY);
+  const homeAssistantPartial = Boolean(values.HOME_ASSISTANT_URL) !== Boolean(values.HOME_ASSISTANT_TOKEN);
   if (voiceLivePartial) errors.push({ key: 'AZURE_VOICELIVE_ENDPOINT', code: 'conditional', message: 'Voice Live endpoint va key birga berilishi kerak' });
   if (realtimePartial) errors.push({ key: 'AZURE_REALTIME_ENDPOINT', code: 'conditional', message: 'Realtime endpoint va key birga berilishi kerak' });
   if (terraPartial) errors.push({ key: 'AZURE_TERRA_ENDPOINT', code: 'conditional', message: 'Terra endpoint va key birga berilishi kerak' });
+  if (homeAssistantPartial) errors.push({ key: 'HOME_ASSISTANT_URL', code: 'conditional', message: 'Home Assistant URL va token birga berilishi kerak' });
   if (values.WHISPER_WAKE_ENABLED && (!values.WHISPER_WAKE_BINARY || !values.WHISPER_WAKE_MODEL)) {
     errors.push({ key: 'WHISPER_WAKE_BINARY', code: 'conditional', message: 'WHISPER_WAKE_ENABLED=true uchun binary va model path berilishi kerak' });
   }

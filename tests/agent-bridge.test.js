@@ -13,6 +13,12 @@ const {
 } = require('../core/agent-bridge');
 const { createCheckpointStore } = require('../core/agent-task-checkpoints');
 
+function withConfirmMode(t, mode) {
+  const saved = process.env.JARVIS_CONFIRM_MODE;
+  process.env.JARVIS_CONFIRM_MODE = mode;
+  t.after(() => { if (saved === undefined) delete process.env.JARVIS_CONFIRM_MODE; else process.env.JARVIS_CONFIRM_MODE = saved; });
+}
+
 test('agent bridge forwards an explicit session key to OpenClaw', () => {
   assert.deepEqual(buildOpenClawAgentArgs('Davom et', 'agent:main:jarvis-project-alpha'), [
     'agent', '--session-key', 'agent:main:jarvis-project-alpha',
@@ -62,7 +68,8 @@ test('provider errors classify missing dependencies and configuration without tr
   assert.equal(classifyProviderError(new Error('npm install failed because the local package manager is unavailable')).type, 'fixable_locally');
 });
 
-test('checkpoint blocks a missing dependency repair until the user confirms it', async () => {
+test('checkpoint blocks a missing dependency repair until the user confirms it', async t => {
+  withConfirmMode(t, 'strict');   // tasdiq darvozasi faqat strict rejimda (standart: off)
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-self-heal-'));
   const calls = [];
   const repairs = [];
@@ -236,6 +243,7 @@ test('public resume and checkpoint entry points cannot bypass persisted approval
 });
 
 test('persisted approval permits only the gated repair then resumes the unfinished step', async t => {
+  withConfirmMode(t, 'strict');
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-approved-repair-'));
   t.after(() => fs.rmSync(projectDir, { recursive: true, force: true }));
   let installed = false; let repairs = 0;

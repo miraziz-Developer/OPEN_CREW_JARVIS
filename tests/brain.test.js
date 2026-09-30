@@ -105,12 +105,78 @@ test('memory: prefers macOS memory_pressure free percentage', () => {
   assert.equal(parseMemoryPressure('nothing here', 16 * GB), null);
 });
 
-test('bonsai command: default is the RAM-light 1-bit GGUF on llama-server with vision + tool-calling template', () => {
+test('bonsai command: prefers Ternary Bonsai 2 GGUF, falls back to 1-bit, on llama-server with tool-calling template', () => {
   const { bonsaiCommand } = require('../core/brain/backends');
-  const c = bonsaiCommand({ projectDir: '/p', port: 11436, runtime: 'llamacpp' });
+  const c = bonsaiCommand({ projectDir: '/p', port: 11436, runtime: 'llamacpp', exists: () => true });
   assert.match(c.bin, /llama-server$/);
   assert.ok(c.args.includes('--jinja'));
-  assert.ok(c.args.join(' ').includes('Bonsai-27B-Q1_0.gguf'));
+  assert.ok(c.args.join(' ').includes('Ternary-Bonsai-2-27B-PTQ1_0.gguf'));
+  const only1bit = bonsaiCommand({ projectDir: '/p', port: 11436, runtime: 'llamacpp', exists: f => f.includes('Bonsai-27B-Q1_0') });
+  assert.ok(only1bit.args.join(' ').includes('Bonsai-27B-Q1_0.gguf'));
+  assert.ok(!only1bit.args.includes('--mmproj'));
+  const none = bonsaiCommand({ projectDir: '/p', port: 11436, runtime: 'llamacpp', exists: () => false });
+  assert.ok(none.required[1].endsWith('Ternary-Bonsai-2-27B-PTQ1_0.gguf'));   // "o'rnatilmagan" xabari to'g'ri faylni ko'rsatadi
   const mlx = bonsaiCommand({ projectDir: '/p', port: 11436, runtime: 'mlx' });
   assert.match(mlx.args.join(' '), /bonsai-server\.py/);
+});
+
+test('set-brain: local mode swaps bulky bootstrap for SOUL.local.md, cloud mode restores it', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const { apply } = require('../scripts/set-brain');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-'));
+  const ocPath = path.join(dir, 'openclaw.json'); const savedPath = path.join(dir, 'saved.json');
+  fs.writeFileSync(ocPath, JSON.stringify({ agents: { defaults: { model: { primary: 'azure-openai/gpt-6-astra', fallbacks: ['azure-openai/gpt-5-mini'] } } } }));
+  const local = apply('local', { ocPath, savedPath });
+  assert.equal(local.agents.defaults.model.primary, 'ollama/qwen3.5:9b');
+  assert.equal(local.agents.defaults.contextInjection, 'never');
+  const cloud = apply('cloud', { ocPath, savedPath });
+  assert.equal(cloud.agents.defaults.model.primary, 'azure-openai/gpt-6-astra');
+  assert.equal(cloud.agents.defaults.contextInjection, undefined);
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'SOUL.local.md'), 'utf8').length < 3000);   // ixcham bo'lib qolsin
+});
+
+test('agent policy preamble carries the compact soul only in local brain mode', () => {
+  const { agentPolicyPreamble } = require('../core/agent-bridge');
+  const saved = process.env.JARVIS_BRAIN;
+  try {
+    process.env.JARVIS_BRAIN = 'local';
+    assert.match(agentPolicyPreamble({ mode: 'off' }), /^\[Jarvis — local brain profile\][\s\S]*\[Owner policy: Full autonomy/);
+    process.env.JARVIS_BRAIN = 'cloud';
+    assert.match(agentPolicyPreamble({ mode: 'off' }), /^\[Owner policy:/);
+  } finally { if (saved === undefined) delete process.env.JARVIS_BRAIN; else process.env.JARVIS_BRAIN = saved; }
+});
+
+test('arbiter: does not evict the resident model when even freeing it would not fit the big one', async () => {
+  const { BrainArbiter, MemoryPressureError } = require('../core/brain/arbiter');
+  const events = [];
+  const arbiter = new BrainArbiter({
+    backends: { ollama: { evict: async () => events.push('evict:ollama'), footprintBytes: async () => 5 * GB }, bonsai: { evict: async () => {} } },
+    availableBytes: async () => 1 * GB, requirements: { bonsai: 7 * GB }, settleMs: 0
+  });
+  (await arbiter.acquire('ollama'))();
+  await assert.rejects(arbiter.acquire('bonsai'), MemoryPressureError);   // 1 + 5 < 7
+  assert.deepEqual(events, []);
+  assert.equal(arbiter.status().resident, 'ollama');
+});
+
+test('arbiter: waits for async unload to return memory before loading the big model', async () => {
+  const { BrainArbiter } = require('../core/brain/arbiter');
+  let free = 3 * GB;
+  const arbiter = new BrainArbiter({
+    backends: { ollama: { evict: async () => { setTimeout(() => { free = 9 * GB; }, 300); }, footprintBytes: async () => 6 * GB } },
+    availableBytes: async () => free, requirements: { bonsai: 7 * GB }, settleMs: 3000
+  });
+  (await arbiter.acquire('ollama'))();
+  const release = await arbiter.acquire('bonsai');
+  assert.equal(arbiter.status().resident, 'bonsai'); release();
+});
+
+test('screen monitor: local brain records window metadata instead of occupying the local model', async () => {
+  const saved = process.env.JARVIS_BRAIN;
+  process.env.JARVIS_BRAIN = 'local';
+  try {
+    const { analyzeScreen } = require('../skills/screen-monitor/index.js');
+    const r = await analyzeScreen('/nonexistent.png', { app: 'Google Chrome', window: { title: 'GitHub' }, browser: { title: 'GitHub', url: 'https://github.com' } });
+    assert.deepEqual(r, { status: 'ok', summary: 'Google Chrome — GitHub — https://github.com' });
+  } finally { if (saved === undefined) delete process.env.JARVIS_BRAIN; else process.env.JARVIS_BRAIN = saved; }
 });

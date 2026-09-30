@@ -14,7 +14,7 @@ const brain = createBrainService({
   ollama: createOllamaBackend({ port: Number(process.env.OLLAMA_PORT) || 11434 }),
   bonsai,
   availableBytes: () => availableBytes(),
-  bonsaiNeedBytes: (Number(process.env.BONSAI_MIN_FREE_GB) || (process.env.BONSAI_RUNTIME === 'mlx' ? 9.5 : 5.5)) * 2 ** 30,
+  bonsaiNeedBytes: (Number(process.env.BONSAI_MIN_FREE_GB) || (process.env.BONSAI_RUNTIME === 'mlx' ? 9.5 : 7)) * 2 ** 30,
   bonsaiIdleMs: (Number(process.env.BONSAI_IDLE_MIN) || 3) * 60000,
   log
 });

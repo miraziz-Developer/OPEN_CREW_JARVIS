@@ -125,6 +125,20 @@ async function main() {
     add('http:dashboard', unhealthy.length ? 'error' : 'ok', unhealthy.length ? `unhealthy=${unhealthy.join(',')}` : 'API va komponentlar healthy', 'Supervisor loglarini tekshiring');
   } catch (error) { add('http:dashboard', 'error', error.message, 'Dashboard/supervisorni tekshiring'); }
 
+  if (validation.values.HOME_ASSISTANT_URL && validation.values.HOME_ASSISTANT_TOKEN) {
+    try {
+      const { HomeAssistantClient } = require('../skills/home-assistant');
+      const status = await new HomeAssistantClient({
+        baseUrl: validation.values.HOME_ASSISTANT_URL,
+        accessToken: validation.values.HOME_ASSISTANT_TOKEN,
+        timeoutMs: validation.values.HOME_ASSISTANT_TIMEOUT_MS
+      }).status();
+      add('http:home-assistant', status.connected ? 'ok' : 'error', status.message, 'Home Assistant URL, token va tarmoqni tekshiring');
+    } catch (error) {
+      add('http:home-assistant', 'error', error.message, 'Home Assistant URL, Long-Lived Access Token va tarmoqni tekshiring');
+    }
+  }
+
   const summary = summarize(checks, { strict });
   if (jsonOutput) {
     console.log(JSON.stringify({ generatedAt: new Date().toISOString(), summary, checks }, null, 2));

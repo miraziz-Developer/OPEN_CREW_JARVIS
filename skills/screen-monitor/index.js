@@ -90,8 +90,21 @@ function pixelDiff(prevPath, currPath) {
 // ── Vision tahlil (haqiqiy skrinshotni gpt-4.1'ga yuboradi) ───────────
 const { describeImage, buildGroundedPrompt } = require('./../screen-vision/index.js');
 
+// Lokal miya rejimida (JARVIS_BRAIN=local) fon rasm tahlili yagona lokal modelni band qiladi va agentning
+// prompt keshini o'chiradi — keyingi buyruq daqiqalab sekinlashadi. Shu sabab u yerda faqat metadata
+// (ilova, oyna, brauzer sahifasi) yoziladi. SCREEN_MONITOR_LOCAL_VISION=1 — baribir rasm tahlili.
+function metadataSummary(context) {
+  if (!context) return '';
+  const parts = [context.app, context.window?.title, context.browser?.title, context.browser?.url].filter(Boolean);
+  return [...new Set(parts.map(p => String(p).trim()))].join(' — ').slice(0, 500);
+}
+
 async function analyzeScreen(imagePath, context) {
   const now = Date.now();
+  if (String(getEnv('JARVIS_BRAIN', '')).toLowerCase() === 'local' && getEnv('SCREEN_MONITOR_LOCAL_VISION', '') !== '1') {
+    const summary = metadataSummary(context);
+    return summary ? { status: 'ok', summary } : { status: 'error', message: 'kontekst yo\'q' };
+  }
   if (now - lastLLMCall < llmCooldownMs) {
     return { status: 'cooldown', message: 'LLM cooldown faol' };
   }
@@ -280,4 +293,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { runLoop, setEnabled, pixelDiff, loadState, observeWorld };
+module.exports = { runLoop, setEnabled, pixelDiff, loadState, observeWorld, analyzeScreen, metadataSummary };

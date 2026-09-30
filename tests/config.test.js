@@ -58,6 +58,8 @@ test('config schema converts typed values and applies defaults', () => {
   assert.equal(result.values.AZURE_REALTIME_DEPLOYMENT, 'gpt-realtime-2.1');
   assert.equal(result.values.AZURE_TRANSCRIBE_DEPLOYMENT, 'gpt-live-transcribe');
   assert.equal(result.values.AZURE_EMBEDDING_DEPLOYMENT, 'text-embedding-3-large-2');
+  assert.equal(result.values.HOME_ASSISTANT_TIMEOUT_MS, 8000);
+  assert.equal(result.values.HOME_ASSISTANT_ALLOW_SECURITY_ACTIONS, false);
   assert.equal(result.values.TURN_STALE_TIMEOUT_MS, 600000);
   assert.equal(result.values.CONVERSATION_FOLLOWUP_MS, 30000);
   assert.equal(result.values.ACTION_CONFIRMATION_TTL_MS, 30000);
@@ -125,6 +127,15 @@ test('new provider secrets are redacted and partial credential pairs fail', () =
   const partial = validateConfig({ ...valid, AZURE_REALTIME_ENDPOINT: 'https://realtime.example.com' });
   assert.equal(partial.ok, false);
   assert.equal(partial.errors.at(-1).code, 'conditional');
+});
+
+test('Home Assistant credentials are paired and token is redacted', () => {
+  const complete = validateConfig({ ...valid, HOME_ASSISTANT_URL: 'http://homeassistant.local:8123', HOME_ASSISTANT_TOKEN: 'ha-secret' });
+  assert.equal(complete.ok, true);
+  assert.equal(redactConfig(complete.values).HOME_ASSISTANT_TOKEN, '<redacted>');
+  const partial = validateConfig({ ...valid, HOME_ASSISTANT_URL: 'http://homeassistant.local:8123' });
+  assert.equal(partial.ok, false);
+  assert.equal(partial.errors.at(-1).key, 'HOME_ASSISTANT_URL');
 });
 
 test('Foundry realtime WebSocket endpoints are valid configuration', () => {
