@@ -73,6 +73,14 @@ function buildVisionRequestBody(imageBase64, prompt, options = {}) {
 }
 
 function describeImage(imagePath, prompt, options = {}) {
+  // Lokal rejim: Qwen 3.5 9B rasmni ham tushunadi — model almashtirilmaydi (Brain hakami orqali).
+  if (String(env('JARVIS_BRAIN', '')).toLowerCase() === 'local') {
+    const img = fs.readFileSync(imagePath).toString('base64');
+    return require('../../core/brain/client').think({
+      user: prompt || DEFAULT_PROMPT, images: [img], hard: false, maxTokens: options.structured ? 2000 : 800,
+      format: options.structured ? 'json' : undefined
+    }).then(r => r.text);
+  }
   if (!KEY || !ENDPOINT) throw new Error('AZURE_OPENAI_KEY yoki AZURE_OPENAI_ENDPOINT .env da yo\'q');
   const img = fs.readFileSync(imagePath).toString('base64');
   const body = JSON.stringify(buildVisionRequestBody(img, prompt, options));

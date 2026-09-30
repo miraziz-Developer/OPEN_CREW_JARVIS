@@ -74,6 +74,18 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort }) {
 }
 
 async function complete(options = {}) {
+  // Lokal "miya" rejimi (JARVIS_BRAIN=local): Qwen / Gemma / Bonsai — Brain xizmati orqali, RAM'da bittadan.
+  if (String(env('JARVIS_BRAIN', '')).toLowerCase() === 'local') {
+    const r = await require('./brain/client').think({
+      system: options.system || '', user: String(options.user || '').slice(0, 60000),
+      // Bonsai faqat aniq "qiyin" deb belgilanganda (missiya rejasi). Uzunlik bo'yicha avtomatik emas — aks holda har
+      // vazifa tekshiruvida Qwen ↔ Bonsai almashib, RAM'ga qayta-qayta yuklanardi.
+      hard: options.hard === true, maxTokens: options.maxOutputTokens || 2048,
+      format: options.json ? 'json' : undefined
+    }, { timeoutMs: options.timeoutMs || 600000 });
+    try { require('./usage-meter').sharedMeter().add('local_tokens', (r.usage?.prompt || 0) + (r.usage?.completion || 0)); } catch (_) {}
+    return r.text;
+  }
   const model = options.model || env('MISSION_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini'));
   const attempts = options.retries ?? 2;
   const models = options.hard ? modelConfig(env).strongChain : [model];
@@ -100,6 +112,7 @@ async function complete(options = {}) {
 }
 
 async function completeJson(options = {}) {
+  options = { ...options, json: true };
   let text = await complete(options);
   try { return extractJson(text); } catch (firstError) {
     text = await complete({

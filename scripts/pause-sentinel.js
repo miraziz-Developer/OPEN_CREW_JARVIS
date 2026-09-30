@@ -93,6 +93,9 @@ function speak(text) {
 const UID = typeof process.getuid === 'function' ? process.getuid() : 501;
 const PLIST_LABEL = 'com.jarvis.openclaw';
 const PLIST_PATH = path.join(require('os').homedir(), 'Library', 'LaunchAgents', PLIST_LABEL + '.plist');
+// Lokal "miya" xizmatlari (o'rnatilgan bo'lsa): pauzada ular ham to'xtaydi — RAM to'liq bo'shaydi.
+const BRAIN_LABELS = ['com.jarvis.brain', 'com.jarvis.ollama'];
+const agentPlist = label => path.join(require('os').homedir(), 'Library', 'LaunchAgents', label + '.plist');
 
 let toggleBusy = false;
 let lastComboAt = 0;
@@ -110,6 +113,11 @@ async function pause() {
     }
   }
   try { execSync('openclaw gateway stop', { timeout: 15000 }); } catch (e) {}
+  // Brain avval (u Bonsai jarayonini o'zi yopadi), keyin Ollama (yuklangan modellar bilan birga).
+  for (const label of BRAIN_LABELS) {
+    if (!fs.existsSync(agentPlist(label))) continue;
+    try { execSync('launchctl bootout gui/' + UID + '/' + label, { timeout: 15000 }); } catch (e) {}
+  }
   fs.writeFileSync(PAUSE_MARKER, String(Date.now()));
   log('Pauzada. RAM bo\'shatildi.');
 }
@@ -117,6 +125,10 @@ async function pause() {
 async function resume() {
   log('Uyg\'otilmoqda...');
   try { fs.unlinkSync(PAUSE_MARKER); } catch (e) {}
+  for (const label of BRAIN_LABELS.slice().reverse()) {
+    if (!fs.existsSync(agentPlist(label))) continue;
+    try { execSync('launchctl bootstrap gui/' + UID + ' "' + agentPlist(label) + '"', { timeout: 15000 }); } catch (e) {}
+  }
   try {
     execSync('launchctl bootstrap gui/' + UID + ' "' + PLIST_PATH + '"', { timeout: 15000 });
     log('launchctl bootstrap yuborildi.');

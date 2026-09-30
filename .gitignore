@@ -90,3 +90,6 @@ funztionz.db
 .*-state.json
 .run/
 .venv-*/
+
+# Lokal LLM og'irliklari (Bonsai va boshqalar) — katta, git'ga tushmaydi
+/models/llm/

@@ -103,6 +103,12 @@ function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
 }
 
 async function askExpert(question, context) {
+  // Lokal rejim: chuqur tahlil — Bonsai 27B (qiyin vazifa), RAM'da bittadan (Brain hakami orqali).
+  if (String(env('JARVIS_BRAIN', '')).toLowerCase() === 'local') {
+    const system = context ? SYSTEM_PROMPT + '\n\nSuhbat konteksti:\n' + String(context).slice(0, 4000) : SYSTEM_PROMPT;
+    const r = await require('../../core/brain/client').think({ system, user: String(question).slice(0, 8000), hard: true, maxTokens: MAX_TOKENS });
+    return stripMarkdown(r.text);
+  }
   let lastError;
   const providers = reasoningProviders(question);
   const deadline = Date.now() + TIMEOUT_MS;

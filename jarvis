@@ -6,12 +6,17 @@ LABEL="com.jarvis.openclaw"
 DOMAIN="gui/$(id -u)"
 
 usage() {
-  echo "Usage: ./jarvis {install|start|stop|restart|status|doctor|logs|open|update|reconfigure|uninstall}"
+  echo "Usage: ./jarvis {install|start|stop|restart|status|doctor|logs|open|brain local|brain cloud|brain status|update|reconfigure|uninstall}"
 }
 
 case "${1:-start}" in
   install)
     exec "$ROOT/install.sh"
+    ;;
+  brain)
+    # ./jarvis brain local | cloud | status
+    if [ "${2:-status}" = status ]; then curl -s http://127.0.0.1:11435/brain/status || echo "Brain xizmati ishlamayapti"; echo; exit 0; fi
+    node "$ROOT/scripts/set-brain.js" "$2" && exec "$0" restart
     ;;
   update)
     exec "$ROOT/scripts/update.sh"
@@ -26,6 +31,7 @@ case "${1:-start}" in
     exec "$ROOT/scripts/uninstall.sh"
     ;;
   start)
+    for L in com.jarvis.ollama com.jarvis.brain; do P="$HOME/Library/LaunchAgents/$L.plist"; [ -f "$P" ] && launchctl bootstrap "$DOMAIN" "$P" 2>/dev/null || true; done
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
       launchctl kickstart "$DOMAIN/$LABEL"
     else
@@ -35,6 +41,8 @@ case "${1:-start}" in
     ;;
   stop)
     launchctl kill TERM "$DOMAIN/$LABEL" 2>/dev/null || true
+    # Lokal miya xizmatlari ham (RAM to'liq bo'shaydi)
+    for L in com.jarvis.brain com.jarvis.ollama; do launchctl bootout "$DOMAIN/$L" 2>/dev/null || true; done
     echo "⏹ Jarvis to'xtatildi"
     ;;
   restart)
