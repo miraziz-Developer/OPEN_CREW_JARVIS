@@ -1,29 +1,103 @@
+<div align="center">
+
 # 🤖 JARVIS
 
-Mac uchun shaxsiy AI-yordamchi: **tez ovozli suhbat** ("Jarvis" deb chaqirasiz), soatlab/kunlab **mustaqil ishlaydigan missiyalar**, **Telegram** orqali masofadan boshqaruv, xotira, ekran/ilova va **iPhone boshqaruvi**.
+**A personal, voice-first AI assistant for macOS that talks, sees your screen, controls your Mac and iPhone, and runs long-lived autonomous missions.**
 
-> Azure Voice Live (ovoz) · OpenClaw agenti · BabyAGI / AutoGPT / Open Interpreter / Browser-use ishchilari · Obsidian xotira
+![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)
+![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-475%20passing-brightgreen)
+![Azure](https://img.shields.io/badge/Azure-OpenAI%20%C2%B7%20Voice%20Live%20%C2%B7%20Speech-0078D4?logo=microsoftazure&logoColor=white)
+
+</div>
 
 ---
 
-## 1. O'rnatishdan oldin nima kerak
+## Overview
 
-**Kompyuter:** Mac (macOS 13+; Apple Silicon'da sinalgan). iPhone boshqaruvi uchun macOS 15+ va Apple Silicon. Bo'sh joy ~8 GB. Internet.
+JARVIS is an always-on assistant that runs as a set of background services on a Mac. Say **"Jarvis"** and it answers in real time. You can interrupt it mid-sentence and it stops talking to listen. Behind the voice layer sits an agent runtime that can:
 
-**Hisoblar va kalitlar** (o'rnatuvchi ularni so'raydi va darhol tekshiradi):
+- **Act on your computer.** It opens apps, manages files, browses the web, clicks through GUIs and controls an iPhone via iPhone Mirroring. Destructive actions can be undone.
+- **Run missions.** These are multi-hour or multi-day goals. JARVIS plans them, delegates them to specialised workers, checks each step against evidence and reports back.
+- **Stay reachable remotely.** A Telegram bot accepts text, voice notes and video notes, and sends short status updates and a daily morning brief.
+- **Remember things.** Long-term memory lives in Obsidian and PostgreSQL, with embeddings-based recall.
+- **Run on cloud or local models.** It uses Azure OpenAI by default and can switch with one command to a local multi-model "brain" (Qwen / Gemma / Bonsai) with a RAM-aware arbiter.
 
-| Nima | Nima uchun | Qayerdan olinadi |
+The assistant is built for a bilingual owner, so speech recognition and replies are tuned for **Uzbek and English**. The tuning includes a custom speech normalizer, a transcript corrector and a personal wake-word model.
+
+## Highlights
+
+| Area | What's inside |
+|---|---|
+| 🎙️ **Real-time voice** | Azure Voice Live full-duplex sessions, barge-in detection, echo cancellation via a native Swift audio helper, and a layered wake-word stack (openWakeWord, Whisper and a personal model you train) |
+| 🧠 **Model routing** | Fast and strong deployments with automatic fallback, a deep-think mode, and a local brain service that keeps exactly one large model in RAM at a time |
+| 🛠️ **Autonomous missions** | Planner → executor → verifier loop over pluggable workers: `agent`, `interpreter`, `browser`, `gui`, `phone`, `babyagi`, `autogpt`, `think` |
+| 👁️ **Visual action loop** | Screenshot → plan → act → verify, with macOS Accessibility grounding and a deterministic action benchmark |
+| 🔐 **Safety** | A configurable confirmation policy, an action safety classifier, allowlisted smart-home scopes, owner-only Telegram access, undo, and a secret scanner |
+| 📱 **Integrations** | Telegram, Gmail, Google Calendar, Home Assistant, iPhone Mirroring, Obsidian, Open Interpreter, browser-use |
+| 🩺 **Operability** | A `doctor` health check, a self-healing watchdog, a voice flight recorder, runtime telemetry, a local web dashboard, launchd autostart and daily backups |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Inputs
+        MIC[🎙️ Microphone]
+        TG[📨 Telegram]
+        SCR[🖥️ Screen monitor]
+    end
+
+    subgraph Voice["Voice daemon (jarvis_daemon.js)"]
+        WAKE[Wake-word stack]
+        RT[Realtime voice<br/>Azure Voice Live]
+        FAST[Fast actions]
+    end
+
+    subgraph Core["Agent runtime (core/)"]
+        ROUTE[Model routing]
+        POLICY[Safety & confirmation policy]
+        MISSIONS[Mission engine<br/>plan → act → verify]
+        MEM[Memory OS]
+    end
+
+    subgraph Workers
+        AGENT[OpenClaw agent]
+        INT[Open Interpreter]
+        BROWSER[Browser-use]
+        GUI[GUI / visual executor]
+        PHONE[iPhone control]
+    end
+
+    MIC --> WAKE --> RT
+    RT --> FAST
+    RT --> ROUTE
+    TG --> ROUTE
+    SCR --> MEM
+    ROUTE --> POLICY --> MISSIONS
+    MISSIONS --> AGENT & INT & BROWSER & GUI & PHONE
+    MISSIONS <--> MEM
+    ROUTE -.-> LLM[(Azure OpenAI<br/>or local brain)]
+```
+
+## Requirements
+
+**Hardware and OS:** a Mac running macOS 13 or newer. It is tested on Apple Silicon. iPhone control needs macOS 15+ on Apple Silicon. You also need about 8 GB of free disk space and an internet connection.
+
+**Accounts and keys.** The installer asks for each of these and validates it on the spot.
+
+| Service | Purpose | Where to get it |
 |---|---|---|
-| **Azure OpenAI** — endpoint, kalit va deploymentlar | JARVIS ning "miyasi": oddiy so'rovlar uchun `gpt-6-astra`, murakkab/tool vazifalari uchun `gpt-6-sol` | [Azure AI Foundry](https://ai.azure.com) → project → *Endpoints and keys* → *Deploy model* |
-| **Azure Voice Live** — realtime model (`gpt-realtime`) | ovozli suhbat | xuddi shu Foundry project'da `gpt-realtime` ni deploy qiling |
-| **Azure Speech** — kalit va region | eshitish va gapirish | Azure portal → *Speech service* → *Keys and Endpoint* |
-| **Telegram bot** *(ixtiyoriy)* | telefondan boshqarish, xabarnomalar | Telegram'da [@BotFather](https://t.me/BotFather) → `/newbot` |
-| **Google OAuth** *(ixtiyoriy)* | Gmail va Calendar | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → OAuth client (Desktop) → JSON yuklab olish |
-| **Home Assistant** *(ixtiyoriy)* | Chiroq, switch, climate, media va boshqa uy qurilmalari | Home Assistant profilidan *Long-Lived Access Token* yarating; `.env` ga lokal URL va tokenni kiriting |
+| **Azure OpenAI** (endpoint, key, deployments) | The agent's brain: a fast model for simple requests and a strong model for tool use and complex tasks | [Azure AI Foundry](https://ai.azure.com) → project → *Endpoints and keys* → *Deploy model* |
+| **Azure Voice Live** (`gpt-realtime`) | Real-time voice conversation | Deploy `gpt-realtime` in the same Foundry project |
+| **Azure Speech** (key and region) | Speech-to-text and text-to-speech | Azure portal → *Speech service* → *Keys and Endpoint* |
+| **Telegram bot** *(optional)* | Remote control and notifications | [@BotFather](https://t.me/BotFather) → `/newbot` |
+| **Google OAuth** *(optional)* | Gmail and Calendar | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → OAuth client (Desktop) → download the JSON |
+| **Home Assistant** *(optional)* | Lights, switches, climate, media and other smart-home devices | Create a *Long-Lived Access Token* in your Home Assistant profile |
 
-> 💸 Ovozli suhbat va avtonom missiyalar Azure xarajati keltiradi (ayniqsa doim eshitish rejimi). JARVIS xarajat oshsa Telegramga **xabar beradi**, lekin ishni to'xtatmaydi.
+> 💸 Voice sessions and autonomous missions incur Azure costs, especially in always-listening mode. JARVIS sends a Telegram alert when spending crosses your budget. The alert does not stop any work.
 
-## 2. O'rnatish (bitta buyruq)
+## Installation
 
 ```bash
 git clone https://github.com/miraziz-Developer/OPEN_CREW_JARVIS.git
@@ -31,162 +105,191 @@ cd OPEN_CREW_JARVIS
 ./install.sh
 ```
 
-Yoki repo'ni klonlamasdan:
+Or without cloning first:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/miraziz-Developer/OPEN_CREW_JARVIS/main/install.sh)
 ```
 
-Skript o'zi, ketma-ket:
+The installer runs these steps in order:
 
-1. Kompyuteringizni tekshiradi (macOS, chip, bo'sh joy, internet). Faqat tekshirish uchun: `./install.sh --check` (hech narsa o'zgartirmaydi).
-2. Kerak bo'lsa Xcode vositalari va Homebrew'ni o'rnatadi (avval so'raydi).
-3. Homebrew paketlari: Node, Python 3.11/3.12, sox, ffmpeg, cliclick, yt-dlp, uv, whisper-cpp; OpenClaw agenti.
-4. **Kalitlarni bosqichma-bosqich so'raydi** (yuqoridagi jadval). Har biri nima ekani yoziladi, kalit terminalda ko'rinmaydi va **kiritilishi bilan tekshiriladi** (✅ ishlayapti / ❌ noto'g'ri). Faqat shu kompyuterdagi `.env` (0600) ga yoziladi, git'ga tushmaydi.
-5. Xavfsizlik (tasdiq) rejimini so'raydi (4-bo'lim).
-6. Wake-word, avtonom ishchilar (Python muhitlari, brauzer) va aks-sadoni bekor qiluvchi native yordamchini kompyuteringizga moslab quradi.
-7. Avtostartni (launchd) yoqadi va JARVIS ni ishga tushiradi.
-8. `doctor` bilan tekshiradi va macOS ruxsat oynalarini ochishni taklif qiladi.
+1. **Checks the machine:** macOS version, chip, disk space and network. `./install.sh --check` runs only this step and changes nothing.
+2. Installs the Xcode Command Line Tools and Homebrew if they're missing. It asks first.
+3. Installs the Homebrew packages (Node, Python 3.11/3.12, sox, ffmpeg, cliclick, yt-dlp, uv, whisper-cpp) and the OpenClaw agent.
+4. **Asks for each key in turn.** Input is hidden, and each key is tested as soon as you enter it (✅ / ❌). Keys are written only to a local `.env` with permissions `0600`, which git ignores.
+5. Asks you to pick a confirmation mode (see [Safety modes](#safety-modes)).
+6. Builds the wake-word models, the autonomous workers (Python environments and a browser) and the native echo-cancelling audio helper for your machine.
+7. Enables launchd autostart and starts JARVIS.
+8. Runs `doctor` and offers to open the required macOS permission panes.
 
-Qayta ishga tushirish xavfsiz: to'ldirilgan kalitlarni qayta so'ramaydi. Hammasini boshidan sozlash: `./install.sh --reconfigure`. Og'ir ishchilarni keyinga qoldirish: `./install.sh --skip-workers` (keyin `bash scripts/install-workers.sh`).
+Re-running the installer is safe because keys that are already set are kept. Use `./install.sh --reconfigure` to start over. Use `./install.sh --skip-workers` to defer the heavy workers, and install them later with `bash scripts/install-workers.sh`.
 
-### macOS ruxsatlari (bir marta, faqat siz bera olasiz)
+### macOS permissions
 
-Tizim sozlamalari → Maxfiylik va xavfsizlik → **Mikrofon**, **Accessibility**, **Automation**, **Screen Recording** → *Terminal* (yoki `node`) ni yoqing. So'ng: `./jarvis restart`.
+Only you can grant these. Open **System Settings → Privacy & Security** and enable **Microphone**, **Accessibility**, **Automation** and **Screen Recording** for *Terminal* (or `node`). Then run `./jarvis restart`.
 
-## 3. Birinchi ishga tushirish
+## Getting started
 
-1. `./jarvis status` — "running" va dashboard ko'rinishi kerak. Batafsil: `npm run doctor` (hammasi yashil bo'lsa tayyor).
-2. **"Jarvis"** deng — javob berishi kerak. Doim eshitish yoqiq: faqat "Jarvis" deganingizdagina javob beradi.
-3. Telegram ulagan bo'lsangiz: botingizga `/start` yozing. `TELEGRAM_OWNER_IDS` bo'sh bo'lsa, birinchi yozgan odam ega bo'lib juftlashadi.
-4. Yaxshiroq eshitishi uchun (ixtiyoriy, ~5 daqiqa) wake-word modelini o'z ovozingizda o'qiting: `npm run voice:wake-collect` → `npm run voice:wake-train`.
+1. Run `./jarvis status`. It should report `running` and show the dashboard URL. For a full check, run `npm run doctor`. All green means you're ready.
+2. Say **"Jarvis"** and it should answer. In always-listening mode it only responds when it hears its name.
+3. If you connected Telegram, send `/start` to your bot. If `TELEGRAM_OWNER_IDS` is empty, the first person to message the bot becomes the owner.
+4. *(Optional, ~5 minutes)* Train the wake word on your own voice for better recognition: run `npm run voice:wake-collect`, then `npm run voice:wake-train`.
 
-## 4. Ishlatish
+## Usage
 
-### Ovoz bilan
+### Voice
 
-| Deng | Nima bo'ladi |
+| Say | What happens |
 |---|---|
-| "Jarvis, Safari och" · "Telegram'ni yop" · "ovozni pasaytir" | ilova/tizim amallari (bir soniyada) |
-| "YouTube'da Billie Jean qo'y" · "Google'da … ni qidir" | veb amallari (~2 soniya) |
-| "Hujjatlar papkasiga report.pdf ni ko'chir" · "**undo**" | fayl amallari; oxirgi amalni qaytaradi (o'chirish Trash'ga tushadi) |
-| "Ertaga soat 9 ga eslatma qo'y" · "kalendarimda nima bor?" | eslatma/kalendar (Google ulangan bo'lsa) |
-| "Pochtamni tekshir" | Gmail (Google ulangan bo'lsa) |
-| "**Missiya boshla:** har kuni ertalab remote Python ishlarini top va reyting qil" | uzoq maqsad — fonda reja → bajarish → tekshirish |
-| "Missiyalar holati?" · "3-missiyani pauza qil / davom et / bekor qil" | missiya boshqaruvi |
-| "Telefonimdagi WhatsApp'ni tekshir" | iPhone Mirroring orqali telefonni ko'rib boshqaradi (pastga qarang) |
-| "stop" / "boldi" | gapirayotganini darhol to'xtatadi |
+| "Jarvis, open Safari" · "close Telegram" · "turn the volume down" | App and system actions, in about a second |
+| "Play Billie Jean on YouTube" · "search Google for …" | Web actions, in about 2 seconds |
+| "Move report.pdf to Documents" · "**undo**" | File actions. *Undo* reverts the last one, and deletions go to the Trash |
+| "Remind me tomorrow at 9" · "what's on my calendar?" | Reminders and calendar (needs Google) |
+| "Check my mail" | Gmail (needs Google) |
+| "**Start a mission:** every morning find remote Python jobs and rank them" | A long-running goal: plan, then execute, then verify, in the background |
+| "Mission status?" · "pause / resume / cancel mission 3" | Mission control |
+| "Check WhatsApp on my phone" | Sees and controls the iPhone via iPhone Mirroring |
+| "stop" | Stops speaking immediately |
 
-Gap bo'lish mumkin: JARVIS gapirayotganda gapirsangiz to'xtab, sizni tinglaydi. Javoblar ataylab qisqa.
+Conversation is full-duplex: if you talk while JARVIS is speaking, it stops and listens. Replies are short on purpose.
 
-**Fn+Shift** — JARVIS ni to'liq to'xtatish/uyg'otish (mikrofon ham o'chadi). Doctor'da "JARVIS pauzada" chiqsa, sabab shu.
+**Fn + Shift** pauses or resumes JARVIS entirely, microphone included. If `doctor` reports *"JARVIS is paused"*, this is why.
 
-### Telegram orqali (uydan tashqarida ham)
+### Telegram
 
-Botga matn, **ovozli xabar** yoki dumaloq video yuboring — agent javob beradi va ishni bajaradi. "Skrinshot ol", "faylni top va yubor" ham ishlaydi. Missiyalar tugaganda, bloklanganda yoki xarajat oshganda **qisqa xabar** keladi; har kuni ertalab **brifing** (missiyalar + kalendar + pochta).
+Send the bot text, a **voice message** or a round video note. The agent replies and does the work. Requests like "take a screenshot" or "find this file and send it to me" work too. You get a **short message** when a mission finishes, gets blocked or goes over budget, plus a **morning brief** with missions, calendar and mail.
 
-### Missiyalar
+### Missions
 
-Missiya — soatlab/kunlab davom etadigan maqsad. JARVIS uni bosqichlarga bo'ladi va ishchilarga topshiradi: `agent` (kompyuter), `interpreter` (kod/terminal), `browser` (veb), `gui` (ekran), `phone` (iPhone), `babyagi`, `autogpt`, `think`. Har bosqich dalil bilan tekshiriladi. Holat: ovozda "missiyalar holati", yoki panel: http://localhost:7890.
+A mission is a goal that runs for hours or days. JARVIS splits it into steps and assigns each step to a worker:
 
-### iPhone boshqaruvi
-
-Talab: macOS 15+, Apple Silicon, iPhone bir xil Apple ID'da. Bir marta: *iPhone Mirroring* ilovasini oching va telefonni Face ID bilan tasdiqlang. Keyin "telefonimda …" deb so'rang. JARVIS telefon ekranini ko'radi, bosadi, yozadi. Telefon qulflangan yoki uzoqda bo'lsa "ulanmagan" deydi.
-
-### Tasdiq rejimi (`JARVIS_CONFIRM_MODE` `.env` da)
-
-| Qiymat | Ma'nosi |
+| Worker | Handles |
 |---|---|
-| `payments` *(o'rnatuvchi tavsiyasi)* | faqat pul/to'lov uchun ovozda "confirm" so'raydi |
-| `off` | hech qachon so'ramaydi — **to'lov va o'chirishni ham** o'zi bajaradi |
-| `strict` | xat yuborish, o'chirish, ariza va boshqa xavfli ishlarda ham so'raydi |
+| `agent` | General computer tasks through the OpenClaw agent |
+| `interpreter` | Code and terminal work (Open Interpreter) |
+| `browser` | Web automation (browser-use) |
+| `gui` | Screen-level interaction through the visual action loop |
+| `phone` | iPhone control |
+| `babyagi`, `autogpt` | Open-ended research loops |
+| `think` | Deep reasoning without side effects |
 
-O'zgartirgach: `./jarvis restart`.
+Every step is verified against evidence before it counts as done. To check progress, ask *"mission status"* or open the dashboard at <http://localhost:7890>.
 
-### Ixtiyoriy ulanishlar
+### iPhone control
+
+You need macOS 15+, Apple Silicon, and an iPhone signed in to the same Apple ID. One-time setup: open *iPhone Mirroring* and approve it with Face ID. After that, say *"on my phone, …"*. JARVIS reads the phone screen, taps and types. If the phone is locked or out of range, it tells you it isn't connected.
+
+### Safety modes
+
+Set `JARVIS_CONFIRM_MODE` in `.env`:
+
+| Value | Behaviour |
+|---|---|
+| `payments` *(recommended)* | Asks for a spoken "confirm" only for money and payments |
+| `strict` | Also confirms sending email, deleting files, submitting forms and other risky actions |
+| `off` | Never asks. JARVIS carries out **payments and deletions too** on its own |
+
+Apply the change with `./jarvis restart`.
+
+### Optional integrations
 
 ```bash
-node scripts/google-oauth-setup.js          # Gmail + Calendar (Google Cloud'dan client_secret*.json ~/Downloads da bo'lsin)
-python3 scripts/chrome-profile-sync.py      # brauzer ishchisi Chrome akkauntingiz bilan kirsin
+node scripts/google-oauth-setup.js          # Gmail + Calendar (needs client_secret*.json in ~/Downloads)
+python3 scripts/chrome-profile-sync.py      # let the browser worker use your Chrome profile
+node scripts/set-brain.js local             # switch to local models (Qwen / Gemma / Bonsai); "cloud" switches back
 ```
 
-## 5. Kundalik buyruqlar
+## Command reference
 
-| Buyruq | Vazifa |
+| Command | Description |
 |---|---|
-| `./jarvis status` | ishlayaptimi |
-| `./jarvis restart` / `stop` / `start` | boshqaruv |
-| `./jarvis logs` | jonli loglar (`logs/` papkasi) |
-| `npm run doctor` | to'liq tizim tekshiruvi |
-| `./jarvis update` | yangi versiyani olish va qayta ishga tushirish |
-| `./jarvis reconfigure` | kalitlarni qayta kiritish |
-| `./jarvis uninstall` | avtostart va xizmatlarni o'chirish (kod va ma'lumotlarga tegmaydi) |
-| `./jarvis open` | panelni ochish |
+| `./jarvis status` | Show whether services are running |
+| `./jarvis start` · `stop` · `restart` | Lifecycle control |
+| `./jarvis logs` | Tail the live logs (stored under `logs/`) |
+| `./jarvis open` | Open the dashboard |
+| `./jarvis update` | Pull the latest version and restart |
+| `./jarvis reconfigure` | Re-enter API keys |
+| `./jarvis uninstall` | Remove autostart and services. Code and data are kept |
+| `npm run doctor` | Full system health check |
 
-Zaxira nusxa har kuni 03:30 da avtomatik (`scripts/backup.sh`).
+A backup runs automatically every day at 03:30 (`scripts/backup.sh`).
 
-## 6. Muammolar
+## Troubleshooting
 
-| Belgi | Yechim |
+| Symptom | Fix |
 |---|---|
-| "Jarvis" desam javob bermaydi | Mikrofon ruxsati? `npm run doctor`; pauzada emasmi (Fn+Shift)? `npm run diagnose:voice` |
-| doctor: "JARVIS pauzada" | Fn+Shift bosing yoki `./jarvis start` |
-| Telegram jim | `.env` da `TELEGRAM_BOT_TOKEN`; botga `/start`; `./jarvis logs` |
-| "gateway" qizil | `./jarvis restart`; `openclaw gateway` ni qo'lda ishga tushirib ko'ring |
-| Ovoz kesilib/titrab chiqadi | `bash scripts/build-voice-io.sh` (aks-sado bekor qilish), keyin `./jarvis restart` |
-| Agent skilllarni ko'rmayapti | `bash scripts/sync-workspace.sh` (har ishga tushishda o'zi bajariladi) |
-| Kalit almashtirdim | `.env` ni tahrirlang → `./jarvis restart` |
+| No response to "Jarvis" | Check the microphone permission and run `npm run doctor`. Is JARVIS paused (Fn + Shift)? Run `npm run diagnose:voice` |
+| `doctor`: "JARVIS is paused" | Press Fn + Shift or run `./jarvis start` |
+| Telegram is silent | Check `TELEGRAM_BOT_TOKEN` in `.env`, send `/start` to the bot, then check `./jarvis logs` |
+| "gateway" shows red | Run `./jarvis restart`, or try starting `openclaw gateway` manually |
+| Choppy or distorted audio | Run `bash scripts/build-voice-io.sh` to rebuild echo cancellation, then `./jarvis restart` |
+| Agent doesn't see skills | Run `bash scripts/sync-workspace.sh` (it also runs on every start) |
+| Rotated an API key | Edit `.env`, then run `./jarvis restart` |
 
-Loglar: `logs/daemon-YYYYMMDD.log`, `logs/mission-runner.stdout.log`.
+Logs are written to `logs/daemon-YYYYMMDD.log` and `logs/mission-runner.stdout.log`.
 
-## 7. Sozlamalar
+## Configuration
 
-`.env.example` — barcha kalitlar (sirlar bo'sh). Eng muhimlari:
+[`.env.example`](.env.example) lists every setting with empty secrets. The most important ones:
 
-| Kalit | Ma'nosi |
+| Variable | Meaning |
 |---|---|
-| `AZURE_OPENAI_*` | agent va missiya modeli |
-| `AGENT_FAST_MODEL` | oddiy, tez va sifatli agent so'rovlari (`gpt-6-astra`) |
-| `AGENT_STRONG_MODEL`, `AGENT_STRONG_FALLBACK_MODELS` | coding, tool va murakkab vazifalar uchun primary/fallback deploymentlar |
-| `AZURE_VOICELIVE_*`, `AZURE_SPEECH_*` | ovoz |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_IDS` | Telegram bot va egalari (faqat ular boshqara oladi) |
-| `JARVIS_CONFIRM_MODE` | tasdiq rejimi (yuqoriga qarang) |
-| `MISSION_DAILY_TOKEN_BUDGET` | kunlik token ogohlantirishi (to'xtatmaydi, faqat xabar beradi) |
-| `JARVIS_ALWAYS_LISTEN` | doim eshitish (`true`) yoki faqat chaqirilganda |
-| `MORNING_BRIEF_HOUR` | ertalabki brifing soati (standart 8) |
-| `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN` | ixtiyoriy Home Assistant API ulanishi |
-| `HOME_ASSISTANT_ALLOWED_DOMAINS`, `HOME_ASSISTANT_ALLOWED_ENTITIES` | JARVIS kira oladigan IoT scope allowlistlari |
-| `HOME_ASSISTANT_ALLOW_SECURITY_ACTIONS` | lock/alarm/cover amallari; default `false`, yoqilganda ham explicit confirmation kerak |
+| `AZURE_OPENAI_*` | Agent and mission model |
+| `AGENT_FAST_MODEL` | Deployment for simple, latency-sensitive requests |
+| `AGENT_STRONG_MODEL`, `AGENT_STRONG_FALLBACK_MODELS` | Primary and fallback deployments for coding, tool use and complex tasks |
+| `AZURE_VOICELIVE_*`, `AZURE_SPEECH_*` | Voice |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_IDS` | Telegram bot and the owners allowed to control it |
+| `JARVIS_CONFIRM_MODE` | Confirmation policy (see [Safety modes](#safety-modes)) |
+| `JARVIS_ALWAYS_LISTEN` | `true` for always-listening, otherwise wake on demand |
+| `MISSION_DAILY_TOKEN_BUDGET` | Daily token alert threshold (it notifies but never blocks) |
+| `MORNING_BRIEF_HOUR` | Hour of the morning brief (default `8`) |
+| `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN` | Optional Home Assistant connection |
+| `HOME_ASSISTANT_ALLOWED_DOMAINS`, `HOME_ASSISTANT_ALLOWED_ENTITIES` | Allowlists for which devices JARVIS may touch |
+| `HOME_ASSISTANT_ALLOW_SECURITY_ACTIONS` | Locks, alarms and covers. Default `false`, and explicit confirmation is required even when enabled |
 
-## 8. Tuzilma
+## Project structure
 
 ```
-install.sh · jarvis          o'rnatish va boshqaruv
-jarvis_daemon.js             ovozli daemon (mikrofon, wake, realtime)
-telegram-bot.js              Telegram bot
-core/                        missiyalar, ishchilar, LLM, xavfsizlik, telefon/ilova boshqaruvi
-skills/                      agent va ovoz ko'nikmalari (memory, gmail, calendar, desktop/phone-control, ...)
-dashboard/                   veb-panel (faqat localhost)
-scripts/                     o'rnatish, doctor, update, zaxira, launchd, wake-model o'qitish
-requirements/                Python muhitlari (aniq versiyalar)
-tests/                       npm test
-docs/                        chuqur hujjatlar
+.
+├── install.sh, jarvis      Installer and service CLI
+├── jarvis_daemon.js        Voice daemon: microphone, wake word, realtime sessions
+├── telegram-bot.js         Telegram bot
+├── core/                   Runtime: missions, workers, model routing, safety policy,
+│   ├── brain/              local multi-model brain with a RAM arbiter
+│   ├── missions/           mission engine, store and API
+│   ├── workers/            Python and Node worker adapters
+│   └── background-jobs/    scheduled jobs (briefs, synthesis, proactive checks)
+├── skills/                 Agent and voice skills (memory, gmail, calendar,
+│                           desktop/phone control, realtime-voice, ...)
+├── native/                 Swift audio I/O helper with echo cancellation
+├── dashboard/              Local web dashboard (localhost only)
+├── scripts/                Setup, doctor, update, backup, launchd, wake-word training
+├── benchmarks/             Action and pronunciation corpora
+├── requirements/           Pinned Python environments for each worker
+├── tests/                  Node test suite (`npm test`)
+└── docs/                   In-depth design notes
 ```
 
-## 9. Xavfsizlik va cheklovlar
+## Security and limitations
 
-- Faqat **macOS**: mikrofon, ekran, iPhone Mirroring va launchd shunga bog'liq. Intel Mac'da sinalmagan.
-- `.env`, tokenlar, ovoz yozuvlari va shaxsiy ma'lumotlar git'ga tushmaydi. Repo'ga kalit tushib qolsa — darhol almashtiring.
-- Telegram bot faqat `TELEGRAM_OWNER_IDS` dagilarga javob beradi. Panel autentifikatsiyasiz — tashqariga ochmang.
-- JARVIS kompyuteringiz va telefoningizni boshqara oladi: `JARVIS_CONFIRM_MODE=off` ni faqat o'zingiz xohlasangiz qo'ying.
-- Ba'zi macOS ruxsatlari faqat siz bera olasiz, o'rnatuvchi ularni avtomatik bermaydi.
+- **macOS only.** The microphone, screen capture, iPhone Mirroring and launchd integration are all macOS-specific. Intel Macs are untested.
+- Secrets, tokens, voice recordings and personal data are git-ignored. If a key ever leaks into the repository, rotate it immediately. `npm run security:scan` helps catch leaks.
+- The Telegram bot only responds to `TELEGRAM_OWNER_IDS`. The dashboard has no authentication, so never expose it beyond `localhost`.
+- JARVIS can control your computer and phone. Set `JARVIS_CONFIRM_MODE=off` only if you really want that.
+- Some macOS permissions can only be granted by you. The installer never grants them automatically.
 
-## 10. Rivojlantiruvchilar uchun
+## Development
 
 ```bash
-npm test                 # testlar (haqiqiy .env, tarmoq va Telegram'siz ishlaydi)
-npm run security:scan    # maxfiy ma'lumot skaneri
-npm run benchmark:model  # model routing benchmarki (tarmoqsiz); --live varianti Azure latency/sifatni o'lchaydi
+npm test                 # unit tests: no real .env, network or Telegram needed
+npm run check            # syntax-check every entry point, then run the tests
+npm run security:scan    # scan the tree for leaked secrets
+npm run benchmark        # offline benchmarks
+npm run benchmark:model  # model-routing benchmark (offline); --live measures Azure latency and quality
 ```
 
-Chuqur hujjatlar: [docs/autonomy.md](docs/autonomy.md) · [docs/memory-postgresql-migration.md](docs/memory-postgresql-migration.md) · [docs/owner-task-controls.md](docs/owner-task-controls.md)
+Further reading:
+
+- [docs/autonomy.md](docs/autonomy.md): the autonomy model, mission lifecycle and verification
+- [docs/memory-postgresql-migration.md](docs/memory-postgresql-migration.md): moving memory to PostgreSQL
+- [docs/owner-task-controls.md](docs/owner-task-controls.md): owner controls for long-running tasks
