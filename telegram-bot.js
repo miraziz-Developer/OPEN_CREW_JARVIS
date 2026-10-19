@@ -7,7 +7,7 @@
 
 const TelegramBotModule = require('node-telegram-bot-api');
 const TelegramBot = TelegramBotModule.default || TelegramBotModule;
-const { execSync, spawn } = require('child_process');
+const { execSync, spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -311,16 +311,23 @@ function enqueueVideoNote(msg) {
 
 const { isPlainScreenshotRequest } = require('./core/telegram-routing');
 
-async function takeScreenshot(chatId) {
-  const p = os.homedir() + '/Desktop/jarvis_screenshot_' + Date.now() + '.png';
+async function takeScreenshot(chatId, analyzePrompt = null) {
+  const p = path.join('/tmp', 'jarvis_screenshot_' + Date.now() + '.jpg');
   try {
-    execSync('screencapture -x "' + p + '"');
+    execSync('screencapture -x -t jpg "' + p + '"', { timeout: 10000 });
     if (fs.existsSync(p)) {
-      await bot.sendDocument(chatId, p, { caption: 'JARVIS screenshot' });
+      await bot.sendPhoto(chatId, p, { caption: '🖥 Mac ekrani holati' });
+      if (analyzePrompt) {
+        await bot.sendChatAction(chatId, 'typing');
+        const gemini = require('./core/gemini');
+        const analysis = await gemini.completeVision({ imagePath: p, prompt: analyzePrompt });
+        await bot.sendMessage(chatId, `🔍 *Ekran tahlili:*\n\n${analysis}`, { parse_mode: 'Markdown' });
+      }
+      try { fs.unlinkSync(p); } catch (_) {}
       return 'Screenshot captured and sent.';
     }
   } catch (e) {
-    return 'I could not capture the screenshot.';
+    return 'I could not capture the screenshot: ' + e.message;
   }
 }
 
@@ -499,41 +506,326 @@ async function handleMessage(chatId, userText, isVoice) {
   chatHistory[chatId] = chatHistory[chatId].filter(h => now - h.time < CONTEXT_TTL_MS);
 }
 
+// ── Remote Control & Keyboards ─────────────────────────────
+
+const MAIN_KEYBOARD = {
+  keyboard: [
+    [{ text: '📸 Skrinshot' }, { text: '📊 Holat' }],
+    [{ text: '📁 Fayllar' }, { text: '🔊 Ovoz' }],
+    [{ text: '❓ Yordam' }]
+  ],
+  resize_keyboard: true
+};
+
+async function handlePhoto(chatId, msg) {
+  const highestPhoto = msg.photo[msg.photo.length - 1];
+  await bot.sendChatAction(chatId, 'typing');
+  let tmpPhoto = null;
+  try {
+    const fileLink = await bot.getFileLink(highestPhoto.file_id);
+    tmpPhoto = path.join('/tmp', `tg_photo_${Date.now()}.jpg`);
+    const axios = require('axios');
+    const writer = fs.createWriteStream(tmpPhoto);
+    const resp = await axios({ url: fileLink, method: 'GET', responseType: 'stream' });
+    resp.data.pipe(writer);
+    await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
+
+    const prompt = msg.caption || 'Describe this image in detail, extract any visible text, code or UI elements, and explain what you see concisely.';
+    const gemini = require('./core/gemini');
+    const visionReply = await gemini.completeVision({ imagePath: tmpPhoto, prompt });
+    await bot.sendMessage(chatId, `👁 *Rasm tahlili:*\n\n${visionReply}`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    console.error('Photo error:', err);
+    await bot.sendMessage(chatId, `❌ Rasmni tahlil qilishda xatolik: ${err.message}`);
+  } finally {
+    if (tmpPhoto) { try { fs.unlinkSync(tmpPhoto); } catch (_) {} }
+  }
+}
+
+async function handleDocument(chatId, msg) {
+  await bot.sendChatAction(chatId, 'typing');
+  try {
+    const fileLink = await bot.getFileLink(msg.document.file_id);
+    const fileName = msg.document.file_name || `tg_file_${Date.now()}`;
+    const targetPath = path.join(os.homedir(), 'Downloads', fileName);
+    const axios = require('axios');
+    const writer = fs.createWriteStream(targetPath);
+    const resp = await axios({ url: fileLink, method: 'GET', responseType: 'stream' });
+    resp.data.pipe(writer);
+    await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
+
+    await bot.sendMessage(chatId, `📥 *Fayl yuklandi:*\n\`${targetPath}\`\n(Hajmi: ${(msg.document.file_size / 1024).toFixed(1)} KB)`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    console.error('Document error:', err);
+    await bot.sendMessage(chatId, `❌ Faylni saqlashda xatolik: ${err.message}`);
+  }
+}
+
+async function handleRemoteCommand(chatId, text, msg) {
+  const trimmed = text.trim();
+  const parts = trimmed.split(/\s+/);
+  const cmd = parts[0].toLowerCase().replace(/@\w+$/, '');
+  const args = trimmed.substring(parts[0].length).trim();
+
+  // 1. /status yoki "📊 Holat"
+  if (cmd === '/status' || cmd === '/info' || trimmed === '📊 Holat') {
+    let batt = 'N/A';
+    try { batt = execSync('pmset -g batt 2>/dev/null | grep -o "[0-9]*%" | head -1', { encoding: 'utf8' }).trim() || 'AC Power'; } catch (_) {}
+    let ram = 'N/A';
+    try { ram = execSync('top -l 1 -s 0 2>/dev/null | grep "PhysMem"', { encoding: 'utf8' }).trim(); } catch (_) {}
+    let disk = 'N/A';
+    try { disk = execSync("df -h / | tail -1 | awk '{print $4 \" free of \" $2}'", { encoding: 'utf8' }).trim(); } catch (_) {}
+    let upt = 'N/A';
+    try { upt = execSync('uptime', { encoding: 'utf8' }).trim(); } catch (_) {}
+    let vol = 'N/A';
+    try { vol = execSync("osascript -e 'output volume of (get volume settings)' 2>/dev/null", { encoding: 'utf8' }).trim() + '%'; } catch (_) {}
+
+    const reply = `📊 *JARVIS Mac Holati*\n\n` +
+      `⚡️ *Batareya:* ${batt}\n` +
+      `🧠 *RAM:* ${ram.replace('PhysMem: ', '')}\n` +
+      `💾 *Disk:* ${disk}\n` +
+      `🔊 *Ovoz:* ${vol}\n` +
+      `⏱ *Uptime:* ${upt}\n\n` +
+      `🤖 *Xizmatlar:* Active (http://localhost:7890)\n` +
+      `🎙 *Ovoz:* Ultron (American Rocko)`;
+    await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
+    return true;
+  }
+
+  // 2. /screen yoki /screenshot yoki "📸 Skrinshot"
+  if (cmd === '/screen' || cmd === '/screenshot' || trimmed === '📸 Skrinshot') {
+    await bot.sendChatAction(chatId, 'upload_photo');
+    await takeScreenshot(chatId, args && args.toLowerCase() !== 'photo' ? args : null);
+    return true;
+  }
+
+  // 3. /sh <command> yoki /cmd <command> (Terminal buyrug'i)
+  if (cmd === '/sh' || cmd === '/cmd') {
+    if (!args) {
+      await bot.sendMessage(chatId, '⚠️ Buyruq kiritilmadi.\nMasalan: `/sh ls -la` yoki `/sh git status`', { parse_mode: 'Markdown' });
+      return true;
+    }
+    await bot.sendChatAction(chatId, 'typing');
+    try {
+      const out = execSync(args, { encoding: 'utf8', timeout: 30000, cwd: os.homedir(), env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}` } });
+      const resText = (out || '(bo\'sh chiqish)').trim();
+      if (resText.length > 3500) {
+        const outPath = path.join('/tmp', `sh_out_${Date.now()}.txt`);
+        fs.writeFileSync(outPath, resText, 'utf8');
+        await bot.sendDocument(chatId, outPath, { caption: `💻 Buyruq natijasi: ${args}` });
+        try { fs.unlinkSync(outPath); } catch (_) {}
+      } else {
+        await bot.sendMessage(chatId, `💻 *Natija:*\n\`\`\`\n${resText}\n\`\`\``, { parse_mode: 'Markdown' });
+      }
+    } catch (err) {
+      const errOut = (err.stdout || '') + (err.stderr || '') + (err.message || '');
+      await bot.sendMessage(chatId, `❌ *Xatolik:*\n\`\`\`\n${errOut.slice(0, 3000)}\n\`\`\``, { parse_mode: 'Markdown' });
+    }
+    return true;
+  }
+
+  // 4. /open <app> (Dastur ochish)
+  if (cmd === '/open') {
+    if (!args) {
+      await bot.sendMessage(chatId, '⚠️ Dastur nomini yozing.\nMasalan: `/open Telegram`, `/open Safari`, `/open Cursor`', { parse_mode: 'Markdown' });
+      return true;
+    }
+    try {
+      execSync(`open -a "${args}"`, { timeout: 5000 });
+      await bot.sendMessage(chatId, `🚀 *${args}* ochildi.`, { parse_mode: 'Markdown' });
+    } catch (e) {
+      await bot.sendMessage(chatId, `❌ Dasturni ochib bo'lmadi: ${args}`);
+    }
+    return true;
+  }
+
+  // 5. /close <app> (Dastur yopish)
+  if (cmd === '/close' || cmd === '/quit') {
+    if (!args) {
+      await bot.sendMessage(chatId, '⚠️ Dastur nomini yozing.\nMasalan: `/close Safari`', { parse_mode: 'Markdown' });
+      return true;
+    }
+    try {
+      execSync(`osascript -e 'quit app "${args}"'`, { timeout: 5000 });
+      await bot.sendMessage(chatId, `🛑 *${args}* yopildi.`, { parse_mode: 'Markdown' });
+    } catch (e) {
+      await bot.sendMessage(chatId, `❌ Dasturni yopib bo'lmadi: ${args}`);
+    }
+    return true;
+  }
+
+  // 6. /volume <0-100> yoki /mute / /unmute
+  if (cmd === '/volume' || trimmed === '🔊 Ovoz') {
+    if (!args) {
+      let cur = 'N/A';
+      try { cur = execSync("osascript -e 'output volume of (get volume settings)'", { encoding: 'utf8' }).trim(); } catch(_) {}
+      await bot.sendMessage(chatId, `🔊 Joriy ovoz balandligi: *${cur}%*\nO'zgartirish uchun: \`/volume 50\``, { parse_mode: 'Markdown' });
+      return true;
+    }
+    const val = parseInt(args, 10);
+    if (!isNaN(val) && val >= 0 && val <= 100) {
+      execSync(`osascript -e 'set volume output volume ${val}'`);
+      await bot.sendMessage(chatId, `🔊 Ovoz balandligi: *${val}%* ga sozlandi.`, { parse_mode: 'Markdown' });
+    } else {
+      await bot.sendMessage(chatId, `⚠️ 0 dan 100 gacha raqam kiriting. Masalan: \`/volume 70\``, { parse_mode: 'Markdown' });
+    }
+    return true;
+  }
+
+  if (cmd === '/mute') {
+    execSync("osascript -e 'set volume output muted true'");
+    await bot.sendMessage(chatId, '🔇 Mac ovozi o\'chirildi (Muted).');
+    return true;
+  }
+  if (cmd === '/unmute') {
+    execSync("osascript -e 'set volume output muted false'");
+    await bot.sendMessage(chatId, '🔊 Mac ovozi yoqildi (Unmuted).');
+    return true;
+  }
+
+  // 7. /say <text> (Ultron ovozida gapirtirish)
+  if (cmd === '/say') {
+    if (!args) {
+      await bot.sendMessage(chatId, '⚠️ Gapirish kerak bo\'lgan matnni yozing.\nMasalan: `/say Hello master, I am online.`', { parse_mode: 'Markdown' });
+      return true;
+    }
+    try {
+      const audio = await ttsToFile(args, { source: 'telegram-remote-say' });
+      if (audio && fs.existsSync(audio)) {
+        await new Promise((res, rej) => {
+          execFile('afplay', [audio], (err) => {
+            try { fs.unlinkSync(audio); } catch (_) {}
+            if (err) rej(err); else res();
+          });
+        });
+        await bot.sendMessage(chatId, `🗣 Ultron ovozida aytildi: "${args}"`);
+      }
+    } catch (e) {
+      await bot.sendMessage(chatId, `❌ Gapirishda xatolik: ${e.message}`);
+    }
+    return true;
+  }
+
+  // 8. /find <name> yoki /search <name>
+  if (cmd === '/find' || cmd === '/search' || trimmed === '📁 Fayllar') {
+    if (!args) {
+      await bot.sendMessage(chatId, '🔍 Fayl nomini kiriting.\nMasalan: `/find report.pdf` yoki `/find script.js`', { parse_mode: 'Markdown' });
+      return true;
+    }
+    await bot.sendChatAction(chatId, 'typing');
+    const files = findFiles(args);
+    if (!files || files.length === 0) {
+      await bot.sendMessage(chatId, `🔍 "${args}" bo'yicha hech qanday fayl topilmadi.`);
+      return true;
+    }
+    const list = `📁 *Topilgan fayllar:*\n\n` + files.map((f, i) => `${i + 1}. \`${f}\``).join('\n') + `\n\nYuklab olish uchun: \`/get <fayl_yo'li>\``;
+    await bot.sendMessage(chatId, list, { parse_mode: 'Markdown' });
+    return true;
+  }
+
+  // 9. /get <filepath> (Faylni Telegramga yuklab olish)
+  if (cmd === '/get') {
+    if (!args) {
+      await bot.sendMessage(chatId, '📥 Fayl yo\'lini kiriting.\nMasalan: `/get /Users/username/Desktop/doc.pdf`', { parse_mode: 'Markdown' });
+      return true;
+    }
+    const cleanPath = args.replace(/^["']|["']$/g, '').trim();
+    if (fs.existsSync(cleanPath)) {
+      await bot.sendChatAction(chatId, 'upload_document');
+      await sendDocument(chatId, cleanPath, path.basename(cleanPath));
+    } else {
+      await bot.sendMessage(chatId, `❌ Fayl topilmadi: \`${cleanPath}\``, { parse_mode: 'Markdown' });
+    }
+    return true;
+  }
+
+  // 10. /help yoki "❓ Yordam"
+  if (cmd === '/help' || trimmed === '❓ Yordam' || cmd === '/menu') {
+    const helpText = `🎛 *JARVIS Masofadan Boshqarish Menyusi*\n\n` +
+      `📊 */status* — Batareya, RAM, Disk, CPU va tizim holati\n` +
+      `📸 */screen* — Mac ekranidan oniy skrinshot olish\n` +
+      `🔍 */screen analyze* — Ekranda nima bo'layotganini AI tahlil qilishi\n` +
+      `💻 */sh <buyruq>* — Mac terminalida buyruq bajarish\n` +
+      `🚀 */open <dastur>* — Mac'da dasturni ochish (masalan: \`/open Chrome\`)\n` +
+      `🛑 */close <dastur>* — Dasturni yopish (masalan: \`/close Safari\`)\n` +
+      `🗣 */say <matn>* — Kompyuteringizda Ultron ovozida gapirish\n` +
+      `🔊 */volume <0-100>* — Ovoz balandligini sozlash\n` +
+      `🔇 */mute* / */unmute* — Ovozni o'chirish/yoqish\n` +
+      `🔍 */find <nom>* — Mac'dan fayl qidirish\n` +
+      `📥 */get <yo'l>* — Mac'dagi faylni Telegramga yuklab olish\n` +
+      `⚙️ */tasks* — Fondagi checkpointed vazifalar\n\n` +
+      `💡 *Qo'shimcha imkoniyatlar:*\n` +
+      `• *Rasm yuborsangiz:* Gemini Vision orqali darhol tahlil qilib beradi.\n` +
+      `• *Hujjat yuborsangiz:* Mac'ning ~/Downloads jildiga saqlaydi.\n` +
+      `• *Ovozli xabar yuborsangiz:* Gemini STT orqali tushunib, bajaradi.\n` +
+      `• *Har qanday vazifa yozsangiz:* Antigravity Pro orqali bajaradi.`;
+    await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
+    return true;
+  }
+
+  return false;
+}
+
 // ── Bot Events ──────────────────────────────────────────────
 
 bot.onText(/\/start/, (msg) => {
   chatHistory[msg.chat.id] = [];
-  bot.sendMessage(msg.chat.id,
-    'Hello. I am JARVIS, your English-speaking AI assistant.\n\n' +
-    'I can answer questions, find and send files, capture screenshots, control the browser, and process voice messages.\n\n' +
-    'Send a request whenever you are ready.'
-  );
+  const welcome = '👋 *Assalomu alaykum, Xo\'jayin!*\n\n' +
+    'Men — *JARVIS*, sizning Mac kompyuteringizni masofadan to\'liq boshqaruvchi shaxsiy yordamchingizman.\n\n' +
+    '📱 *Quyidagi tugmalar orqali yoki to\'g\'ridan-to\'g\'ri buyruq bering:*\n' +
+    '• *📸 Skrinshot* — Mac ekranini rasm qilib ko\'rish\n' +
+    '• *📊 Holat* — Batareya, RAM, Disk, Uptime holati\n' +
+    '• */sh <buyruq>* — Mac terminalida buyruq bajarish\n' +
+    '• */open <dastur>* — Kompyuterda istalgan ilovani ochish\n' +
+    '• */say <matn>* — Mac dinamikidan Ultron ovozida gapirish\n' +
+    '• */find <nom>* — Fayllarni qidirish va yuklab olish\n' +
+    '• *Rasm / Ovoz:* Istalgan rasm yoki audio yuboring — darhol tahlil qilaman.\n' +
+    '• *Barcha buyruqlar uchun:* /help bosing.';
+  bot.sendMessage(msg.chat.id, welcome, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
 });
 
 bot.onText(/\/cancel/, (msg) => {
   chatHistory[msg.chat.id] = [];
-  bot.sendMessage(msg.chat.id, 'Conversation history cleared. What shall I do next?');
+  bot.sendMessage(msg.chat.id, 'Conversation history cleared. What shall I do next?', { reply_markup: MAIN_KEYBOARD });
 });
 
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const task = messageQueue.enqueue(String(chatId), async () => {
     if (await ownerTaskCommands(msg)) return;
-    console.log('Telegram message received: chat=' + chatId + ', from=' + (msg.from?.id || 'unknown') + ', type=' + (msg.video_note ? 'video_note' : msg.voice ? 'voice' : msg.text ? 'text' : 'other'));
+    console.log('Telegram message received: chat=' + chatId + ', from=' + (msg.from?.id || 'unknown') + ', type=' + (msg.video_note ? 'video_note' : msg.voice ? 'voice' : msg.photo ? 'photo' : msg.document ? 'document' : msg.text ? 'text' : 'other'));
 
-    // Matnli xabar
+    // 1. Masofadan boshqarish buyruqlari
+    if (msg.text) {
+      const handled = await handleRemoteCommand(chatId, msg.text.trim(), msg);
+      if (handled) return;
+    }
+
+    // 2. Oddiy matnli xabar (AI agentga)
     if (msg.text && !msg.text.startsWith('/')) {
       await handleMessage(chatId, msg.text.trim(), false);
       return;
     }
 
-    // Telegram dumaloq video (video_note): audio nutq + video kadrlari birga tahlil qilinadi.
+    // 3. Rasm tahlili (Gemini Vision)
+    if (msg.photo && msg.photo.length > 0) {
+      await handlePhoto(chatId, msg);
+      return;
+    }
+
+    // 4. Hujjat / Fayl (Mac ~/Downloads ga saqlash)
+    if (msg.document) {
+      await handleDocument(chatId, msg);
+      return;
+    }
+
+    // 5. Telegram dumaloq video (video_note): audio nutq + video kadrlari birga tahlil qilinadi.
     if (msg.video_note) {
       await enqueueVideoNote(msg);
       return;
     }
 
-    // Ovozli xabar
+    // 6. Ovozli xabar
     if (msg.voice) {
       console.log('[' + chatId + '] VOICE received');
       await bot.sendChatAction(chatId, 'typing');
@@ -544,10 +836,13 @@ bot.on('message', (msg) => {
         const stt = await sttFromFile(media.wavPath, { source: 'telegram-voice' });
         if (stt && stt.status === 'ok' && stt.text) {
           const transcript = stt.text;
-          await bot.sendMessage(chatId, 'I heard: “' + transcript.substring(0, 200) + '”');
-          await handleMessage(chatId, transcript, true);
+          await bot.sendMessage(chatId, '🎙 Eshitdim: “' + transcript.substring(0, 200) + '”');
+          const handled = await handleRemoteCommand(chatId, transcript, msg);
+          if (!handled) {
+            await handleMessage(chatId, transcript, true);
+          }
         } else {
-          await bot.sendMessage(chatId, 'I could not understand the voice message. Please speak clearly in English and try again.');
+          await bot.sendMessage(chatId, 'I could not understand the voice message. Please speak clearly and try again.');
         }
       } catch (e) {
         console.error('Voice processing error:', e.message);
