@@ -104,6 +104,10 @@ function buildVisionBody(framePaths, prompt, deployment) {
 }
 
 function requestVision({ endpoint, key, deployment, framePaths, prompt, request = https.request }) {
+  const gemini = require('./gemini');
+  if (gemini.hasGemini() && (!endpoint || !key || String(endpoint).includes('gemini.mode.local'))) {
+    return gemini.analyzeFrames({ framePaths, prompt });
+  }
   if (!endpoint || !key) return Promise.reject(new Error('AZURE_OPENAI_KEY yoki AZURE_OPENAI_ENDPOINT sozlanmagan'));
   const body = JSON.stringify(buildVisionBody(framePaths, prompt, deployment || 'gpt-4.1'));
   const url = new URL(String(endpoint).replace(/\/$/, '') + '/chat/completions');

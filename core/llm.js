@@ -74,8 +74,33 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort }) {
 }
 
 async function complete(options = {}) {
+  // Gemini rejimida yoki Gemini kaliti mavjud bo'lganda (0 yuklama, bepul va tez)
+  const gemini = require('./gemini');
+  const brainMode = String(env('JARVIS_BRAIN', '')).toLowerCase();
+  const defaultModel = String(env('DEFAULT_MODEL', '')).toLowerCase();
+  const prefersGemini = brainMode === 'gemini' || defaultModel.includes('gemini') || defaultModel.includes('google') || (gemini.hasGemini() && (!env('AZURE_OPENAI_KEY') || env('AZURE_OPENAI_ENDPOINT', '').includes('gemini.mode.local')));
+
+  if (gemini.hasGemini() && (prefersGemini || options.backend === 'gemini' || String(options.model || '').includes('gemini'))) {
+    try {
+      const text = await gemini.complete({
+        system: options.system || '',
+        user: String(options.user || '').slice(0, 60000),
+        model: options.model,
+        maxOutputTokens: options.maxOutputTokens || 4096,
+        json: options.json,
+        hard: options.hard === true,
+        timeoutMs: options.timeoutMs || 120000
+      });
+      try { require('./usage-meter').sharedMeter().add('gemini_requests', 1); } catch (_) {}
+      return text;
+    } catch (geminiError) {
+      if (!env('AZURE_OPENAI_KEY') && brainMode !== 'local') throw geminiError;
+      // Agar Azure yoki lokal mavjud bo'lsa, zaxiraga tushish
+    }
+  }
+
   // Lokal "miya" rejimi (JARVIS_BRAIN=local): Qwen / Gemma / Bonsai — Brain xizmati orqali, RAM'da bittadan.
-  if (String(env('JARVIS_BRAIN', '')).toLowerCase() === 'local') {
+  if (brainMode === 'local') {
     const r = await require('./brain/client').think({
       system: options.system || '', user: String(options.user || '').slice(0, 60000),
       // Bonsai faqat aniq "qiyin" deb belgilanganda (missiya rejasi). Uzunlik bo'yicha avtomatik emas — aks holda har

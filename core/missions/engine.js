@@ -2,7 +2,7 @@
 
 const { assessAction, ActionSafetyPolicy } = require('../action-safety-policy');
 
-const WORKERS = ['agent', 'interpreter', 'browser', 'gui', 'phone', 'babyagi', 'autogpt', 'think'];
+const WORKERS = ['agent', 'interpreter', 'browser', 'gui', 'phone', 'babyagi', 'autogpt', 'think', 'antigravity'];
 
 const PLAN_SYSTEM =
   "You are the planning core of JARVIS's autonomous goal engine (BabyAGI/AutoGPT style). Turn the user's goal into " +

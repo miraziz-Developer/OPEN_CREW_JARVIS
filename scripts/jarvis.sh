@@ -324,7 +324,7 @@ greeting() {
     fi
   fi
 
-  if [[ -n "${AZURE_SPEECH_KEY:-}" && -x "$(command -v afplay)" ]]; then
+  if [[ (-n "${AZURE_SPEECH_KEY:-}" || -x "$(command -v say)") && -x "$(command -v afplay)" ]]; then
     local tmp_json tmp_out
     tmp_json="/tmp/jarvis_greet_$$.json"
     tmp_out="/tmp/jarvis_greet_$$.out"

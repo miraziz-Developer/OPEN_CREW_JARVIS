@@ -35,6 +35,10 @@ class BrainArbiter {
 
   // Slot oladi; qaytgan funksiya bilan bo'shatiladi. Har chaqiruv albatta release qilinishi kerak.
   acquire(backend) {
+    if (backend === 'gemini') {
+      this.inFlight += 1;
+      return Promise.resolve(() => this._release());
+    }
     const step = this.chain.then(async () => {
       if (this.resident !== backend) {
         await this._waitIdle();

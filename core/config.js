@@ -6,6 +6,8 @@ const { EMAIL } = require('./gmail-task-notifier');
 const PLACEHOLDER = /^(?:\.{3}|changeme|replace[-_ ]?me|your[-_ ])/i;
 
 const CONFIG_SCHEMA = Object.freeze({
+  GEMINI_API_KEY: { type: 'secret' },
+  GOOGLE_API_KEY: { type: 'secret' },
   AZURE_SPEECH_KEY: { type: 'secret', required: true },
   AZURE_SPEECH_REGION: { type: 'string', required: true },
   AZURE_SPEECH_VOICE: { type: 'string', default: 'en-US-GuyNeural' },

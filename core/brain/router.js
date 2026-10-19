@@ -6,10 +6,12 @@
  *  - qiyin fikrlash   → Ternary Bonsai 2 27B (faqat matn; rasm → Qwen)
  *  - qolgan hammasi   → Qwen 3.5 9B (matn, asboblar va RASM — oddiy skrinshot uchun model almashtirilmaydi)
  */
+const isGeminiBrain = String(process.env.BRAIN_BACKEND || process.env.JARVIS_BRAIN || '').toLowerCase() === 'gemini' || Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+
 const MODELS = {
-  fast: { backend: 'ollama', model: process.env.BRAIN_FAST_MODEL || 'qwen3.5:9b' },
-  audio: { backend: 'ollama', model: process.env.BRAIN_AUDIO_MODEL || 'gemma4:e2b' },
-  hard: { backend: 'bonsai', model: 'bonsai2-27b' }
+  fast: isGeminiBrain ? { backend: 'gemini', model: process.env.BRAIN_FAST_MODEL || 'gemini-3.8-flash' } : { backend: 'ollama', model: process.env.BRAIN_FAST_MODEL || 'qwen3.5:9b' },
+  audio: isGeminiBrain ? { backend: 'gemini', model: 'gemini-3.8-flash' } : { backend: 'ollama', model: process.env.BRAIN_AUDIO_MODEL || 'gemma4:e2b' },
+  hard: isGeminiBrain ? { backend: 'gemini', model: process.env.BRAIN_HARD_MODEL || 'gemini-3.8-pro' } : { backend: 'bonsai', model: 'bonsai2-27b' }
 };
 
 const HARD = /\b(architecture|architect|strategy|strategik|tradeoffs?|root cause|debug(?:ging)?|security review|implementation plan|system design|in[- ]depth|deep(?:ly)? (?:think|analy[sz]e)|think (?:hard|deeply|carefully)|step[- ]by[- ]step plan|multi[- ]?step plan|roadmap|research|analy[sz]e|analysis|tahlil|chuqur|rejalashtir|reja tuz|strategiya|prove|derive)\b/i;

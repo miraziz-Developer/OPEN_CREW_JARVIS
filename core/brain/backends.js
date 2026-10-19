@@ -123,4 +123,37 @@ function createBonsaiBackend({ projectDir, port = 11436, startTimeoutMs = 240000
   return backend;
 }
 
-module.exports = { createOllamaBackend, createBonsaiBackend, bonsaiCommand, jsonRequest };
+// ── Gemini Cloud / Desktop Backend (0 RAM, bepul va kuchli) ────────────────────────
+function createGeminiBackend({ geminiClient = require('../gemini') } = {}) {
+  return {
+    port: 0,
+    async loaded() { return ['gemini-3.8-flash', 'gemini-3.8-pro']; },
+    async footprintBytes() { return 0; }, // Bulut/desktopda ishlaydi, RAM = 0
+    async evict() { /* no-op */ },
+    async chat({ model, system, user, images = [], maxTokens = 2048, format, think = false, timeoutMs }) {
+      if (images && images.length) {
+        const text = await geminiClient.completeVision({
+          base64: stripDataUrl(images[0]),
+          prompt: `${system ? system + '\n\n' : ''}${user || ''}`,
+          json: format === 'json',
+          maxTokens,
+          timeoutMs
+        });
+        return { text, usage: { prompt: 100, completion: 100 } };
+      }
+      const text = await geminiClient.complete({
+        system,
+        user,
+        model: model || (think ? 'gemini-3.8-pro' : 'gemini-3.8-flash'),
+        maxOutputTokens: maxTokens,
+        json: format === 'json',
+        hard: Boolean(think),
+        timeoutMs
+      });
+      return { text, usage: { prompt: 100, completion: 100 } };
+    }
+  };
+}
+
+module.exports = { createOllamaBackend, createBonsaiBackend, createGeminiBackend, bonsaiCommand, jsonRequest };
+

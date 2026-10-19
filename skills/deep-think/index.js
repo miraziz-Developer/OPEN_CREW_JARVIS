@@ -66,14 +66,26 @@ function reasoningProviders(question) {
 }
 
 function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const KEY = provider.key;
-    const BASE = String(provider.endpoint || '').replace(/\/$/, '').replace(/\/api\/projects\/[^/]+$/, '').replace(/\/openai\/v1$/, '');
-    if (!KEY || !BASE) return reject(new Error(provider.name + ' endpoint/key yo\'q'));
+  const gemini = require('../../core/gemini');
+  const instructions = context
+    ? SYSTEM_PROMPT + '\n\nSuhbat konteksti (foydalanuvchi haqida ma\'lum bo\'lgan narsalar):\n' + String(context).slice(0, 4000)
+    : SYSTEM_PROMPT;
 
-    const instructions = context
-      ? SYSTEM_PROMPT + '\n\nSuhbat konteksti (foydalanuvchi haqida ma\'lum bo\'lgan narsalar):\n' + String(context).slice(0, 4000)
-      : SYSTEM_PROMPT;
+  const KEY = provider.key;
+  const BASE = String(provider.endpoint || '').replace(/\/$/, '').replace(/\/api\/projects\/[^/]+$/, '').replace(/\/openai\/v1$/, '');
+
+  if (gemini.hasGemini() && (!KEY || !BASE || BASE.includes('gemini.mode.local'))) {
+    return gemini.complete({
+      system: instructions,
+      user: String(question).slice(0, 8000),
+      hard: true,
+      maxOutputTokens: MAX_TOKENS,
+      timeoutMs
+    }).then(stripMarkdown);
+  }
+
+  return new Promise((resolve, reject) => {
+    if (!KEY || !BASE) return reject(new Error(provider.name + ' endpoint/key yo\'q'));
     const payload = JSON.stringify({
       model: provider.model,
       instructions,

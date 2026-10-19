@@ -200,7 +200,22 @@ function createWorkers(options = {}) {
     }
   };
 
-  return { agent, interpreter, browser, gui, phone, babyagi, autogpt, think };
+  // 6) Antigravity Worker: Gemini Desktop ichidagi Antigravity dasturchi agenti orqali
+  //    loyihalarni yaratish, kod yozish, refactoring va dasturlash vazifalarini bajarish.
+  const antigravity = {
+    async run({ prompt, mission, task, timeoutMs }) {
+      const { executePrompt } = require('../../skills/antigravity');
+      try {
+        const targetDir = (mission && mission.context?.projectDir) || (task && task.cwd) || PROJECT_DIR;
+        const result = await executePrompt(prompt, { projectDir: targetDir, timeoutMs: timeoutMs || 15 * 60 * 1000 });
+        return { ok: result.status === 'ok', output: result.output || '', error: result.status === 'ok' ? '' : result.output };
+      } catch (err) {
+        return { ok: false, output: '', error: err.message };
+      }
+    }
+  };
+
+  return { agent, interpreter, browser, gui, phone, babyagi, autogpt, think, antigravity };
 }
 
 module.exports = { createWorkers, runProcess, cleanOutput };

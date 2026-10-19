@@ -177,6 +177,14 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
       })
     };
   });
+  platform.register({
+    id: 'antigravity', version: '1.0.0', capabilities: ['coding', 'terminal', 'project.create'],
+    actions: {
+      executePrompt: { input: { required: ['prompt'], properties: { prompt: 'string', projectDir: 'string', effort: 'string' } }, timeoutMs: 900000 },
+      createProject: { input: { required: ['name', 'description'], properties: { name: 'string', description: 'string', targetDir: 'string' } }, timeoutMs: 900000 },
+      status: { timeoutMs: 5000 }
+    }
+  }, async () => require('./antigravity'));
   return platform;
 }
 

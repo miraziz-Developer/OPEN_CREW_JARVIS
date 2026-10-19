@@ -48,10 +48,31 @@ function buildSsml(text, voice = DEFAULT_VOICE, options = {}) {
     '</speak>';
 }
 
+function macOSLocalTts(text, voice) {
+  const { execSync } = require('child_process');
+  const outFile = path.join('/tmp', 'jarvis_tts_' + Date.now() + '.wav');
+  const aiffFile = path.join('/tmp', 'jarvis_say_' + Date.now() + '.aiff');
+  // Britancha klassik viqorli Jarvis ovozi (Daniel)
+  const selectedVoice = 'Daniel';
+  const cleanText = String(text || '').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ');
+  try {
+    execSync(`say -v "${selectedVoice}" -o "${aiffFile}" "${cleanText}"`, { timeout: 15000 });
+    try {
+      execSync(`sox "${aiffFile}" -r 24000 -c 1 -b 16 "${outFile}"`, { timeout: 10000 });
+      try { fs.unlinkSync(aiffFile); } catch (_) {}
+      return { audioFile: outFile, format: 'audio/wav', sampleRate: 24000, status: 'ok', engine: 'macos-daniel' };
+    } catch (_) {
+      return { audioFile: aiffFile, format: 'audio/aiff', status: 'ok', engine: 'macos-daniel-aiff' };
+    }
+  } catch (err) {
+    throw new Error(`macOS say xatosi: ${err.message}`);
+  }
+}
+
 // TTS REST yuborish
 async function azureTts(text, voice) {
-  if (!KEY) {
-    throw new Error('AZURE_SPEECH_KEY muhit ozgaruvchisi topilmadi. Ilk bolib .envni tekshiring.');
+  if (!KEY || !REGION || REGION === 'placeholder') {
+    return macOSLocalTts(text, voice);
   }
 
   const resolvedVoice = voice || DEFAULT_VOICE;

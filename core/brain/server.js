@@ -5,7 +5,7 @@
 const path = require('path');
 const { PROJECT_DIR } = require('../paths');
 const { createBrainService } = require('./service');
-const { createOllamaBackend, createBonsaiBackend } = require('./backends');
+const { createOllamaBackend, createBonsaiBackend, createGeminiBackend } = require('./backends');
 const { availableBytes } = require('./memory');
 
 const log = m => console.log(`[${new Date().toISOString()}] [brain] ${m}`);
@@ -13,6 +13,7 @@ const bonsai = createBonsaiBackend({ projectDir: PROJECT_DIR, port: Number(proce
 const brain = createBrainService({
   ollama: createOllamaBackend({ port: Number(process.env.OLLAMA_PORT) || 11434 }),
   bonsai,
+  gemini: createGeminiBackend(),
   availableBytes: () => availableBytes(),
   bonsaiNeedBytes: (Number(process.env.BONSAI_MIN_FREE_GB) || (process.env.BONSAI_RUNTIME === 'mlx' ? 9.5 : 7)) * 2 ** 30,
   bonsaiIdleMs: (Number(process.env.BONSAI_IDLE_MIN) || 3) * 60000,

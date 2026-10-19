@@ -56,13 +56,16 @@ function apply(mode, { ocPath = OC, savedPath = SAVED, write = true } = {}) {
     defaults.model = { primary: 'ollama/qwen3.5:9b', fallbacks: [] };
     // Katta SOUL.md/AGENTS.md o'rniga ixcham SOUL.local.md (agent-bridge qo'shadi) — prompt ~2 barobar qisqa.
     defaults.contextInjection = 'never';
+  } else if (mode === 'gemini') {
+    defaults.model = { primary: 'ollama/qwen3.5:9b', fallbacks: [] }; // Brain server orqali Gemini ga yo'naltiriladi
+    delete defaults.contextInjection;
   } else if (mode === 'cloud') {
     let previous = null;
     try { previous = JSON.parse(fs.readFileSync(savedPath, 'utf8')); } catch (_) {}
     defaults.model = previous && previous.primary ? previous : { primary: 'azure-openai/gpt-5-mini', fallbacks: [] };
     delete defaults.contextInjection;
   } else {
-    throw new Error('rejim: local | cloud');
+    throw new Error('rejim: gemini | local | cloud');
   }
   if (write) fs.writeFileSync(ocPath, JSON.stringify(config, null, 2) + '\n');
   return config;
@@ -73,10 +76,21 @@ if (require.main === module) {
   try {
     apply(mode);
     setEnv('JARVIS_BRAIN', mode);
+    if (mode === 'gemini') {
+      setEnv('DEFAULT_MODEL', 'gemini-3.8-flash');
+      setEnv('VISION_MODEL', 'gemini-3.8-flash');
+      setEnv('AGENT_FAST_MODEL', 'gemini-3.8-flash');
+      setEnv('AGENT_STRONG_MODEL', 'gemini-3.8-pro');
+    }
     try { execFileSync('openclaw', ['config', 'validate'], { env: { ...process.env, OPENCLAW_CONFIG_PATH: OC, OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN || 'x' }, stdio: 'ignore' }); }
     catch (_) { console.error('⚠️  openclaw config validate xato berdi — openclaw.json ni tekshiring'); process.exitCode = 1; }
-    console.log(mode === 'local' ? '✅ Lokal miya: Qwen 3.5 9B (agent), Gemma 4 (audio), Ternary Bonsai 2 27B (qiyin). Endi: ./jarvis restart'
-      : '✅ Bulut miya (Azure). Endi: ./jarvis restart');
+    if (mode === 'gemini') {
+      console.log('✅ Gemini miya (Gemini 3.8 Flash & Pro — 0% RAM yuklama, bepul va tezkor). Endi: ./jarvis restart');
+    } else if (mode === 'local') {
+      console.log('✅ Lokal miya: Qwen 3.5 9B (agent), Gemma 4 (audio), Ternary Bonsai 2 27B (qiyin). Endi: ./jarvis restart');
+    } else {
+      console.log('✅ Bulut miya (Azure). Endi: ./jarvis restart');
+    }
   } catch (e) { console.error('❌ ' + e.message); process.exit(1); }
 }
 

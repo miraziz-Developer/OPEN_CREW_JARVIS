@@ -9,6 +9,8 @@
 const fs = require('fs');
 const https = require('https');
 const readline = require('readline');
+let gemini = null;
+try { gemini = require('../../core/gemini'); } catch (_) {}
 
 const REGION = process.env.AZURE_SPEECH_REGION || 'southeastasia';
 const KEY    = process.env.AZURE_SPEECH_KEY;
@@ -18,7 +20,9 @@ const TRANSCRIBE_KEY = process.env.AZURE_TRANSCRIBE_KEY;
 const TRANSCRIBE_MODEL = process.env.AZURE_TRANSCRIBE_DEPLOYMENT || 'gpt-live-transcribe';
 
 function ensureKey() {
-  if (!KEY) throw new Error('AZURE_SPEECH_KEY muhit ozgaruvchisi topilmadi.');
+  if (!KEY && (!gemini || !gemini.hasGemini())) {
+    throw new Error('AZURE_SPEECH_KEY yoki GEMINI_API_KEY muhit ozgaruvchisi topilmadi.');
+  }
 }
 
 function loadAudio(input) {
@@ -101,10 +105,25 @@ async function liveTranscribe(audioBuffer, locale) {
 }
 
 async function recognize(audioBuffer, locale) {
+  if (process.env.JARVIS_BRAIN === 'gemini' && gemini && gemini.hasGemini()) {
+    try {
+      const text = await gemini.transcribeAudio({ audioBuffer, locale });
+      if (text) return { text, confidence: 0.98, provider: 'gemini' };
+    } catch (_) {}
+  }
   if (TRANSCRIBE_ENDPOINT && TRANSCRIBE_KEY) {
     try { return await liveTranscribe(audioBuffer, locale); } catch (_) {}
   }
-  return { ...(await sttRest(audioBuffer, locale)), provider: 'azure-speech' };
+  if (KEY) {
+    try { return { ...(await sttRest(audioBuffer, locale)), provider: 'azure-speech' }; } catch (_) {}
+  }
+  if (gemini && gemini.hasGemini()) {
+    try {
+      const text = await gemini.transcribeAudio({ audioBuffer, locale });
+      if (text) return { text, confidence: 0.95, provider: 'gemini' };
+    } catch (_) {}
+  }
+  return { text: '', confidence: 0, provider: 'none' };
 }
 
 // Multi-request server: har qatorda JSON o'qiydi

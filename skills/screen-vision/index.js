@@ -73,8 +73,23 @@ function buildVisionRequestBody(imageBase64, prompt, options = {}) {
 }
 
 function describeImage(imagePath, prompt, options = {}) {
+  // Gemini Multimodal Vision (0 dollar, bepul, nihoyatda kuchli)
+  const gemini = require('../../core/gemini');
+  const brainMode = String(env('JARVIS_BRAIN', '')).toLowerCase();
+  const defaultModel = String(env('DEFAULT_MODEL', '')).toLowerCase();
+  const prefersGemini = brainMode === 'gemini' || defaultModel.includes('gemini') || defaultModel.includes('google') || (!KEY || !ENDPOINT || ENDPOINT.includes('gemini.mode.local'));
+
+  if (gemini.hasGemini() && prefersGemini) {
+    return gemini.completeVision({
+      imagePath,
+      prompt: prompt || DEFAULT_PROMPT,
+      json: Boolean(options.structured),
+      maxTokens: options.structured ? 2000 : 800
+    });
+  }
+
   // Lokal rejim: Qwen 3.5 9B rasmni ham tushunadi — model almashtirilmaydi (Brain hakami orqali).
-  if (String(env('JARVIS_BRAIN', '')).toLowerCase() === 'local') {
+  if (brainMode === 'local') {
     const img = fs.readFileSync(imagePath).toString('base64');
     return require('../../core/brain/client').think({
       user: prompt || DEFAULT_PROMPT, images: [img], hard: false, maxTokens: options.structured ? 2000 : 800,

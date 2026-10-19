@@ -12,8 +12,8 @@ const HEAVY_OLLAMA = new Set(['/api/chat', '/api/generate', '/api/embed', '/api/
  *   GET  /brain/status
  *   /api/*              → Ollama (OpenClaw agenti uchun shaffof o'tkazgich, hakam orqali)
  */
-function createBrainService({ ollama, bonsai, availableBytes, bonsaiNeedBytes = 9 * 2 ** 30, bonsaiIdleMs = 180000, log = () => {}, now = Date.now } = {}) {
-  const arbiter = new BrainArbiter({ backends: { ollama, bonsai }, availableBytes, requirements: { bonsai: bonsaiNeedBytes }, log });
+function createBrainService({ ollama, bonsai, gemini, availableBytes, bonsaiNeedBytes = 9 * 2 ** 30, bonsaiIdleMs = 180000, log = () => {}, now = Date.now } = {}) {
+  const arbiter = new BrainArbiter({ backends: { ollama, bonsai, gemini }, availableBytes, requirements: { bonsai: bonsaiNeedBytes }, log });
   let lastBonsaiUse = 0;
   const stats = { think: 0, fallbacks: 0, byModel: {} };
 
@@ -21,7 +21,9 @@ function createBrainService({ ollama, bonsai, availableBytes, bonsaiNeedBytes = 
     const release = await arbiter.acquire(target.backend);
     try {
       const started = now();
-      const backend = target.backend === 'bonsai' ? bonsai : ollama;
+      const backend = target.backend === 'gemini'
+        ? (gemini || require('./backends').createGeminiBackend())
+        : (target.backend === 'bonsai' ? bonsai : ollama);
       const out = await backend.chat({ ...req, model: target.model });
       if (target.backend === 'bonsai') lastBonsaiUse = now();
       stats.byModel[target.model] = (stats.byModel[target.model] || 0) + 1;
