@@ -75,27 +75,32 @@ async function azureTts(text, voice) {
     return macOSLocalTts(text, voice);
   }
 
-  const resolvedVoice = voice || DEFAULT_VOICE;
-  const url = 'https://' + REGION + '.tts.speech.microsoft.com/cognitiveservices/v1';
-  const ssml = buildSsml(text, resolvedVoice);
+  try {
+    const resolvedVoice = voice || DEFAULT_VOICE;
+    const url = 'https://' + REGION + '.tts.speech.microsoft.com/cognitiveservices/v1';
+    const ssml = buildSsml(text, resolvedVoice);
 
-  const response = await axios.post(url, ssml, {
-    headers: {
-      'Ocp-Apim-Subscription-Key': KEY,
-      'Content-Type': 'application/ssml+xml',
-      // Realtime voice AEC aynan karnayga yuborilgan PCM'ni reference sifatida
-      // ishlata olishi uchun siqilgan MP3 emas, 24 kHz PCM WAV so'raymiz.
-      'X-Microsoft-OutputFormat': 'riff-24khz-16bit-mono-pcm',
-      'User-Agent': 'Jarvis-Azure-TTS/1.0'
-    },
-    responseType: 'arraybuffer',
-    timeout: 30000,
-    httpsAgent: new https.Agent({ keepAlive: false })
-  });
+    const response = await axios.post(url, ssml, {
+      headers: {
+        'Ocp-Apim-Subscription-Key': KEY,
+        'Content-Type': 'application/ssml+xml',
+        // Realtime voice AEC aynan karnayga yuborilgan PCM'ni reference sifatida
+        // ishlata olishi uchun siqilgan MP3 emas, 24 kHz PCM WAV so'raymiz.
+        'X-Microsoft-OutputFormat': 'riff-24khz-16bit-mono-pcm',
+        'User-Agent': 'Jarvis-Azure-TTS/1.0'
+      },
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      httpsAgent: new https.Agent({ keepAlive: false })
+    });
 
-  const outFile = path.join('/tmp', 'jarvis_tts_' + Date.now() + '.wav');
-  fs.writeFileSync(outFile, Buffer.from(response.data));
-  return { audioFile: outFile, format: 'audio/wav', sampleRate: 24000, status: 'ok' };
+    const outFile = path.join('/tmp', 'jarvis_tts_' + Date.now() + '.wav');
+    fs.writeFileSync(outFile, Buffer.from(response.data));
+    return { audioFile: outFile, format: 'audio/wav', sampleRate: 24000, status: 'ok' };
+  } catch (err) {
+    console.error('Azure TTS failed, falling back to macOS local TTS:', err.message);
+    return macOSLocalTts(text, voice);
+  }
 }
 
 // stdin oqish

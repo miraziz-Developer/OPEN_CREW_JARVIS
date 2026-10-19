@@ -522,7 +522,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
       return response.value;
     } catch (error) {
       telemetry?.latency({ requestId: options.requestId, source: options.source || 'agent', agent_ms: Date.now() - startedAt, error });
-      runtime.recordError?.('agent.providers', error);
+      runtime?.recordError?.('agent.providers', error);
       er('Barcha agent providerlari ishlamadi: ' + error.message);
       return null;
     }

@@ -81,21 +81,27 @@ const telegramPoller = createTelegramPoller({
   token: TOKEN,
   onUpdate: update => {
     if (!isPaired()) {
-      const result = pairing.attempt(update?.message);
-      if (result.ok) {
-        ownerIds = parseOwnerIds(result.ownerId);
-        ownerId = ownerIds[0];
-        ownerHandler = buildOwnerHandler(ownerIds);
-        console.log('Telegram owner paired.');
-        bot.sendMessage(ownerId, 'Paired. This chat now controls JARVIS. Restarting my services once so everything picks it up.').catch(() => {});
-        // Daemon, mission runner va boshqalar TELEGRAM_CHAT_ID ni yangi o'qishi uchun bir martalik qayta ishga tushirish.
-        setTimeout(() => {
-          // Faqat macOS (launchd). Server/Docker'da mikrofonli daemon yo'q; u yerda
-          // jarayonlarni supervisor boshqaradi va yangi sozlamani o'zi qayta o'qiydi.
-          if (process.platform !== 'darwin') { process.exit(0); return; }
-          try { require('child_process').spawn('bash', [path.join(__dirname, 'scripts', 'restart-daemon.sh')], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
-          try { require('child_process').spawn('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/com.jarvis.mission-runner`], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
-        }, 2500);
+      const msg = update?.message;
+      if (msg && msg.chat?.type === 'private' && !msg.from?.is_bot) {
+        const result = pairing.attempt(msg);
+        if (result.ok) {
+          ownerIds = parseOwnerIds(result.ownerId);
+          ownerId = ownerIds[0];
+          ownerHandler = buildOwnerHandler(ownerIds);
+          console.log('Telegram owner paired:', ownerId);
+          bot.sendMessage(ownerId, '✅ Ulash muvaffaqiyatli bajarildi! Ushbu Telegram chat endi JARVIS bilan to\'liq bog\'landi. Barcha xizmatlar yangilanmoqda...').catch(() => {});
+          setTimeout(() => {
+            if (process.platform !== 'darwin') { process.exit(0); return; }
+            try { require('child_process').spawn('bash', [path.join(__dirname, 'scripts', 'restart-daemon.sh')], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
+            try { require('child_process').spawn('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/com.jarvis.mission-runner`], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
+          }, 2500);
+        } else if (result.reason === 'bad-code') {
+          bot.sendMessage(msg.chat.id, '❌ Noto\'g\'ri kod kiritildi. Qaytadan tekshirib yuboring: /pair <KOD>').catch(() => {});
+        } else if (result.reason === 'locked') {
+          bot.sendMessage(msg.chat.id, '⏳ Ko\'p xato urinishlar tufayli ulanish vaqtincha bloklandi. Biroz kuting.').catch(() => {});
+        } else {
+          bot.sendMessage(msg.chat.id, '🔒 JARVIS ulanish kutmoqda.\n\nEgalikni tasdiqlash uchun terminaldagi 6 xonali kodni yuboring:\n/pair <KOD>').catch(() => {});
+        }
       }
       return false;
     }

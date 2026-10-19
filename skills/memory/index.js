@@ -312,6 +312,8 @@ function blockId(file, block) {
 async function updateEmbedIndex() {
   ensureDirs();
   if (!fs.existsSync(MEMORY_DIR)) return { status: 'ok', added: 0 };
+  const pgConf = postgresConfig();
+  if (!pgConf.database) return { status: 'ok', added: 0 };
   const embeddingModel = azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2');
   const pool = getPgPool();
   const knownRows = await pool.query('SELECT id FROM jarvis.memory_embeddings WHERE embedding_model = $1', [embeddingModel]);
@@ -346,6 +348,8 @@ async function updateEmbedIndex() {
 }
 
 async function semanticSearch(query, limit = 5, options = {}) {
+  const pgConf = postgresConfig();
+  if (!pgConf.database) return { status: 'empty', results: [] };
   if (!options.skipIndexUpdate) await updateEmbedIndex();
   let qEmbedding;
   try { qEmbedding = await embedText(query); } catch (e) { return { status: 'error', message: e.message }; }

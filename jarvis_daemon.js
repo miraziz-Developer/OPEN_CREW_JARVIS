@@ -1433,6 +1433,21 @@ async function processCommand(command) {
     return;
   }
 
+  const appMatch = command.match(/(?:can you open|please open|open|och|ishga tushir)\s+(?:the\s+)?([a-z0-9\s_-]+)/i);
+  if (appMatch) {
+    const appName = appMatch[1].trim();
+    if (appName && !['door', 'window', 'file', 'link', 'url'].includes(appName.toLowerCase())) {
+      try {
+        const { execSync } = require('child_process');
+        execSync(`open -a "${appName}"`, { timeout: 3000, stdio: 'ignore' });
+        const ap = await ttsToFile(`Opening ${appName}.`);
+        if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
+        turnJournal.append(batchTurnId, 'assistant.completed', { text: `Opening ${appName}.` });
+        return;
+      } catch (_) {}
+    }
+  }
+
   // Agent
   let mem = '';
   try {

@@ -104,24 +104,22 @@ async function liveTranscribe(audioBuffer, locale) {
   } finally { clearTimeout(timer); }
 }
 
+function hasValidAzureKey() {
+  return KEY && KEY !== 'gemini_mode_active' && KEY !== 'placeholder' && KEY.length > 20;
+}
+
 async function recognize(audioBuffer, locale) {
-  if (process.env.JARVIS_BRAIN === 'gemini' && gemini && gemini.hasGemini()) {
+  if (gemini && gemini.hasGemini()) {
     try {
       const text = await gemini.transcribeAudio({ audioBuffer, locale });
       if (text) return { text, confidence: 0.98, provider: 'gemini' };
     } catch (_) {}
   }
-  if (TRANSCRIBE_ENDPOINT && TRANSCRIBE_KEY) {
+  if (TRANSCRIBE_ENDPOINT && TRANSCRIBE_KEY && TRANSCRIBE_KEY !== 'placeholder' && TRANSCRIBE_KEY.length > 20) {
     try { return await liveTranscribe(audioBuffer, locale); } catch (_) {}
   }
-  if (KEY) {
+  if (hasValidAzureKey()) {
     try { return { ...(await sttRest(audioBuffer, locale)), provider: 'azure-speech' }; } catch (_) {}
-  }
-  if (gemini && gemini.hasGemini()) {
-    try {
-      const text = await gemini.transcribeAudio({ audioBuffer, locale });
-      if (text) return { text, confidence: 0.95, provider: 'gemini' };
-    } catch (_) {}
   }
   return { text: '', confidence: 0, provider: 'none' };
 }

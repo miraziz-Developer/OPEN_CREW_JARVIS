@@ -23,18 +23,9 @@ function getApiKey() {
 function resolveModel(requestedModel, isHard = false) {
   if (requestedModel) {
     let clean = requestedModel.replace(/^google\//i, '').replace(/^gemini\//i, '');
-    if (clean === 'gemini-3.8-flash' || clean === 'gemini-2.0-flash' || clean === 'gemini-2.5-flash' || clean === 'gemini-1.5-flash' || clean === 'flash') return 'gemini-flash-lite-latest';
-    if (clean === 'gemini-2.0-pro' || clean === 'gemini-2.5-pro' || clean === 'gemini-1.5-pro' || clean === 'pro') return 'gemini-3.8-pro';
-    if (clean.startsWith('gemini-')) return clean;
+    if (clean.startsWith('gemini-flash-lite')) return clean;
   }
-  const defaultModel = getEnv('DEFAULT_MODEL', '').replace(/^google\//i, '');
-  if (defaultModel && defaultModel.startsWith('gemini-')) {
-    if (defaultModel === 'gemini-3.8-flash' || defaultModel === 'gemini-2.5-flash' || defaultModel === 'gemini-1.5-flash') {
-      return 'gemini-flash-lite-latest';
-    }
-    return defaultModel;
-  }
-  return isHard ? (getEnv('AGENT_STRONG_MODEL') || 'gemini-3.8-pro') : (getEnv('AGENT_FAST_MODEL') || 'gemini-flash-lite-latest');
+  return 'gemini-flash-lite-latest';
 }
 
 /**
@@ -147,17 +138,15 @@ async function complete({ system, user, prompt, model, maxOutputTokens = 4096, j
     });
     return res.text;
   } catch (err) {
-    if (String(err.message || '').includes('429') || String(err.message || '').includes('quota') || !getApiKey()) {
-      quotaExceededUntil = Date.now() + 15 * 3600 * 1000;
-      try {
-        const agySkill = require('../skills/antigravity');
-        const agyRes = await agySkill.executePrompt((system ? system + '\n\n' : '') + userPrompt, { effort: 'low', timeoutMs });
-        if (agyRes && agyRes.output) {
-          return agyRes.output;
-        }
-      } catch (e) {
-        console.error('Agy fallback error:', e);
+    quotaExceededUntil = Date.now() + 3600 * 1000;
+    try {
+      const agySkill = require('../skills/antigravity');
+      const agyRes = await agySkill.executePrompt((system ? system + '\n\n' : '') + userPrompt, { effort: 'low', timeoutMs });
+      if (agyRes && agyRes.output) {
+        return agyRes.output;
       }
+    } catch (e) {
+      console.error('Agy fallback error:', e);
     }
     throw err;
   }
