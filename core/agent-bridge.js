@@ -466,13 +466,25 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     poolList.push({
       id: 'gemini', priority: 0, timeoutMs: 15000,
       invoke: async (message, context) => {
-        const system = ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n[Voice persona: Ultron. Direct, calm, authoritative, cold intelligence. Reply in 1 or 2 concise, plain sentences without filler or preamble.]';
+        const isVoice = !context.source || context.source.includes('voice');
+        const isComplex = isComplexTask(context.routeText || message);
+        let system;
+        let maxTokens;
+
+        if (isVoice) {
+          system = ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n[Voice persona: Ultron. Direct, calm, authoritative, cold intelligence. Reply in 1 or 2 concise, plain sentences without filler or preamble.]';
+          maxTokens = 150;
+        } else {
+          system = agentPolicyPreamble({ brief: !isComplex }) + (isComplex ? '\n[Provide comprehensive, accurate, high-quality answers with complete code blocks.]' : '');
+          maxTokens = isComplex ? 4096 : 1024;
+        }
+
         const model = 'gemini-flash-lite-latest';
         const res = await gemini.complete({
           prompt: message,
           system,
           model,
-          maxOutputTokens: 150
+          maxOutputTokens: maxTokens
         });
         return cleanOpenClawOutput(res);
       }

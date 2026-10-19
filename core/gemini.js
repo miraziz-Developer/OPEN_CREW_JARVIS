@@ -270,6 +270,7 @@ function embedContent({ text, model = 'text-embedding-004', timeoutMs = 15000 })
  */
 async function transcribeAudio({ audioBuffer, mimeType = 'audio/wav', locale = 'en-US', model = 'gemini-flash-lite-latest', timeoutMs = 25000 }) {
   const base64Data = Buffer.isBuffer(audioBuffer) ? audioBuffer.toString('base64') : String(audioBuffer);
+  const langPrompt = String(locale || '').startsWith('uz') ? ' Uzbek' : (String(locale || '').startsWith('ru') ? ' Russian' : ' English');
   const systemInstruction = `You are a real-time speech recognizer. Output ONLY the raw spoken words in${langPrompt}. No notes, no markdown, no conversational commentary. If silent or unclear, output nothing.`;
 
   const contents = [{

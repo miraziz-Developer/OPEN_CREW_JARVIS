@@ -20,6 +20,7 @@ const { createAgentBridge } = require('./core/agent-bridge');
 const { resolveOpenClawEnvironment } = require('./core/openclaw-credentials');
 const { createSkillPlatform } = require('./skills/platform');
 const { RuntimeTelemetry } = require('./core/runtime-telemetry');
+const { isComplexTask } = require('./core/model-routing');
 
 const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
@@ -440,7 +441,11 @@ async function handleMessage(chatId, userText, isVoice) {
   }
 
   // 3d. UNIVERSAL: AI agentga yuborish
-  let enrichedMessage = '[Reply only in natural English. This is a phone chat: give just the result in 1-3 short sentences.]\n' + memoryContext + userText;
+  const isCodeOrComplex = isComplexTask(userText) || /\b(yoz|kod|dastur|skript|tushuntir|misol|qanday|loyiham|tuzat|tekshir|how|write|code|script|create|implement|fix|explain)\b/i.test(userText);
+  const modeInstruction = isCodeOrComplex
+    ? '[Mode: Full expert assistance. Provide clear, accurate, complete code and explanation in the same language as the user\'s request. Format cleanly with markdown.]'
+    : '[Mode: Quick conversational assistance. Reply naturally in 1-3 clear sentences in the language of the request.]';
+  let enrichedMessage = modeInstruction + '\n' + memoryContext + userText;
   
   // Agar avvalgi suhbat bosa — kontekst bilan
   const history = chatHistory[chatId];

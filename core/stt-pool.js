@@ -5,6 +5,9 @@ const { spawn } = require('child_process');
 // ════════════════════════════════════════════
 // STT PROMISE POOL (pre-spawned children)
 // ════════════════════════════════════════════
+let gemini = null;
+try { gemini = require('./gemini'); } catch (_) {}
+
 class STTPool {
   constructor({ size = 2, projectDir, env } = {}) {
     this.size = size;
@@ -32,11 +35,8 @@ class STTPool {
     proc._busy = false;
     proc._idx = idx;
     proc._buffer = '';
-    // stdout listener recognize() ichida qo'shiladi — bu yerda emas
-    // (ikkalasi baravar bo'lsa har bir chunk ikki marta buffer'ga
-    // qo'shilib, JSON'ni buzib, timeout'gacha "natija topilmadi" bergan)
     proc.stderr.on('data', () => {});
-    proc.stdin.on('error', () => {}); // EPIPE qo'lga olinmasa butun daemon'ni yiqitadi
+    proc.stdin.on('error', () => {});
     proc.on('error', () => { this._respawn(idx); });
     proc.on('exit', () => { this._respawn(idx); });
     this.pool[idx] = proc;
@@ -47,7 +47,16 @@ class STTPool {
     this._spawn(idx);
   }
 
-  async recognize(audioWavBuffer, locale = 'uz-UZ') {
+  async recognize(audioWavBuffer, locale = 'en-US') {
+    if (gemini && gemini.hasGemini()) {
+      try {
+        const text = await gemini.transcribeAudio({ audioBuffer: audioWavBuffer, locale });
+        if (text && text.length > 0) {
+          return { status: 'ok', text, confidence: 0.98, provider: 'gemini-direct' };
+        }
+      } catch (_) {}
+    }
+
     // find idle child
     let child = this.pool.find(p => !p._busy);
     if (!child) {
