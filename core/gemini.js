@@ -270,13 +270,12 @@ function embedContent({ text, model = 'text-embedding-004', timeoutMs = 15000 })
  */
 async function transcribeAudio({ audioBuffer, mimeType = 'audio/wav', locale = 'en-US', model = 'gemini-flash-lite-latest', timeoutMs = 25000 }) {
   const base64Data = Buffer.isBuffer(audioBuffer) ? audioBuffer.toString('base64') : String(audioBuffer);
-  const langPrompt = locale.startsWith('uz') ? ' Uzbek' : (locale.startsWith('ru') ? ' Russian' : ' English');
-  const systemInstruction = `You are an expert speech recognition system. Transcribe the spoken audio precisely in${langPrompt}. Output ONLY the transcribed words. Do not add any punctuation unless clearly spoken. Do not add explanations, conversational comments, or notes. If the audio is silent or unintelligible, output nothing.`;
+  const systemInstruction = `You are a real-time speech recognizer. Output ONLY the raw spoken words in${langPrompt}. No notes, no markdown, no conversational commentary. If silent or unclear, output nothing.`;
 
   const contents = [{
     role: 'user',
     parts: [
-      { text: 'Transcribe this audio verbatim:' },
+      { text: 'Transcribe verbatim:' },
       {
         inline_data: {
           mime_type: mimeType,
@@ -290,7 +289,7 @@ async function transcribeAudio({ audioBuffer, mimeType = 'audio/wav', locale = '
     model,
     systemInstruction,
     contents,
-    generationConfig: { maxOutputTokens: 500, temperature: 0.1 },
+    generationConfig: { maxOutputTokens: 80, temperature: 0.0 },
     timeoutMs
   });
 

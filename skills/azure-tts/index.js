@@ -52,17 +52,19 @@ function macOSLocalTts(text, voice) {
   const { execSync } = require('child_process');
   const outFile = path.join('/tmp', 'jarvis_tts_' + Date.now() + '.wav');
   const aiffFile = path.join('/tmp', 'jarvis_say_' + Date.now() + '.aiff');
-  // Britancha klassik viqorli Jarvis ovozi (Daniel)
-  const selectedVoice = 'Daniel';
+  // American Ultron ovoz profili: Rocko (en_US) + pitch -220 + bass +8 + mechanical resonance echo
+  const selectedVoice = process.env.JARVIS_VOICE && process.env.JARVIS_VOICE !== 'Puck' && process.env.JARVIS_VOICE !== 'Daniel'
+    ? process.env.JARVIS_VOICE
+    : 'Rocko';
   const cleanText = String(text || '').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ');
   try {
-    execSync(`say -v "${selectedVoice}" -o "${aiffFile}" "${cleanText}"`, { timeout: 15000 });
+    execSync(`say -v "${selectedVoice}" -r 165 -o "${aiffFile}" "${cleanText}"`, { timeout: 15000 });
     try {
-      execSync(`sox "${aiffFile}" -r 24000 -c 1 -b 16 "${outFile}"`, { timeout: 10000 });
+      execSync(`sox "${aiffFile}" -r 24000 -c 1 -b 16 "${outFile}" pitch -220 bass +8 echo 0.7 0.6 20 0.25`, { timeout: 10000 });
       try { fs.unlinkSync(aiffFile); } catch (_) {}
-      return { audioFile: outFile, format: 'audio/wav', sampleRate: 24000, status: 'ok', engine: 'macos-daniel' };
+      return { audioFile: outFile, format: 'audio/wav', sampleRate: 24000, status: 'ok', engine: 'ultron-rocko' };
     } catch (_) {
-      return { audioFile: aiffFile, format: 'audio/aiff', status: 'ok', engine: 'macos-daniel-aiff' };
+      return { audioFile: aiffFile, format: 'audio/aiff', status: 'ok', engine: 'macos-say-aiff' };
     }
   } catch (err) {
     throw new Error(`macOS say xatosi: ${err.message}`);

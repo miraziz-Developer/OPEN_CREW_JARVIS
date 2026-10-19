@@ -466,12 +466,13 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     poolList.push({
       id: 'gemini', priority: 0, timeoutMs: 15000,
       invoke: async (message, context) => {
-        const system = ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble();
-        const model = needsStrongAgentModel(context.routeText || message) ? 'gemini-3.8-pro' : 'gemini-3.8-flash';
+        const system = ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n[Voice persona: Ultron. Direct, calm, authoritative, cold intelligence. Reply in 1 or 2 concise, plain sentences without filler or preamble.]';
+        const model = 'gemini-flash-lite-latest';
         const res = await gemini.complete({
           prompt: message,
           system,
-          model
+          model,
+          maxOutputTokens: 150
         });
         return cleanOpenClawOutput(res);
       }

@@ -62,6 +62,7 @@ const { createAgentBridge } = require('./core/agent-bridge');
 const { resolveOpenClawEnvironment } = require('./core/openclaw-credentials');
 const { conversationIdleDelay } = require('./core/voice-turn-policy');
 const { createWakeAudioHandoff } = require('./core/wake-audio-handoff');
+const { isComplexTask, needsStrongAgentModel } = require('./core/model-routing');
 const { VoiceTelemetry, VOICE_MILESTONES } = require('./utils/telemetry');
 const { RuntimeTelemetry } = require('./core/runtime-telemetry');
 
@@ -125,7 +126,7 @@ const CHUNK_MS = 1200;             // overlap window (ms) — "Jarvis" to'liq si
 const STEP_MS = 150;               // faster wake inference cadence without reducing confidence
 const ENERGY_MIN_STT = parseFloat(env('ENERGY_MIN_STT')) || 120; // past mikrofonlarda ham backup ishlasin
 const ENERGY_TARGET = 1500;        // adaptive gain target — low, no clip
-const SILENCE_MS = 500;            // silence = command end
+const SILENCE_MS = parseInt(env('SILENCE_MS'), 10) || 380;            // silence = command end (380ms for snappy turn-taking)
 const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 150; // buyruq yozib olishda "gapiryapti" chegarasi
 const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
@@ -1358,7 +1359,7 @@ async function mainLoop() {
         }
 
         const silence = now - lastVoiceTime;
-        if ((!fnPressed && elapsed > 800 && silence > SILENCE_MS) || elapsed > CMD_MAX * 1000) {
+        if ((!fnPressed && elapsed > 500 && silence > SILENCE_MS) || elapsed > CMD_MAX * 1000) {
           state = 'processing';
           const totalPCM = Buffer.concat(cmdBuffers);
           const wavBuf = pcmToWavBuffer(totalPCM);
@@ -1454,6 +1455,48 @@ async function processCommand(command) {
     const q = command.split(/\s+/).filter(w => w.length > 3 && !['qanday','nima','kim'].includes(w.toLowerCase())).slice(0, 3).join(' ');
     if (q.length > 2) { const f = searchMemory(q, 3); if (f && f.status === 'ok' && f.results.length) mem = '\n[Xotira]:\n' + f.results.map(r => r.matches.map(m => m.text).join(' | ')).join('\n') + '\n'; }
   } catch(e){}
+
+  // Qiyin / murakkab tasklarni katta modelga (Antigravity/Gemini Pro) fonda yo'naltirish ("ularni gapirtirmay")
+  const isHardTask = isComplexTask(command) || /\b(yoz|tuzat|kod|dastur|tekshir|skript|fayl|terminal|build|deploy|code|fix|refactor|analyze|investigate|git|clone|search|qidir|yarat|arxitektura|yozib ber)\b/i.test(command);
+  if (isHardTask) {
+    const ack = 'Acknowledged. Processing your task in the background.';
+    const ackAudio = await ttsToFile(ack);
+    if (ackAudio) {
+      await execFileAsync('afplay', [ackAudio]).catch(() => {});
+      try { fs.unlinkSync(ackAudio); } catch (_) {}
+    }
+    sendTelegram('⚙️ Ishga tushirildi: ' + command);
+
+    (async () => {
+      try {
+        let taskResult = null;
+        try {
+          const agySkill = require('./skills/antigravity');
+          const agyRes = await agySkill.executePrompt(command, { effort: 'medium', timeoutMs: 180000 });
+          if (agyRes && agyRes.output) taskResult = agyRes.output;
+        } catch (_) {}
+        if (!taskResult) {
+          taskResult = await askAgent(mem + command);
+        }
+
+        if (taskResult) {
+          sendTelegram('✅ Vazifa bajarildi:\n\n' + taskResult.slice(0, 4000));
+          turnJournal.append(batchTurnId, 'assistant.completed', { text: taskResult.slice(0, 4000) });
+          // Ularni gapirtirmay — faqat qisqa 1 jumla aytadi:
+          const doneVoice = 'Task completed. Full details sent to Telegram.';
+          const doneAudio = await ttsToFile(doneVoice);
+          if (doneAudio) {
+            await execFileAsync('afplay', [doneAudio]).catch(() => {});
+            try { fs.unlinkSync(doneAudio); } catch (_) {}
+          }
+        }
+      } catch (err) {
+        sendTelegram('⚠️ Vazifani bajarishda xatolik: ' + err.message);
+      }
+    })();
+    return;
+  }
+
   const reply = await askAgent(mem + command);
   runtime.observeLatency('batch-agent', Date.now() - commandStartedAt);
   if (reply) {
