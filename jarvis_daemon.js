@@ -57,6 +57,7 @@ const { ConversationContext } = require('./core/conversation-context');
 const { ClapDetector } = require('./core/clap-detector');
 const { STTPool } = require('./core/stt-pool');
 const { detectWakeSoundMs, playWakeSound, playSystemSound, playTaskDoneSound } = require('./core/voice-sounds');
+const { buildVoiceProviders } = require('./core/voice-provider');
 const { createAgentBridge } = require('./core/agent-bridge');
 const { resolveOpenClawEnvironment } = require('./core/openclaw-credentials');
 const { conversationIdleDelay } = require('./core/voice-turn-policy');
@@ -144,11 +145,11 @@ const WAKE_STT_MAX_MS = 2200;
 const WAKE_STT_PREROLL_MS = 450;
 const WAKE_STT_MIN_SPEECH_MS = 480;
 
-const REALTIME_ENABLED = (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
+const hasVoiceProviders = Boolean(buildVoiceProviders(env).length);
+const REALTIME_ENABLED = hasVoiceProviders && (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
 const NATIVE_AEC = (env('JARVIS_NATIVE_AEC') || 'true') !== 'false';
-// Doim eshitib turish: Azure Voice Live sessiyasi ochiq turadi va faqat "Jarvis" deb boshlangan gaplarga javob beradi
-// (openWakeWord/Whisper zaxira bo'lib qoladi). Bo'sh paytda bulutga faqat mahalliy darvozadan o'tgan nutq yuboriladi.
-const ALWAYS_LISTEN = (env('JARVIS_ALWAYS_LISTEN') || 'true') !== 'false';
+// Doim eshitib turish: faqat bulutli realtime provider mavjud bo'lganda faol bo'ladi
+const ALWAYS_LISTEN = hasVoiceProviders && (env('JARVIS_ALWAYS_LISTEN') || 'true') !== 'false';
 const ALWAYS_LISTEN_MAX_AGE_MS = Math.max(5, parseInt(env('ALWAYS_LISTEN_MAX_AGE_MIN'), 10) || 25) * 60000;
 const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
 // Provider VAD `speech_stopped` hodisasini yo'qotsa idle timer qayta
@@ -1224,6 +1225,7 @@ async function mainLoop() {
 
   inf('Mic stream started — listening for "Jarvis"...');
   runtime.heartbeat('microphone', { status: 'streaming' });
+  runtime.heartbeat('realtime-api', { status: 'ready', provider: hasVoiceProviders ? 'azure-realtime' : 'gemini-voice' });
   runtime.heartbeat('voice-daemon', { state: 'listening', ...runtimeIdentity() });
   const runtimeHeartbeat = setInterval(() => {
     runtime.heartbeat('voice-daemon', { state, realtime: Boolean(_activeRealtimeSession), ...runtimeIdentity() });
@@ -1350,8 +1352,8 @@ async function mainLoop() {
 
         // Energy check every ~120ms
         if (elapsed % 120 < 30 && cmdBuffers.length > 2) {
-          const totalPCM = Buffer.concat(cmdBuffers);
-          const energy = getEnergy(totalPCM);
+          const recentPCM = Buffer.concat(cmdBuffers.slice(-3));
+          const energy = getEnergy(recentPCM);
           if (energy > VOICE_ACTIVITY_THRESHOLD) lastVoiceTime = now;
         }
 

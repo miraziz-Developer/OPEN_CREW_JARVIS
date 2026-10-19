@@ -12,6 +12,8 @@ const { resolveOpenClawEnvironment } = require('./openclaw-credentials');
 const { extractMissingDependency, runSelfHeal, formatSelfHealEscalation } = require('./self-heal');
 const { boundedCall } = require('./bounded-call');
 const { isComplexTask, needsStrongAgentModel, selectAgentModel } = require('./model-routing');
+let gemini = null;
+try { gemini = require('./gemini'); } catch (_) {}
 
 const ENGLISH_ONLY_INSTRUCTION = '[Language policy: Reply to the user only in natural English, regardless of the language of the request or stored context. Never answer in Uzbek or imitate an Uzbek accent. Preserve names, quoted text, and file contents when necessary.]';
 // Egasi belgilagan siyosat har agent chaqiruviga qo'shiladi. SOUL.md'dagi umumiy qoidalar emas, shu qator
@@ -458,29 +460,46 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     }
   }
 
-  const agentProviders = new ProviderPool([
-    {
-      id: 'openclaw', priority: 0, timeoutMs: openClawTimeoutMs + 5000,
-      // Og'ir (ko'p bosqichli) rejim foydalanuvchining o'z so'rovi bo'yicha tanlanadi. Avval Telegram'da xotira va
-      // eski suhbat qo'shilgan matn 700 belgidan oshib, "skrinshot yubor" kabi oddiy so'rovlar ham 4-5 bosqichli
-      // og'ir yo'lga tushardi (o'rtacha 82 s, 37 ta holat).
-      invoke: (message, context) => needsCheckpointedExecution(context.routeText || message)
-        ? askCheckpointedAgent(message, context.sessionKey, {
-          persistent: Boolean(context.persistent) || needsPersistentExecution(context.routeText || message),
-          onProgress: context.onProgress || (text => sendTelegram('⏳ ' + text)),
-          onLongRunning: context.onLongRunning || (text => sendTelegram('⏳ ' + text))
-        })
-        : askOpenClaw(message, context.sessionKey, { routeText: context.routeText })
-    },
-    {
-      id: 'azure-deep-think', priority: 1, timeoutMs: deepThinkTimeoutMs + 5000,
-      invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
-        // Bu zaxira asbobsiz LLM: asosiy agent ishlamay qolganda "qila olmayman" deb yolg'on gapirmasligi kerak.
-        question: FALLBACK_NOTICE + message,
-        context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined
+  const isGeminiBrain = String(envValue('JARVIS_BRAIN') || '').trim().toLowerCase() === 'gemini' || (gemini && gemini.hasGemini());
+  const poolList = [];
+  if (isGeminiBrain && gemini && gemini.hasGemini()) {
+    poolList.push({
+      id: 'gemini', priority: 0, timeoutMs: 15000,
+      invoke: async (message, context) => {
+        const system = ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble();
+        const model = needsStrongAgentModel(context.routeText || message) ? 'gemini-3.8-pro' : 'gemini-3.8-flash';
+        const res = await gemini.complete({
+          prompt: message,
+          system,
+          model
+        });
+        return cleanOpenClawOutput(res);
+      }
+    });
+  }
+  poolList.push({
+    id: 'openclaw', priority: poolList.length, timeoutMs: openClawTimeoutMs + 5000,
+    // Og'ir (ko'p bosqichli) rejim foydalanuvchining o'z so'rovi bo'yicha tanlanadi. Avval Telegram'da xotira va
+    // eski suhbat qo'shilgan matn 700 belgidan oshib, "skrinshot yubor" kabi oddiy so'rovlar ham 4-5 bosqichli
+    // og'ir yo'lga tushardi (o'rtacha 82 s, 37 ta holat).
+    invoke: (message, context) => needsCheckpointedExecution(context.routeText || message)
+      ? askCheckpointedAgent(message, context.sessionKey, {
+        persistent: Boolean(context.persistent) || needsPersistentExecution(context.routeText || message),
+        onProgress: context.onProgress || (text => sendTelegram('⏳ ' + text)),
+        onLongRunning: context.onLongRunning || (text => sendTelegram('⏳ ' + text))
       })
-    }
-  ], { failureThreshold: 2, cooldownMs: 120000 });
+      : askOpenClaw(message, context.sessionKey, { routeText: context.routeText })
+  });
+  poolList.push({
+    id: 'azure-deep-think', priority: poolList.length, timeoutMs: deepThinkTimeoutMs + 5000,
+    invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
+      // Bu zaxira asbobsiz LLM: asosiy agent ishlamay qolganda "qila olmayman" deb yolg'on gapirmasligi kerak.
+      question: FALLBACK_NOTICE + message,
+      context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined
+    })
+  });
+
+  const agentProviders = new ProviderPool(poolList, { failureThreshold: 2, cooldownMs: 120000 });
 
   const publishProviderPool = () => telemetry?.providerPool(agentProviders.snapshot());
   agentProviders.on('provider.selected', ({ provider }) => {

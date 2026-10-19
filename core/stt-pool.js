@@ -12,6 +12,11 @@ class STTPool {
     this.pool = [];
     this.env = {
       ...process.env,
+      PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`,
+      GEMINI_API_KEY: env('GEMINI_API_KEY'),
+      GOOGLE_API_KEY: env('GOOGLE_API_KEY'),
+      JARVIS_BRAIN: env('JARVIS_BRAIN') || 'gemini',
+      DEFAULT_MODEL: env('DEFAULT_MODEL') || 'gemini-3.8-flash',
       AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'),
       AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'),
       AZURE_SPEECH_LANGUAGE: env('AZURE_SPEECH_LANGUAGE'),

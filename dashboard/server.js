@@ -73,10 +73,10 @@ function getStatus() {
     sentinel: isAlive(path.join(PROJECT_DIR, 'scripts', 'pause-sentinel.js')),
     runtime,
     model: {
-      primary: env('AGENT_FAST_MODEL', 'gpt-6-astra'),
-      realtime: env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1'),
-      vision: env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1'),
-      expert: env('AGENT_STRONG_MODEL', env('DEEP_THINK_COMPLEX_MODEL', 'gpt-6-sol'))
+      primary: env('AGENT_FAST_MODEL', 'gemini-3.8-flash'),
+      realtime: String(env('JARVIS_BRAIN', '')).toLowerCase() === 'gemini' ? 'gemini-voice' : env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1'),
+      vision: String(env('JARVIS_BRAIN', '')).toLowerCase() === 'gemini' ? 'gemini-3.8-flash' : env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1'),
+      expert: env('AGENT_STRONG_MODEL', env('DEEP_THINK_COMPLEX_MODEL', 'gemini-3.8-pro'))
     },
     now: new Date().toISOString()
   };

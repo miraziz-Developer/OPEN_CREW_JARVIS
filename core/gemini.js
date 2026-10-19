@@ -6,6 +6,7 @@ const https = require('https');
 const { PROJECT_DIR } = require('./paths');
 
 let cachedEnv = null;
+let quotaExceededUntil = 0; // Dinamik ravishda 429 bo'lganda yangilanadi
 function getEnv(key, fallback = '') {
   if (process.env[key] !== undefined) return process.env[key];
   if (cachedEnv === null) {
@@ -22,18 +23,18 @@ function getApiKey() {
 function resolveModel(requestedModel, isHard = false) {
   if (requestedModel) {
     let clean = requestedModel.replace(/^google\//i, '').replace(/^gemini\//i, '');
-    if (clean === 'gemini-2.0-flash' || clean === 'gemini-2.5-flash' || clean === 'gemini-1.5-flash') return 'gemini-3.8-flash';
-    if (clean === 'gemini-2.0-pro' || clean === 'gemini-2.5-pro' || clean === 'gemini-1.5-pro') return 'gemini-3.8-pro';
+    if (clean === 'gemini-3.8-flash' || clean === 'gemini-2.0-flash' || clean === 'gemini-2.5-flash' || clean === 'gemini-1.5-flash' || clean === 'flash') return 'gemini-flash-lite-latest';
+    if (clean === 'gemini-2.0-pro' || clean === 'gemini-2.5-pro' || clean === 'gemini-1.5-pro' || clean === 'pro') return 'gemini-3.8-pro';
     if (clean.startsWith('gemini-')) return clean;
   }
   const defaultModel = getEnv('DEFAULT_MODEL', '').replace(/^google\//i, '');
   if (defaultModel && defaultModel.startsWith('gemini-')) {
-    if (defaultModel === 'gemini-2.0-flash' || defaultModel === 'gemini-2.5-flash' || defaultModel === 'gemini-1.5-flash') {
-      return 'gemini-3.8-flash';
+    if (defaultModel === 'gemini-3.8-flash' || defaultModel === 'gemini-2.5-flash' || defaultModel === 'gemini-1.5-flash') {
+      return 'gemini-flash-lite-latest';
     }
     return defaultModel;
   }
-  return isHard ? (getEnv('AGENT_STRONG_MODEL') || 'gemini-3.8-pro') : (getEnv('AGENT_FAST_MODEL') || 'gemini-3.8-flash');
+  return isHard ? (getEnv('AGENT_STRONG_MODEL') || 'gemini-3.8-pro') : (getEnv('AGENT_FAST_MODEL') || 'gemini-flash-lite-latest');
 }
 
 /**
@@ -110,12 +111,13 @@ function generateContent({ model, systemInstruction, contents, generationConfig 
 /**
  * Matnli suhbat / completion interfeysi
  */
-async function complete({ system, user, model, maxOutputTokens = 4096, json = false, hard = false, timeoutMs = 120000 }) {
+async function complete({ system, user, prompt, model, maxOutputTokens = 4096, json = false, hard = false, timeoutMs = 120000 }) {
   const resolved = resolveModel(model, hard);
+  const userPrompt = String(user || prompt || '');
   const contents = [
     {
       role: 'user',
-      parts: [{ text: String(user || '') }]
+      parts: [{ text: userPrompt }]
     }
   ];
 
@@ -127,15 +129,38 @@ async function complete({ system, user, model, maxOutputTokens = 4096, json = fa
     generationConfig.responseMimeType = 'application/json';
   }
 
-  const res = await generateContent({
-    model: resolved,
-    systemInstruction: system,
-    contents,
-    generationConfig,
-    timeoutMs
-  });
+  if (Date.now() < quotaExceededUntil || !getApiKey()) {
+    try {
+      const agySkill = require('../skills/antigravity');
+      const agyRes = await agySkill.executePrompt((system ? system + '\n\n' : '') + userPrompt, { effort: 'low', timeoutMs });
+      if (agyRes && agyRes.output) return agyRes.output;
+    } catch (_) {}
+  }
 
-  return res.text;
+  try {
+    const res = await generateContent({
+      model: resolved,
+      systemInstruction: system,
+      contents,
+      generationConfig,
+      timeoutMs
+    });
+    return res.text;
+  } catch (err) {
+    if (String(err.message || '').includes('429') || String(err.message || '').includes('quota') || !getApiKey()) {
+      quotaExceededUntil = Date.now() + 15 * 3600 * 1000;
+      try {
+        const agySkill = require('../skills/antigravity');
+        const agyRes = await agySkill.executePrompt((system ? system + '\n\n' : '') + userPrompt, { effort: 'low', timeoutMs });
+        if (agyRes && agyRes.output) {
+          return agyRes.output;
+        }
+      } catch (e) {
+        console.error('Agy fallback error:', e);
+      }
+    }
+    throw err;
+  }
 }
 
 /**
@@ -254,7 +279,7 @@ function embedContent({ text, model = 'text-embedding-004', timeoutMs = 15000 })
 /**
  * Gemini Multimodal Audio Transcription (bepul va o'ta tez STT)
  */
-async function transcribeAudio({ audioBuffer, mimeType = 'audio/wav', locale = 'en-US', model = 'gemini-3.8-flash', timeoutMs = 25000 }) {
+async function transcribeAudio({ audioBuffer, mimeType = 'audio/wav', locale = 'en-US', model = 'gemini-flash-lite-latest', timeoutMs = 25000 }) {
   const base64Data = Buffer.isBuffer(audioBuffer) ? audioBuffer.toString('base64') : String(audioBuffer);
   const langPrompt = locale.startsWith('uz') ? ' Uzbek' : (locale.startsWith('ru') ? ' Russian' : ' English');
   const systemInstruction = `You are an expert speech recognition system. Transcribe the spoken audio precisely in${langPrompt}. Output ONLY the transcribed words. Do not add any punctuation unless clearly spoken. Do not add explanations, conversational comments, or notes. If the audio is silent or unintelligible, output nothing.`;
