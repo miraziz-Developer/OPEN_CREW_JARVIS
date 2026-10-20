@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""BabyAGI (yoheinakajima/babyagi, functionz) worker — Azure gpt-5-mini bilan.
+"""BabyAGI (yoheinakajima/babyagi, functionz) worker with Azure gpt-5-mini.
 
-BabyAGI vazifani funksiyalarga bo'ladi, ularning Python kodini o'zi yozadi, ro'yxatga oladi va ishga tushiradi
-(o'zini-o'zi quruvchi agent). LLM chaqiruvlari litellm orqali — biz ularni Azure OpenAI v1 endpoint'ga yo'naltiramiz.
+BabyAGI splits the task into functions, writes their Python code itself, registers and runs them
+(a self-building agent). LLM calls go through litellm, which we point at the Azure OpenAI v1 endpoint.
 
-Kirish (stdin JSON): {"task": "...", "cwd": "/abs/workspace"}
+Input (stdin JSON): {"task": "...", "cwd": "/abs/workspace"}
 Muhit: OPENAI_API_KEY, OPENAI_API_BASE, BABYAGI_MODEL, BABYAGI_REASONING
-Chiqish: oxirgi satr — JSON {"ok": bool, "output": str}
+Output: the last line is JSON {"ok": bool, "output": str}
 """
 import contextlib
 import io
@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore")
 request = json.loads(sys.stdin.read() or "{}")
 task = str(request.get("task", "")).strip()
 if not task:
-    print(json.dumps({"ok": False, "output": "", "error": "task kerak"}))
+    print(json.dumps({"ok": False, "output": "", "error": "task is required"}))
     sys.exit(0)
 cwd = request.get("cwd") or os.getcwd()
 os.makedirs(cwd, exist_ok=True)
@@ -46,7 +46,7 @@ def _azure_completion(*args, **kwargs):
 
 litellm.completion = _azure_completion
 
-# Funksiya qidiruvi uchun embedding: loyihadagi Azure embedding deployment'i.
+# Embeddings for function search: the project's Azure embedding deployment.
 _embed_original = litellm.embedding
 _embed_base = os.environ.get("BABYAGI_EMBED_BASE", "").rstrip("/")
 _embed_key = os.environ.get("BABYAGI_EMBED_KEY", "")
@@ -78,7 +78,7 @@ try:
         _PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
 
         def _safe_install(self, package_name, imp_name):
-            """LLM ba'zan import ifodasini butun ("from typing import X") yozadi — uni pip'ga bermaymiz."""
+            """The LLM sometimes writes a whole import statement ("from typing import X"); never pass that to pip."""
             def module_root(text):
                 match = re.match(r"^\s*(?:from|import)\s+([A-Za-z0-9_]+)", str(text))
                 return match.group(1) if match else str(text).strip()
@@ -93,7 +93,7 @@ try:
             if _PACKAGE_NAME.match(root):
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", root])
                 return importlib.import_module(module_root(imp_name) or root)
-            raise ImportError(f"import bajarilmadi: {package_name}")
+            raise ImportError(f"import failed: {package_name}")
 
         for _name in dir(_execution):
             _cls = getattr(_execution, _name)
@@ -108,7 +108,7 @@ try:
         instance = babyagi.get_func_instance()
         known = {f["name"] for f in instance.get_all_functions()}
         output = instance.execute_function("process_user_input", user_input=task)
-        # Tekshiruvchi natijani baholay olishi uchun BabyAGI yozgan yangi funksiya(lar) kodini ham qo'shamiz.
+        # Include the code of the new function(s) BabyAGI wrote so the verifier can judge the result.
         created = [f for f in instance.get_all_functions() if f["name"] not in known][:2]
         code = "\n\n".join(f"# BabyAGI function {f['name']}\n{(f.get('code') or '')[:1500]}" for f in created)
     detail = f"Result: {output}" + (f"\n\nGenerated code for verification:\n{code}" if code else "")

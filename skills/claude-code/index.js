@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
- * CLAUDE CODE Skill — murakkab vazifalarni (video montaj, kod yozish va h.k.)
- * Claude Code'ga topshiradi. Claude Code haqiqiy fayl/exec huquqiga ega
- * (masalan ffmpeg orqali video tahrirlashi mumkin), lekin xavfsizlik uchun
- * faqat belgilangan ish papkasida va cheklangan tool to'plami bilan ishlaydi
- * (--dangerously-skip-permissions ISHLATILMAYDI).
+ * CLAUDE CODE skill: hands complex tasks (video editing, writing code, etc.) to
+ * Claude Code. Claude Code has real file/exec access (e.g. it can edit video with
+ * ffmpeg), but for safety it works only inside the given work folder with a limited
+ * tool set (--dangerously-skip-permissions is NOT used).
  *
- * Kirish (stdin JSON): { task: "...", workDir?: "..." }
- * Chiqish: { status: "ok", result: "...", workDir: "..." } | { status: "error", message }
+ * Input (stdin JSON): { task: "...", workDir?: "..." }
+ * Output: { status: "ok", result: "...", workDir: "..." } | { status: "error", message }
  */
 
 const { execFileSync } = require('child_process');
@@ -17,7 +16,7 @@ const path = require('path');
 
 const DEFAULT_WORK_DIR = path.join(os.homedir(), 'Desktop', 'Jarvis-Video-Projects');
 const ALLOWED_TOOLS = 'Bash,Read,Write,Edit,Glob,Grep';
-const TIMEOUT_MS = 10 * 60 * 1000; // 10 daqiqa — video montaj vaqt olishi mumkin
+const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes: video editing can take a while
 
 function runClaudeCode(task, workDir) {
   fs.mkdirSync(workDir, { recursive: true });
@@ -40,7 +39,7 @@ function main() {
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8').trim() || '{}'); } catch (e) {}
 
-  if (!input.task) { console.log(JSON.stringify({ status: 'error', message: 'task kerak' })); return; }
+  if (!input.task) { console.log(JSON.stringify({ status: 'error', message: 'task is required' })); return; }
   const workDir = input.workDir || DEFAULT_WORK_DIR;
 
   try {

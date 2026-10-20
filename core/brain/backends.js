@@ -30,9 +30,9 @@ function createOllamaBackend({ port = 11434, request = jsonRequest } = {}) {
   return {
     port,
     async loaded() { const r = await request({ port, method: 'GET', path: '/api/ps', timeoutMs: 5000 }).catch(() => null); return (r?.models || []).map(m => m.name || m.model); },
-    // Xotiradagi modellar egallagan joy — chiqarishdan oldin "bo'shatsam yetadimi?" deb hisoblash uchun.
+    // Memory used by loaded models, to compute "is unloading enough?" before unloading.
     async footprintBytes() { const r = await request({ port, method: 'GET', path: '/api/ps', timeoutMs: 5000 }).catch(() => null); return (r?.models || []).reduce((sum, m) => sum + (Number(m.size) || 0), 0); },
-    // Xotiradagi barcha Ollama modellarini darhol chiqaradi.
+    // Unloads every Ollama model from memory immediately.
     async evict() { for (const model of await this.loaded()) await request({ port, path: '/api/generate', body: { model, keep_alive: 0 }, timeoutMs: 30000 }).catch(() => {}); },
     async chat({ model, system, user, images = [], audio = [], maxTokens = 1024, format, think = false, timeoutMs }) {
       const messages = [];
@@ -49,10 +49,10 @@ function createOllamaBackend({ port = 11434, request = jsonRequest } = {}) {
   };
 }
 
-// ── Bonsai 27B — alohida jarayon; to'xtatilsa RAM to'liq bo'shaydi ─────────────────
-// Standart: Ternary Bonsai 2 27B (PTQ1_0, 5.95 GB — FP16 aqlining ~98%) — PrismML llama.cpp fork'idagi llama-server.
-// U topilmasa 1-bit Bonsai 27B (3.8 GB) ishlatiladi. BONSAI_MODEL=... bilan aniq fayl berish mumkin.
-// Ixtiyoriy: BONSAI_RUNTIME=mlx — MLX paketi (8.6 GB, 16 GB Mac'da ko'pincha sig'maydi).
+// ── Bonsai 27B: a separate process; stopping it frees RAM completely ───────────────
+// Default: Ternary Bonsai 2 27B (PTQ1_0, 5.95 GB, ~98% of FP16 quality) via llama-server from the PrismML llama.cpp fork.
+// If missing, the 1-bit Bonsai 27B (3.8 GB) is used. BONSAI_MODEL=... selects an exact file.
+// Optional: BONSAI_RUNTIME=mlx for the MLX package (8.6 GB; often does not fit on a 16 GB Mac).
 const BONSAI_GGUF = [
   ['ternary-bonsai2-27b-gguf', 'Ternary-Bonsai-2-27B-PTQ1_0.gguf', 'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf'],
   ['bonsai-27b-gguf', 'Bonsai-27B-Q1_0.gguf', 'Bonsai-27B-mmproj-Q8_0.gguf']
@@ -85,7 +85,7 @@ function createBonsaiBackend({ projectDir, port = 11436, startTimeoutMs = 240000
     async start() {
       if (proc && await healthy()) return;
       if (starting) return starting;
-      if (!backend.installed()) throw new Error('Bonsai o\'rnatilmagan: ' + cmd().required.filter(f => !fs.existsSync(f)).join(', '));
+      if (!backend.installed()) throw new Error('Bonsai is not installed: ' + cmd().required.filter(f => !fs.existsSync(f)).join(', '));
       starting = (async () => {
         const { bin, args } = cmd();
         fs.mkdirSync(path.join(projectDir, 'logs'), { recursive: true });
@@ -94,12 +94,12 @@ function createBonsaiBackend({ projectDir, port = 11436, startTimeoutMs = 240000
         proc.on('exit', code => { log(`bonsai exited (${code})`); proc = null; });
         const end = Date.now() + startTimeoutMs;
         while (Date.now() < end) {
-          if (!proc) throw new Error('Bonsai jarayoni ishga tushmadi (logs/bonsai.log)');
+          if (!proc) throw new Error('The Bonsai process did not start (logs/bonsai.log)');
           if (await healthy()) return;
           await new Promise(r => setTimeout(r, 1000));
         }
         await backend.evict();
-        throw new Error('Bonsai yuklanishi juda uzoq cho\'zildi');
+        throw new Error('Loading Bonsai took too long');
       })();
       try { await starting; } finally { starting = null; }
     },
@@ -123,12 +123,12 @@ function createBonsaiBackend({ projectDir, port = 11436, startTimeoutMs = 240000
   return backend;
 }
 
-// ── Gemini Cloud / Desktop Backend (0 RAM, bepul va kuchli) ────────────────────────
+// ── Gemini cloud/desktop backend (no RAM, free and capable) ─────────────────────────
 function createGeminiBackend({ geminiClient = require('../gemini') } = {}) {
   return {
     port: 0,
     async loaded() { return ['gemini-3.8-flash', 'gemini-3.8-pro']; },
-    async footprintBytes() { return 0; }, // Bulut/desktopda ishlaydi, RAM = 0
+    async footprintBytes() { return 0; }, // runs in the cloud/desktop app: RAM = 0
     async evict() { /* no-op */ },
     async chat({ model, system, user, images = [], maxTokens = 2048, format, think = false, timeoutMs }) {
       if (images && images.length) {

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * GOOGLE CALENDAR Skill — kelayotgan tadbirlarni ko'rish, yangi
- * tadbir/eslatma yaratish. Ulanish uchun avval bir marta:
+ * GOOGLE CALENDAR skill: view upcoming events and create new events or reminders.
+ * Connect once first:
  *   node scripts/google-oauth-setup.js
- * Kirish (stdin JSON): { action: "list_events"|"create_event", ... }
+ * Input (stdin JSON): { action: "list_events"|"create_event", ... }
  */
 
 const fs = require('fs');
@@ -18,9 +18,9 @@ const { apiRequest, isConnected } = require(path.join(PROJECT_DIR, 'skills', 'go
 
 const CAL_BASE = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
-// ── Kelayotgan tadbirlarni ko'rish (default: keyingi 7 kun) ────────────
+// ── Upcoming events (default: the next 7 days) ─────────────────────────
 async function listEvents(days = 7, maxResults = 20) {
-  if (!isConnected()) return { status: 'error', message: "Google ulanmagan — avval: node scripts/google-oauth-setup.js" };
+  if (!isConnected()) return { status: 'error', message: 'Google is not connected; first run: node scripts/google-oauth-setup.js' };
   const timeMin = new Date().toISOString();
   const timeMax = new Date(Date.now() + days * 86400000).toISOString();
   const params = new URLSearchParams({
@@ -38,12 +38,12 @@ async function listEvents(days = 7, maxResults = 20) {
   return { status: 'ok', events };
 }
 
-// ── Yangi tadbir/eslatma yaratish ────────────────────────────────────────
-// start/end: ISO vaqt ("2026-08-15T10:00:00") — mahalliy vaqt zonasi
-// (TIMEZONE) bo'yicha talqin qilinadi.
+// ── Create an event or reminder ─────────────────────────────────────────
+// start/end: ISO time ("2026-08-15T10:00:00"), interpreted in the local timezone
+// (TIMEZONE, or the Mac's timezone).
 async function createEvent(title, start, end, description) {
-  if (!isConnected()) return { status: 'error', message: "Google ulanmagan — avval: node scripts/google-oauth-setup.js" };
-  if (!title || !start) return { status: 'error', message: 'title va start kerak' };
+  if (!isConnected()) return { status: 'error', message: 'Google is not connected; first run: node scripts/google-oauth-setup.js' };
+  if (!title || !start) return { status: 'error', message: 'title and start are required' };
   const endTime = end || new Date(new Date(start).getTime() + 30 * 60000).toISOString().slice(0, 19);
   const body = {
     summary: title,

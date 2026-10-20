@@ -20,7 +20,7 @@ function wavMetrics(wav) {
     throw new Error('Yaroqsiz WAV fayl');
   }
   const dataMarker = wav.indexOf(Buffer.from('data'));
-  if (dataMarker < 0 || dataMarker + 8 >= wav.length) throw new Error('WAV data chunk topilmadi');
+  if (dataMarker < 0 || dataMarker + 8 >= wav.length) throw new Error('WAV data chunk not found');
   const start = dataMarker + 8;
   let sumSquares = 0;
   let peak = 0;
@@ -45,10 +45,10 @@ function wavMetrics(wav) {
 function assessSample(metrics, noiseRms = 0) {
   const minimumRms = Math.max(80, noiseRms * 1.8);
   if (metrics.rms < minimumRms || metrics.peak < minimumRms * 2) {
-    return { accepted: false, reason: 'ovoz juda past yoki nutq aniqlanmadi' };
+    return { accepted: false, reason: 'too quiet, or no speech detected' };
   }
   if (metrics.clippedRatio > 0.002 || metrics.peak >= 32767) {
-    return { accepted: false, reason: 'ovoz clipping qildi; mikrofondan sal uzoqlashing' };
+    return { accepted: false, reason: 'the audio clipped; move a little further from the microphone' };
   }
   return { accepted: true, reason: null };
 }
@@ -82,7 +82,7 @@ function question(rl, prompt) {
 async function main() {
   const count = Number(option('count', '40'));
   const phrase = option('phrase', 'Jarvis');
-  if (!Number.isInteger(count) || count < 1 || count > 500) throw new Error('--count 1..500 bo‘lishi kerak');
+  if (!Number.isInteger(count) || count < 1 || count > 500) throw new Error('--count must be 1..500');
 
   const session = new Date().toISOString().replace(/[:.]/g, '-');
   const output = path.join(ROOT, 'models', 'wake-word', 'recordings', 'positive', session);
@@ -91,13 +91,13 @@ async function main() {
   const manifest = { phrase, sampleRate: RATE, createdAt: new Date().toISOString(), samples: [] };
 
   console.log('\nJARVIS shaxsiy wake-word yozuvi');
-  console.log('• Audio faqat shu Mac’da saqlanadi va bulutga yuborilmaydi.');
-  console.log(`• ${count} marta “${phrase}” deng: ba’zan sekin, tez, pastroq va odatiy ohangda.`);
-  console.log('• Enter → signal tugaydi → so‘zni ayting. Ctrl+C bilan istalgan payt to‘xtatish mumkin.\n');
+  console.log('• Audio stays on this Mac and is never sent to the cloud.');
+  console.log(`• Say “${phrase}” ${count} times: sometimes slowly, quickly, quietly and in your normal tone.`);
+  console.log('• Enter → wait for the beep → say the word. Press Ctrl+C to stop at any time.\n');
 
   try {
     for (let index = 1; index <= count;) {
-      await question(rl, `[${index}/${count}] Tayyor bo‘lsangiz Enter bosing... `);
+      await question(rl, `[${index}/${count}] Press Enter when ready... `);
       const filename = `${String(index).padStart(3, '0')}.wav`;
       const file = path.join(output, filename);
       await playCue();
@@ -119,9 +119,9 @@ async function main() {
     rl.close();
   }
 
-  console.log(`\n✅ ${manifest.samples.length} ta sample saqlandi:`);
+  console.log(`\n✅ ${manifest.samples.length} samples saved:`);
   console.log(output);
-  console.log('Keyingi bosqich: negative/background corpus va model training.');
+  console.log('Next step: the negative/background corpus and model training.');
 }
 
 if (require.main === module) {
