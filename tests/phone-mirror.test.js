@@ -66,7 +66,7 @@ test('screenshot crops to the mirrored window bounds, not the whole screen', asy
 
 test('bounds() raises a clear error when the mirroring window is not ready', async () => {
   const pm = new PhoneMirror({ runOsa: async () => '', runJXA: async () => JSON.stringify({ x: 0, y: 0, width: 0, height: 0 }) });
-  await assert.rejects(pm.bounds(), /telefon ulanmagan/);
+  await assert.rejects(pm.bounds(), /phone may not be connected/);
 });
 
 test('type() sends the text via System Events keystroke after activating', async () => {

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 /**
- * GOOGLE OAUTH SETUP — bir martalik interaktiv ulanish skripti.
- * Google Calendar + Gmail'ga (o'qish+yozish+yuborish) ruxsat olish uchun.
- * Foydalanuvchi brauzerda bir marta Google akkountiga kirib "ruxsat
- * beraman" deydi, keyin Jarvis olgan "refresh token"ni saqlab qoladi —
- * shundan keyin har safar qayta so'ramasdan, fon rejimida ishlayveradi.
+ * GOOGLE OAUTH SETUP: one-time interactive connection script that grants
+ * Google Calendar + Gmail access (read, write, send). The user signs in to their
+ * Google account in the browser once and approves; JARVIS stores the refresh
+ * token and from then on works in the background without asking again.
  *
- * Ishlatish: node scripts/google-oauth-setup.js
+ * Usage: node scripts/google-oauth-setup.js
  */
 
 const fs = require('fs');
@@ -18,9 +17,9 @@ const { execSync } = require('child_process');
 const { PROJECT_DIR } = require('../core/paths');
 const ENV_PATH = path.join(PROJECT_DIR, '.env');
 
-// Google Console'dan yuklab olingan client_secret*.json ni .env ga o'tkazadi (qo'lda nusxalash shart emas):
+// Imports the client_secret*.json downloaded from Google Console into .env (no manual copying):
 //   node scripts/google-oauth-setup.js --client-file ~/Downloads/client_secret_XXXX.json
-// Fayl ko'rsatilmasa va .env da kalit bo'lmasa, ~/Downloads dagi eng yangi client_secret*.json olinadi.
+// Without a file argument and with no key in .env, the newest client_secret*.json in ~/Downloads is used.
 function importClientFile() {
   const os = require('os');
   const argIndex = process.argv.indexOf('--client-file');
@@ -38,15 +37,15 @@ function importClientFile() {
   if (!file) return;
   const parsed = JSON.parse(fs.readFileSync(file.replace(/^~/, os.homedir()), 'utf8'));
   const client = parsed.installed || parsed.web;
-  if (!client?.client_id || !client?.client_secret) throw new Error('client_secret JSON ichida client_id/client_secret topilmadi');
+  if (!client?.client_id || !client?.client_secret) throw new Error('client_id/client_secret not found in the client_secret JSON');
   let env = current;
   for (const [key, value] of [['GOOGLE_OAUTH_CLIENT_ID', client.client_id], ['GOOGLE_OAUTH_CLIENT_SECRET', client.client_secret]]) {
     env = new RegExp('^' + key + '=', 'm').test(env) ? env.replace(new RegExp('^' + key + '=.*$', 'm'), key + '=' + value) : env.replace(/\n?$/, '\n') + key + '=' + value + '\n';
   }
   fs.writeFileSync(ENV_PATH, env, { mode: 0o600 });
-  console.log('✅ OAuth kalitlari .env ga import qilindi (' + path.basename(file) + ')');
+  console.log('✅ OAuth keys imported into .env (' + path.basename(file) + ')');
 }
-try { importClientFile(); } catch (error) { console.error('❌ Import xatosi:', error.message); process.exit(1); }
+try { importClientFile(); } catch (error) { console.error('❌ Import error:', error.message); process.exit(1); }
 
 const ENV = fs.readFileSync(ENV_PATH, 'utf8');
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
@@ -57,8 +56,8 @@ const TOKENS_FILE = path.join(PROJECT_DIR, '.google-tokens.json');
 const PORT = 8721;
 const REDIRECT_URI = 'http://127.0.0.1:' + PORT + '/oauth/callback';
 
-// To'liq ruxsat: kalendar (o'qish+yozish) va gmail (o'qish+yozish+yuborish,
-// lekin butunlay o'chirish emas — gmail.modify shuni chegaralaydi).
+// Full access: calendar (read+write) and Gmail (read+write+send, but no permanent
+// deletion: gmail.modify enforces that).
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/gmail.modify',
@@ -111,15 +110,15 @@ async function main() {
 
     if (errParam) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end('<h2>Bekor qilindi: ' + errParam + '</h2>Bu oynani yopishingiz mumkin.');
-      console.error('❌ Foydalanuvchi rad etdi yoki xatolik:', errParam);
+      res.end('<h2>Cancelled: ' + errParam + '</h2>You can close this window.');
+      console.error('❌ The user declined or an error occurred:', errParam);
       server.close(); process.exit(1);
       return;
     }
-    if (!code) { res.writeHead(400); res.end('kod topilmadi'); return; }
+    if (!code) { res.writeHead(400); res.end('code not found'); return; }
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<h2>✅ Tayyor! Jarvis endi ulandi.</h2>Bu oynani yopishingiz mumkin, terminalga qayting.');
+    res.end('<h2>✅ Done! JARVIS is now connected.</h2>You can close this window and return to the terminal.');
 
     try {
       const tokenResp = await postJson('https://oauth2.googleapis.com/token', {
@@ -128,7 +127,7 @@ async function main() {
       });
       if (tokenResp.error) throw new Error(tokenResp.error_description || tokenResp.error);
       if (!tokenResp.refresh_token) {
-        console.error('⚠️  refresh_token kelmadi — ehtimol avval ruxsat berilgan. Google Account > Security > Third-party access\'dan "Jarvis Desktop"ni olib tashlab, qayta urinib ko\'ring.');
+        console.error('⚠️  No refresh_token returned; access was probably granted before. Remove "Jarvis Desktop" under Google Account > Security > Third-party access and try again.');
         server.close(); process.exit(1);
         return;
       }
@@ -138,24 +137,24 @@ async function main() {
         expiry_date: Date.now() + (tokenResp.expires_in || 3600) * 1000,
         scope: tokenResp.scope
       }, null, 2), { mode: 0o600 });
-      console.log('✅ Muvaffaqiyatli ulandi! Token saqlandi: ' + TOKENS_FILE);
-      console.log('   Ruxsatlar:', tokenResp.scope);
+      console.log('✅ Connected! Token saved: ' + TOKENS_FILE);
+      console.log('   Scopes:', tokenResp.scope);
     } catch (e) {
-      console.error('❌ Token almashtirishda xatolik:', e.message);
+      console.error('❌ Token exchange error:', e.message);
     }
     server.close();
     setTimeout(() => process.exit(0), 500);
   });
 
   server.listen(PORT, '127.0.0.1', () => {
-    console.log('🌐 Brauzerda quyidagi havola ochilmoqda (avtomatik)...');
+    console.log('🌐 Opening the link below in your browser (automatically)...');
     console.log(authUrl);
-    console.log('\nAgar avtomatik ochilmasa, yuqoridagi havolani qo\'lda brauzerga qo\'ying.');
+    console.log('\nIf it does not open automatically, paste the link above into your browser.');
     try { execSync('open "' + authUrl + '"'); } catch (e) {}
   });
 
   setTimeout(() => {
-    console.error('⏱️  5 daqiqa ichida javob kelmadi — bekor qilindi.');
+    console.error('⏱️  No response within 5 minutes; cancelled.');
     try { server.close(); } catch (e) {}
     process.exit(1);
   }, 5 * 60 * 1000);

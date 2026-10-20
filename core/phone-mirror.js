@@ -16,12 +16,11 @@ function isNotRunningError(message) {
   return /not running|can't get window|Invalid index|doesn't understand the .window. message/i.test(String(message || ''));
 }
 
-// iOS'da haqiqiy barmoq bosish yo'q — Mac'dagi "iPhone Mirroring" oynasi
-// sichqoncha bosish/sudrashni haqiqiy teginish sifatida telefonga uzatadi
-// (Apple'ning rasmiy imkoniyati, macOS 15+ / Apple Silicon). Shu sababli
-// bu modul faqat oyna chegaralarini topib, nisbiy (%) koordinatalarni
-// mutlaq ekran nuqtasiga aylantiradi — qolganini cliclick/System Events
-// bajaradi, xuddi haqiqiy Mac oynasidagi kabi.
+// iOS has no real finger input here: the Mac's "iPhone Mirroring" window delivers mouse
+// clicks and drags to the phone as real touches (Apple's official feature, macOS 15+ /
+// Apple Silicon). This module only finds the window bounds and converts relative (%)
+// coordinates to absolute screen points; cliclick/System Events do the rest, just like
+// in a normal Mac window.
 class PhoneMirror {
   constructor({ run = exec, runOsa = osa, runJXA = osaJXA, tmpDir = os.tmpdir() } = {}) {
     Object.assign(this, { run, runOsa, runJXA, tmpDir });
@@ -29,8 +28,8 @@ class PhoneMirror {
 
   async activate() {
     try { await this.runOsa(`tell application "${APP_NAME}" to activate`, 6000); }
-    catch (e) { throw new Error('iPhone Mirroring ochib bo\'lmadi: ' + e.message); }
-    // Oyna chiqishi va telefon bilan aloqa tayyor bo'lishi uchun qisqa kutish.
+    catch (e) { throw new Error('Could not open iPhone Mirroring: ' + e.message); }
+    // Short wait for the window to appear and the phone link to become ready.
     await new Promise(r => setTimeout(r, 400));
   }
 
@@ -53,17 +52,17 @@ class PhoneMirror {
     let raw;
     try { raw = await this.runJXA(script, 5000); }
     catch (e) {
-      if (isNotRunningError(e.message)) throw new Error('iPhone Mirroring oynasi topilmadi — avval activate() chaqiring va telefon ulanganini tekshiring');
+      if (isNotRunningError(e.message)) throw new Error('iPhone Mirroring window not found; call activate() first and check the phone is connected');
       throw e;
     }
     const b = JSON.parse(raw);
-    if (!b.width || !b.height) throw new Error('iPhone Mirroring oynasi hali tayyor emas (telefon ulanmagan bo\'lishi mumkin)');
+    if (!b.width || !b.height) throw new Error('iPhone Mirroring window is not ready yet (the phone may not be connected)');
     return b;
   }
 
-  // Telefon ekranining skrinshoti (faqat mirroring oynasi, butun Mac ekrani emas) — ko'rish/tahlil uchun.
-  // imageWidth/imageHeight — saqlangan PNG'ning xom piksel o'lchami (Retina bo'lsa bounds'dan katta) —
-  // tapPixel() chaqiruvchisi screen-vision qaytargan xom piksel koordinatani shu bilan aniq nisbatga o'tkazadi.
+  // Screenshot of the phone screen only (the mirroring window, not the whole Mac screen), for viewing/analysis.
+  // imageWidth/imageHeight are the saved PNG's raw pixel size (larger than bounds on Retina); tapPixel()
+  // uses them to convert the raw pixel coordinates from screen-vision into an exact ratio.
   async screenshot(destPath) {
     await this.activate();
     const b = await this.bounds();
@@ -94,16 +93,16 @@ class PhoneMirror {
     return { status: 'ok', tapped: { xPct, yPct, point: p } };
   }
 
-  // screen-vision/locate_elements xom piksel koordinata qaytaradi (o'sha skrinshotning o'z o'lchamida) —
-  // desktop-control'dagi click_at bilan bir xil naqsh: chaqiruvchi bo'lish/ko'paytirish qilmaydi, shu yerda hisoblanadi.
+  // screen-vision/locate_elements returns raw pixel coordinates (in that screenshot's own size); same
+  // pattern as click_at in desktop-control: callers never divide or multiply, it is computed here.
   async tapPixel(pixelX, pixelY, imageWidth, imageHeight, opts = {}) {
-    if (!imageWidth || !imageHeight) throw new Error('imageWidth/imageHeight kerak (screenshot() natijasidan)');
+    if (!imageWidth || !imageHeight) throw new Error('imageWidth/imageHeight are required (from the screenshot() result)');
     return this.tap(pixelX / imageWidth, pixelY / imageHeight, opts);
   }
 
-  // holdMs>0 bo'lsa (masalan pastdan tepaga sudrab, bir oz to'xtatib) — App Switcher kabi teginish-va-ushlab-turish undirilarga ishlatiladi.
-  // startHoldMs — sudrashdan OLDIN nuqtada bir oz turish: haqiqiy barmoq bosishi ham shunday, aks holda
-  // iOS buni tizim "uy indikatori" gesti emas, ilova ichidagi oddiy swipe deb tushunishi mumkin (sinovda aynan shu sabab bo'ldi).
+  // holdMs>0 (e.g. drag up from the bottom and pause) is used for touch-and-hold gestures like the App Switcher.
+  // startHoldMs: rest on the point briefly BEFORE dragging, like a real finger; otherwise iOS may treat it as an
+  // ordinary in-app swipe instead of the system home-indicator gesture (exactly what happened in testing).
   async swipe(fromXPct, fromYPct, toXPct, toYPct, { holdMs = 0, startHoldMs = 0, steps: stepCount = 1 } = {}) {
     await this.activate();
     const b = await this.bounds();
@@ -122,9 +121,9 @@ class PhoneMirror {
     return { status: 'ok', swiped: { from, to, holdMs, startHoldMs } };
   }
 
-  // Pastdan-tepaga sudrab "uy" gestini taqlid qilish sinovda ishonchsiz chiqdi (real barmoq
-  // fizikasi kerak). "iPhone Mirroring" ilovasining o'z View menyusida aynan shu buyruqlar tayyor —
-  // ular 100% aniq ishlaydi, gestga hojat yo'q.
+  // Simulating the "home" gesture by dragging up from the bottom proved unreliable in testing (it needs real
+  // finger physics). The "iPhone Mirroring" app's own View menu has exactly these commands, which work 100%
+  // reliably, so no gesture is needed.
   async _menuCommand(menuItemName) {
     await this.activate();
     await this.runOsa(

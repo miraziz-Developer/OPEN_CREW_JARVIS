@@ -13,7 +13,7 @@ const calibrationFile = path.join(ROOT, '.run', 'audio-calibration.json');
 const calibration = loadCalibration(calibrationFile);
 console.log(calibration
   ? `✅ Audio calibration: ${calibration.createdAt} | noise=${calibration.measurements?.noiseRmsP95} speech=${calibration.measurements?.speechRmsP50} echo=${calibration.measurements?.echoLagMs ?? 'n/a'}ms`
-  : '⚠️ Audio calibration yo‘q — `npm run voice:calibrate` tavsiya qilinadi');
+  : '⚠️ No audio calibration; running `npm run voice:calibrate` is recommended');
 const checks = [];
 const add = (name, ok, detail, level = ok ? 'ok' : 'error') => checks.push({ name, ok, detail, level });
 
@@ -36,7 +36,7 @@ function pidAlive(pid) {
 
 function checkBinary(name) {
   const r = spawnSync('which', [name], { encoding: 'utf8' });
-  add(`binary:${name}`, r.status === 0, r.status === 0 ? r.stdout.trim() : 'topilmadi');
+  add(`binary:${name}`, r.status === 0, r.status === 0 ? r.stdout.trim() : 'not found');
 }
 
 function checkWakeModels(env) {
@@ -48,7 +48,7 @@ function checkWakeModels(env) {
     return !fs.existsSync(modelPath);
   });
   add('wakeword:models', missing.length === 0,
-    missing.length ? `model topilmadi: ${missing.join(', ')}` : `tayyor: ${configured.join(', ')}`,
+    missing.length ? `model not found: ${missing.join(', ')}` : `ready: ${configured.join(', ')}`,
     missing.length ? 'warn' : 'ok');
 }
 
@@ -60,7 +60,7 @@ function envEnabled(value, defaultValue = false) {
 function checkWhisperWake(env) {
   const enabled = envEnabled(env.WHISPER_WAKE_ENABLED);
   if (!enabled) {
-    add('wakeword:whisper-fallback', true, 'config orqali o‘chirilgan');
+    add('wakeword:whisper-fallback', true, 'disabled in config');
     return;
   }
 
@@ -69,9 +69,9 @@ function checkWhisperWake(env) {
   const binaryReady = Boolean(binary && path.isAbsolute(binary) && fs.existsSync(binary));
   const modelReady = Boolean(model && path.isAbsolute(model) && fs.existsSync(model));
   add('wakeword:whisper-binary', binaryReady,
-    binaryReady ? binary : 'absolute WHISPER_WAKE_BINARY topilmadi');
+    binaryReady ? binary : 'absolute WHISPER_WAKE_BINARY not found');
   add('wakeword:whisper-model', modelReady,
-    modelReady ? `${model} (${Math.round(fs.statSync(model).size / 1024 / 1024)} MiB)` : 'absolute WHISPER_WAKE_MODEL topilmadi');
+    modelReady ? `${model} (${Math.round(fs.statSync(model).size / 1024 / 1024)} MiB)` : 'absolute WHISPER_WAKE_MODEL not found');
 
   let flagsReady = false;
   if (binaryReady) {
@@ -84,7 +84,7 @@ function checkWhisperWake(env) {
     flagsReady = !result.error && ['-m', '-f', '-l', '-nt', '-otxt', '-of'].every(flag => help.includes(flag));
   }
   add('wakeword:whisper-cli-flags', flagsReady,
-    flagsReady ? 'kerakli -m -f -l -nt -otxt -of flaglari mavjud' : 'whisper-cli flaglari mos emas yoki cold-start timeout ichida --help ishlamadi');
+    flagsReady ? 'required -m -f -l -nt -otxt -of flags present' : 'whisper-cli flags do not match, or --help failed within the cold-start timeout');
 }
 
 function checkMic(env) {
@@ -107,9 +107,9 @@ function checkMic(env) {
   try {
     const wav = fs.readFileSync(out);
     size = wav.length;
-    // SoX yozgan PCM16 WAV uchun data chunk odatda 44-baytdan boshlanadi.
-    // Diagnostika speech detector emas: uning vazifasi CoreAudio mutlaq nolga
-    // yaqin sample berayotganini ilg'ash. Shuning uchun juda past floor yetarli.
+    // In a PCM16 WAV written by SoX the data chunk usually starts at byte 44.
+    // This diagnostic is not a speech detector: it only catches CoreAudio delivering
+    // samples near absolute zero, so a very low floor is enough.
     let sumSquares = 0;
     let samples = 0;
     for (let i = 44; i + 1 < wav.length; i += 2) {
@@ -124,14 +124,14 @@ function checkMic(env) {
   const hasSignal = rms >= 2 || peak >= 8;
   add('microphone:capture', r.status === 0 && size > 1000 && hasSignal,
     r.status === 0
-      ? `${size} byte, RMS=${rms.toFixed(1)}, peak=${peak}${hasSignal ? '' : ' — mikrofon signal bermayapti/mute bo‘lishi mumkin'}`
-      : (r.stderr || r.error?.message || 'capture xato').trim().slice(-300));
+      ? `${size} bytes, RMS=${rms.toFixed(1)}, peak=${peak}${hasSignal ? '' : ' (no microphone signal; it may be muted)'}`
+      : (r.stderr || r.error?.message || 'capture error').trim().slice(-300));
 }
 
 function loadRuntime() {
   let runtime;
   try { runtime = JSON.parse(fs.readFileSync(path.join(ROOT, '.jarvis-runtime.json'), 'utf8')); }
-  catch (_) { add('runtime:state', false, '.jarvis-runtime.json yo‘q yoki buzilgan', 'warn'); return null; }
+  catch (_) { add('runtime:state', false, '.jarvis-runtime.json missing or corrupt', 'warn'); return null; }
   return runtime;
 }
 
@@ -139,11 +139,11 @@ function checkRuntime(runtime, owner) {
   if (!runtime) return;
   const daemon = runtime.components?.['voice-daemon'];
   const mic = runtime.components?.microphone;
-  add('runtime:daemon-heartbeat', owner.heartbeatFresh, daemon ? `${daemon.state || daemon.status || 'unknown'}, age=${daemon.ageMs}ms` : 'heartbeat yo‘q');
+  add('runtime:daemon-heartbeat', owner.heartbeatFresh, daemon ? `${daemon.state || daemon.status || 'unknown'}, age=${daemon.ageMs}ms` : 'no heartbeat');
   add('runtime:owner', owner.healthy,
-    owner.pid ? `pid=${owner.pid}, alive=${owner.pidAlive}, command=${owner.commandMatches ? 'voice-daemon' : 'mismatch'}, heartbeat-owner=${owner.heartbeatOwnsSnapshot}` : 'snapshot PID yo‘q');
+    owner.pid ? `pid=${owner.pid}, alive=${owner.pidAlive}, command=${owner.commandMatches ? 'voice-daemon' : 'mismatch'}, heartbeat-owner=${owner.heartbeatOwnsSnapshot}` : 'no snapshot PID');
   add('runtime:microphone-heartbeat', mic?.status === 'streaming' && Number(mic?.ageMs) < 15000,
-    mic ? `${mic.status}, age=${mic.ageMs ?? '?'}ms` : 'heartbeat yo‘q');
+    mic ? `${mic.status}, age=${mic.ageMs ?? '?'}ms` : 'no heartbeat');
   const rt = runtime.components?.['realtime-api'];
   if (rt) add('runtime:realtime', !['error', 'degraded'].includes(rt.status), rt.status || 'unknown', rt.status === 'degraded' ? 'warn' : undefined);
 }
@@ -151,16 +151,16 @@ function checkRuntime(runtime, owner) {
 function main() {
   const env = envFile();
   ['node', 'sox', 'afplay'].forEach(checkBinary);
-  add('config:azure-speech', Boolean(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION), 'key va region ' + (env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION ? 'mavjud' : 'yetishmaydi'));
-  add('config:azure-openai', Boolean(env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY), 'realtime/agent key ' + (env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY ? 'mavjud' : 'yetishmaydi'));
+  add('config:azure-speech', Boolean(env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION), 'key and region ' + (env.AZURE_SPEECH_KEY && env.AZURE_SPEECH_REGION ? 'present' : 'missing'));
+  add('config:azure-openai', Boolean(env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY), 'realtime/agent key ' + (env.AZURE_OPENAI_KEY || process.env.AZURE_OPENAI_KEY ? 'present' : 'missing'));
   const voiceLiveReady = Boolean(env.AZURE_VOICELIVE_ENDPOINT && env.AZURE_VOICELIVE_KEY);
   const realtimeReady = Boolean(env.AZURE_REALTIME_ENDPOINT && env.AZURE_REALTIME_KEY);
-  add('config:realtime-primary', realtimeReady, realtimeReady ? `${env.AZURE_REALTIME_DEPLOYMENT || 'gpt-realtime-2.1'} primary provider tayyor` : 'endpoint/key yetishmaydi', 'warn');
-  add('config:voice-live-fallback', voiceLiveReady, voiceLiveReady ? 'fallback provider tayyor' : 'endpoint/key yetishmaydi', 'warn');
+  add('config:realtime-primary', realtimeReady, realtimeReady ? `${env.AZURE_REALTIME_DEPLOYMENT || 'gpt-realtime-2.1'} Azure Realtime provider ready` : 'endpoint/key missing', 'warn');
+  add('config:voice-live-fallback', voiceLiveReady, voiceLiveReady ? 'Voice Live provider ready' : 'endpoint/key missing', 'warn');
   const daemonProcesses = findMatchingProcesses(path.join(ROOT, 'jarvis_daemon.js'));
   const sentinelProcesses = findMatchingProcesses(path.join(ROOT, 'scripts', 'pause-sentinel.js'));
-  add('process:voice-daemon', daemonProcesses.length === 1, daemonProcesses.length ? `pid=${daemonProcesses.map(p => p.pid).join(',')}` : 'ishlamayapti', 'warn');
-  add('process:pause-sentinel', sentinelProcesses.length === 1, sentinelProcesses.length ? `pid=${sentinelProcesses.map(p => p.pid).join(',')}` : 'ishlamayapti', 'warn');
+  add('process:voice-daemon', daemonProcesses.length === 1, daemonProcesses.length ? `pid=${daemonProcesses.map(p => p.pid).join(',')}` : 'not running', 'warn');
+  add('process:pause-sentinel', sentinelProcesses.length === 1, sentinelProcesses.length ? `pid=${sentinelProcesses.map(p => p.pid).join(',')}` : 'not running', 'warn');
   const runtime = loadRuntime();
   const runtimeOwner = inspectRuntimeOwner(runtime, { pidAlive, commandForPid });
   const daemonPids = daemonProcesses.map(process => process.pid);
@@ -171,7 +171,7 @@ function main() {
   const openWakeEnabled = envEnabled(env.OPENWAKEWORD_ENABLED, true);
   if (openWakeEnabled) checkWakeModels(env);
   add('wakeword:local-worker', !openWakeEnabled || wakePids.length === 1,
-    openWakeEnabled ? (wakePids.length === 1 ? `openWakeWord pid=${wakePids[0]}` : `kutilgan 1 ta worker, topildi ${wakePids.length}`) : 'config orqali o‘chirilgan',
+    openWakeEnabled ? (wakePids.length === 1 ? `openWakeWord pid=${wakePids[0]}` : `expected 1 worker, found ${wakePids.length}`) : 'disabled in config',
     openWakeEnabled ? 'error' : 'ok');
   checkWhisperWake(env);
   checkMic(env);

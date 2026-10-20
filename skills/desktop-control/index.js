@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * DESKTOP CONTROL Skill — ilova ochish, sichqoncha va klaviaturani
- * AppleScript/System Events orqali boshqaradi (macOS, native, dependency yo'q).
- * Kirish (stdin JSON): { action: "...", ... }
- * Chiqish: { status: "ok", ... } | { status: "error", message }
+ * DESKTOP CONTROL skill: opens apps and drives the mouse and keyboard
+ * through AppleScript/System Events (macOS, native, no dependencies).
+ * Input (stdin JSON): { action: "...", ... }
+ * Output: { status: "ok", ... } | { status: "error", message }
  */
 
 const { execFileSync } = require('child_process');
@@ -28,7 +28,7 @@ const ENABLED = (env('DESKTOP_CONTROL_ENABLED', 'true') || 'true') !== 'false';
 const worldModel = new WorldModel({ file: path.join(PROJECT_DIR, '.jarvis-world-model.json') });
 
 function ensureEnabled() {
-  if (!ENABLED) throw new Error('DESKTOP_CONTROL_ENABLED=false — kompyuter boshqaruvi o\'chirilgan');
+  if (!ENABLED) throw new Error('DESKTOP_CONTROL_ENABLED=false: computer control is disabled');
 }
 
 function runOsascript(script) {
@@ -36,11 +36,11 @@ function runOsascript(script) {
     return execFileSync('osascript', ['-e', script], { encoding: 'utf8', timeout: 8000 }).trim();
   } catch (e) {
     if (e.code === 'ETIMEDOUT' || e.signal === 'SIGTERM') {
-      throw new Error('Accessibility ruxsati kerak: Tizim sozlamalari → Maxfiylik va xavfsizlik → Accessibility → Terminal/node\'ga ruxsat bering');
+      throw new Error('Accessibility permission required: System Settings → Privacy & Security → Accessibility → allow Terminal/node');
     }
     const msg = (e.stderr || e.message || '').toString();
     if (msg.includes('not allowed') || msg.includes('(-1743)') || msg.includes('assistive access')) {
-      throw new Error('Accessibility ruxsati kerak: Tizim sozlamalari → Maxfiylik va xavfsizlik → Accessibility → Terminal/node\'ga ruxsat bering');
+      throw new Error('Accessibility permission required: System Settings → Privacy & Security → Accessibility → allow Terminal/node');
     }
     throw new Error(msg || e.message);
   }
@@ -50,9 +50,9 @@ function escAS(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-const CHROME_DEFAULT_PROFILE = env('CHROME_DEFAULT_PROFILE', 'Default'); // Chrome'da bir nechta hisob/profil bo'lgani uchun,
-// Chrome to'liq yopiq holatdan ochilganda profil-tanlash oynasi (picker)
-// chiqib qolardi. Shu profil har doim to'g'ridan-to'g'ri, so'ramasdan ochiladi.
+const CHROME_DEFAULT_PROFILE = env('CHROME_DEFAULT_PROFILE', 'Default'); // Chrome has several accounts/profiles,
+// so opening it from a fully closed state showed the profile picker. This profile always
+// opens directly, without asking.
 
 function openApp(name) {
   ensureEnabled();
@@ -82,13 +82,11 @@ function activateApp(name) {
   return { status: 'ok', activated: name };
 }
 
-// screen-vision skrinshotni HAQIQIY piksel o'lchamida ko'radi (Retina
-// ekranda odatda 2x), lekin System Events "click at" LOGIK nuqta
-// (point) koordinatasini kutadi. Shu ikkisini chalkashtirib yuborish —
-// noto'g'ri joyga bosishning eng ko'p uchraydigan sababi edi. Shuning
-// uchun bu yerda skrinshot-piksel koordinatani avtomatik logik
-// nuqtaga aylantiramiz (masshtabni bo'lib), chaqiruvchi har doim
-// screen-vision qaytargan xom piksel qiymatlarini yuborishi kifoya.
+// screen-vision sees the screenshot in REAL pixels (usually 2x on Retina), but System
+// Events "click at" expects LOGICAL point coordinates. Mixing the two up was the most
+// common cause of clicking the wrong place, so screenshot-pixel coordinates are
+// converted to logical points here (dividing by the scale); callers just pass the raw
+// pixel values screen-vision returned.
 let _scaleFactor = null;
 function getScaleFactor() {
   if (_scaleFactor) return _scaleFactor;
@@ -98,15 +96,14 @@ function getScaleFactor() {
     ], { encoding: 'utf8', timeout: 5000 }).trim();
     _scaleFactor = parseFloat(out) || 1;
   } catch (e) {
-    _scaleFactor = 1; // aniqlab bo'lmasa — o'zgartirmasdan qoldiramiz
+    _scaleFactor = 1; // if it cannot be determined, leave coordinates unchanged
   }
   return _scaleFactor;
 }
 
-// System Events'ning "click at" buyrug'i macOS'da doim ham ishonchli
-// ishlamaydi (ruxsatlar to'g'ri bo'lsa ham xatolik berishi mumkin edi).
-// Shuning uchun shu maqsad uchun maxsus yaratilgan `cliclick` vositasi
-// ishlatiladi (brew orqali o'rnatilgan, CGEvent asosida ishlaydi).
+// System Events "click at" is not always reliable on macOS (it could fail even with the
+// right permissions), so the purpose-built `cliclick` tool is used instead (installed via
+// brew, based on CGEvent).
 function clickAt(pxX, pxY, double) {
   ensureEnabled();
   const scale = getScaleFactor();
@@ -174,13 +171,13 @@ function inspectUi(input = {}) {
 function resolveElement(input = {}) {
   const snapshot = inspectAccessibility(input);
   const matches = findElements(snapshot.elements, input.query || input, { limit: 5, minScore: input.minScore });
-  if (!matches.length) throw new Error('UI element topilmadi: ' + JSON.stringify(input.query || input));
+  if (!matches.length) throw new Error('UI element not found: ' + JSON.stringify(input.query || input));
   const selectedIndex = Number(input.index || 0);
   const element = matches[selectedIndex];
-  if (!element) throw new Error(`UI element index topilmadi: ${selectedIndex}; mosliklar: ${matches.length}`);
+  if (!element) throw new Error(`UI element index not found: ${selectedIndex}; matches: ${matches.length}`);
   const ambiguous = selectedIndex === 0 && matches[1] && Math.abs(matches[0].score - matches[1].score) < 1 &&
     matches[0].title === matches[1].title && matches[0].role === matches[1].role;
-  if (ambiguous) throw new Error('UI element noaniq: bir xil kuchli bir nechta moslik bor; query yoki indexni aniqlashtiring');
+  if (ambiguous) throw new Error('UI element is ambiguous: several equally strong matches; refine the query or index');
   return { snapshot, element, alternatives: matches.slice(1).map(publicElement) };
 }
 
@@ -199,7 +196,7 @@ async function waitForElement(input = {}) {
   do {
     try {
       const found = findElement(input);
-      if (input.absent === true) lastError = new Error('Element hali ham mavjud');
+      if (input.absent === true) lastError = new Error('Element is still present');
       else return found;
     } catch (error) {
       if (input.absent === true) return { status: 'ok', absent: true, query: input.query || input };
@@ -207,13 +204,13 @@ async function waitForElement(input = {}) {
     }
     if (Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, intervalMs));
   } while (Date.now() < deadline);
-  throw lastError || new Error('UI element kutilgan vaqtda topilmadi');
+  throw lastError || new Error('UI element did not appear in time');
 }
 
 async function actOnElementOnce(input = {}, action = input.elementAction || 'press') {
   ensureEnabled();
   const resolved = resolveElement(input);
-  if (!resolved.element.enabled && action !== 'focus') throw new Error('UI element disabled, amal bajarilmadi');
+  if (!resolved.element.enabled && action !== 'focus') throw new Error('UI element is disabled; action not performed');
   const before = publicElement(resolved.element);
   const performed = performAccessibilityAction({ app: resolved.snapshot.app, path: resolved.element.path, action, value: input.value });
   if (input.verify === false) return { status: 'ok', performed, before };
@@ -244,7 +241,7 @@ async function actOnElement(input = {}, action = input.elementAction || 'press')
       if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, Math.min(800, 150 * attempt)));
     }
   }
-  throw new Error(`Semantic UI action ${maxAttempts} urinishdan keyin bajarilmadi: ${lastError?.message || lastError}`);
+  throw new Error(`Semantic UI action failed after ${maxAttempts} attempts: ${lastError?.message || lastError}`);
 }
 
 function authorizeDesktopInput(input = {}, options = {}) {
@@ -264,7 +261,7 @@ function scroll(input = {}) {
 }
 
 async function selectMenu(input = {}) {
-  if (!input.menu || !input.item) throw new Error('select_menu uchun menu va item kerak');
+  if (!input.menu || !input.item) throw new Error('select_menu needs menu and item');
   await actOnElement({ app: input.app, query: { name: input.menu, role: 'AXMenuBarItem' }, timeoutMs: input.timeoutMs }, 'press');
   return actOnElement({ app: input.app, query: { name: input.item, role: 'AXMenuItem' }, timeoutMs: input.timeoutMs, expect: input.expect }, 'press');
 }
@@ -287,7 +284,7 @@ async function waitForExpectation(before, expected, timeoutMs = 4000, intervalMs
     if (Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, intervalMs));
   } while (Date.now() < deadline);
   if (after) worldModel.verify(before, after, expected);
-  return { status: 'error', message: 'Amal natijasi ekranda tasdiqlanmadi', verification, context: after };
+  return { status: 'error', message: 'The action result could not be confirmed on screen', verification, context: after };
 }
 
 async function executeVerified(input) {
@@ -306,7 +303,7 @@ async function executeVerified(input) {
     case 'toggle_element': action = await actOnElement(input, 'press'); break;
     case 'scroll': action = await scroll(input); break;
     case 'select_menu': action = await selectMenu(input); break;
-    default: return { status: 'error', message: 'Verification qo‘llamaydigan action: ' + input.action };
+    default: return { status: 'error', message: 'Action does not support verification: ' + input.action };
   }
   const verified = await waitForExpectation(before, input.expect || { changed: true }, input.timeoutMs);
   return { ...verified, action };
@@ -320,7 +317,7 @@ async function main() {
     const safety = authorizeDesktopInput(input);
     if (!safety.allowed) {
       console.log(JSON.stringify({
-        status: 'confirmation_required', message: 'Bu amal tashqi, maxfiy yoki qaytarib bo‘lmaydigan ta’sir qilishi mumkin. Tasdiqdan keyin confirmed:true bilan qayta chaqiring.',
+        status: 'confirmation_required', message: 'This action may have external, private or irreversible effects. Call again with confirmed:true after confirmation.',
         risk: safety.assessment.risk, fingerprint: safety.assessment.fingerprint
       }));
       return;
