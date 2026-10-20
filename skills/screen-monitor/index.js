@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * SCREEN MONITOR Skill — Trigger-asosli ekran kuzatuv
- * Har N soniyada skrinshot + piksel diff
- * Farq > threshold bo'lsa LLM tahliliga yuboradi
- * Foydalanuvchini bezovta qilmaydi (faqat log/memory)
+ * SCREEN MONITOR skill: trigger-based screen observation.
+ * Takes a screenshot every N seconds and computes a pixel diff; when the diff
+ * exceeds the threshold AND the active context changed, the screen is analysed
+ * by a vision model. It never interrupts the user (log and memory only).
  */
 
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { collectMacOSContext } = require('../../core/macos-context');
 const { WorldModel } = require('../../core/world-model');
 
@@ -20,7 +19,7 @@ const CUR_SCREENSHOT = '/tmp/jarvis_curr_screen.png';
 const WORLD_MODEL_FILE = path.join(PROJECT_DIR, '.jarvis-world-model.json');
 const worldModel = new WorldModel({ file: WORLD_MODEL_FILE });
 
-// ── Config (.env dan) ─────────────────────────────────────────────────
+// ── Config (environment overrides .env) ──────────────────────────────
 let ENV = ''; try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (_) {}
 function getEnv(key, def) {
   if (process.env[key] !== undefined) return process.env[key];
@@ -28,18 +27,18 @@ function getEnv(key, def) {
   return m ? m[1].trim() : def;
 }
 
-const INTERVAL_MS = parseInt(getEnv('SCREEN_MONITOR_INTERVAL', '90000'), 10); // 90s default
+const INTERVAL_MS = parseInt(getEnv('SCREEN_MONITOR_INTERVAL', '90000'), 10); // 90 s default
 const DIFF_THRESHOLD = parseFloat(getEnv('SCREEN_MONITOR_THRESHOLD', '15'));   // 15% default
 const ENABLED = getEnv('SCREEN_MONITOR_ENABLED', 'true') === 'true';
 
 // ── State ─────────────────────────────────────────────────────────────
 let isRunning = false;
 let lastLLMCall = 0;
-// Oxirgi old oynani process xotirasida saqlaymiz. Rekonstruksiya qilingan
-// versiyada ishlatilishi qolib, deklaratsiyasi yo'qolgan edi; birinchi diff
-// paytida ReferenceError berib monitorni foydasiz error-loopga tushirardi.
+// Last front window, kept in process memory. A reconstructed version once used
+// it without declaring it, throwing a ReferenceError on the first diff and
+// sending the monitor into a useless error loop.
 let lastFrontWindow = null;
-let llmCooldownMs = parseInt(getEnv('SCREEN_MONITOR_VISION_COOLDOWN', '120000'), 10); // vision chaqiruvlar orasidagi minimal oraliq
+const llmCooldownMs = parseInt(getEnv('SCREEN_MONITOR_VISION_COOLDOWN', '120000'), 10); // minimum gap between vision calls
 
 function loadState() {
   try {
@@ -62,24 +61,19 @@ function takeScreenshot(outPath) {
   } catch (e) { return false; }
 }
 
-// ── Piksel diff (ImageMagick yoki oddiy) ──────────────────────────────
+// ── Pixel diff (ImageMagick, or a file-size fallback) ─────────────────
 function pixelDiff(prevPath, currPath) {
-  // ImageMagick compare
   try {
     const result = execSync('compare -metric MAE "' + prevPath + '" "' + currPath + '" /tmp/jarvis_diff.png 2>&1', { encoding: 'utf8', timeout: 10000 });
-    // Output: 1234.56 (0.0188321) yoki shunga o'xshash
+    // Output looks like: 1234.56 (0.0188321)
     const match = result.match(/\(([^)]+)\)/);
-    if (match) {
-      const normalizedDiff = parseFloat(match[1]) * 100; // 0.0188 -> 1.88%
-      return normalizedDiff;
-    }
+    if (match) return parseFloat(match[1]) * 100; // 0.0188 -> 1.88%
   } catch (e) {
-    // ImageMagick yo'q bo'lsa
+    // ImageMagick is not installed
   }
 
-  // Fallback: oddiy piksel diff (yoki JavaScript'da)
+  // Fallback: compare file sizes
   try {
-    // Oddiy file size diff
     const s1 = fs.statSync(prevPath).size;
     const s2 = fs.statSync(currPath).size;
     const max = Math.max(s1, s2);
@@ -88,42 +82,43 @@ function pixelDiff(prevPath, currPath) {
   } catch (e) { return 100; }
 }
 
-// ── Vision tahlil (haqiqiy skrinshotni gpt-4.1'ga yuboradi) ───────────
+// ── Vision analysis (sends the real screenshot to the vision model) ───
 const { describeImage, buildGroundedPrompt } = require('./../screen-vision/index.js');
 
-// Lokal miya rejimida (JARVIS_BRAIN=local) fon rasm tahlili yagona lokal modelni band qiladi va agentning
-// prompt keshini o'chiradi — keyingi buyruq daqiqalab sekinlashadi. Shu sabab u yerda faqat metadata
-// (ilova, oyna, brauzer sahifasi) yoziladi. SCREEN_MONITOR_LOCAL_VISION=1 — baribir rasm tahlili.
+// In local-brain mode (JARVIS_BRAIN=local) background image analysis would occupy
+// the single local model and evict the agent's prompt cache, slowing the next
+// command by minutes. So only metadata (app, window, browser page) is recorded
+// there. SCREEN_MONITOR_LOCAL_VISION=1 forces image analysis anyway.
 function metadataSummary(context) {
   if (!context) return '';
   const parts = [context.app, context.window?.title, context.browser?.title, context.browser?.url].filter(Boolean);
   return [...new Set(parts.map(p => String(p).trim()))].join(' — ').slice(0, 500);
 }
 
+const ANALYSIS_PROMPT =
+  'Analyse this screenshot in detail: what exactly is the user doing right now? ' +
+  'If several windows or apps are visible, describe EACH separately: which app and what exactly is in it ' +
+  '(file or project name, which part of the code or text, who they are talking to and about what, which site or video, etc.). ' +
+  'Do not guess; describe only what is clearly visible. Be concrete and detailed, not vague. ' +
+  'If only the clock changed or there is genuinely no meaningful activity, reply with exactly: NOTHING\n\n' +
+  'IMPORTANT: if the screen shows something truly URGENT the user must know IMMEDIATELY (for example an error or crash ' +
+  'dialog, a security warning, a usage limit or quota running out, an important deadline approaching, a payment or ' +
+  'account warning), start your reply with exactly "URGENT: " (e.g. "URGENT: the Xcode build stopped with an error"). ' +
+  'NEVER use this prefix for normal, expected work (writing code, browsing, chatting); only for genuinely unusual ' +
+  'situations that could cause harm if ignored.';
+
 async function analyzeScreen(imagePath, context) {
   const now = Date.now();
   if (String(getEnv('JARVIS_BRAIN', '')).toLowerCase() === 'local' && getEnv('SCREEN_MONITOR_LOCAL_VISION', '') !== '1') {
     const summary = metadataSummary(context);
-    return summary ? { status: 'ok', summary } : { status: 'error', message: 'kontekst yo\'q' };
+    return summary ? { status: 'ok', summary } : { status: 'error', message: 'no context' };
   }
   if (now - lastLLMCall < llmCooldownMs) {
-    return { status: 'cooldown', message: 'LLM cooldown faol' };
+    return { status: 'cooldown', message: 'LLM cooldown active' };
   }
 
-  const prompt = 'Ekran skrinshotini batafsil tahlil qil — foydalanuvchi hozir aniq nima ish qilyapti? ' +
-    'Agar bir nechta oyna/ilova ko\'rinsa, HAR BIRINI alohida yoz: qaysi ilova, unda aniq nima ' +
-    '(fayl/loyiha nomi, qaysi kod/matn qismi, kim bilan qanday mavzuda gaplashilyapti, qaysi sayt/video va h.k.). ' +
-    'Taxmin qilma, faqat aniq ko\'rinib turgan narsani yoz. Konkret va batafsil bo\'lsin, sayoz umumlashtirma. ' +
-    'Agar faqat vaqt/soat o\'zgargan bo\'lsa yoki haqiqatan hech qanday mazmunli faoliyat yo\'q bo\'lsa — "hech narsa" deb javob ber.\n\n' +
-    'MUHIM: agar ekranda foydalanuvchi DARHOL bilishi kerak bo\'lgan, chindan SHOSHILINCH narsa ko\'rinsa (masalan: ' +
-    'xato/crash dialogi, xavfsizlik ogohlantirishi, "usage limit"/kvota tugagani, muhim muddat/deadline yaqinlashgani, ' +
-    'to\'lov/hisob bilan bog\'liq ogohlantirish) — javobingizni ANIQ "SHOSHILINCH: " so\'zi bilan boshlang (masalan ' +
-    '"SHOSHILINCH: Xcode build xato bilan to\'xtadi"). Oddiy, kutilgan ish jarayoni (kod yozish, brauzerda kezish, ' +
-    'suhbat) uchun bu prefiksni HECH QACHON ishlatmang — faqat chindan g\'ayrioddiy, e\'tiborsiz qoldirilsa zarar ' +
-    'keltirishi mumkin bo\'lgan holatlarda.';
-
   try {
-    const summary = await describeImage(imagePath, buildGroundedPrompt(prompt, context));
+    const summary = await describeImage(imagePath, buildGroundedPrompt(ANALYSIS_PROMPT, context));
     lastLLMCall = Date.now();
     return { status: 'ok', summary };
   } catch (e) {
@@ -132,13 +127,23 @@ async function analyzeScreen(imagePath, context) {
   }
 }
 
-// ── ARZON SIGNAL: old oyna (ilova + sarlavha) ────────────────────────
-// Rasm ham, LLM ham kerak emas — ~0.5 soniya, narxi nol. Piksel farqi
-// juda dag'al o'lchov: sahifani aylantirish, video ijrosi, matn yozish
-// — hammasi katta farq beradi, holbuki foydalanuvchi AYNAN O'SHA ishni
-// qilyapti. Shu sabab bugun 52 ta deyarli bir xil vision chaqiruvi
-// (har biri pullik) va 52 ta takroriy xotira yozuvi hosil bo'lgan.
-// Endi qimmat tahlil faqat KONTEKST chindan almashganda chaqiriladi.
+/**
+ * Interprets a vision summary: "NOTHING" means skip; an "URGENT:" prefix marks an urgent entry.
+ * The Uzbek markers of the previous prompt ("hech narsa", "SHOSHILINCH:") are still understood.
+ */
+function parseScreenAnalysis(summary) {
+  const text = String(summary || '').trim();
+  if (!text || /^(?:nothing|hech narsa)[.!]?$/i.test(text)) return { skip: true, urgent: false, text: '' };
+  const urgentMatch = text.match(/^(?:URGENT|SHOSHILINCH):\s*/i);
+  return { skip: false, urgent: Boolean(urgentMatch), text: urgentMatch ? text.slice(urgentMatch[0].length).trim() : text };
+}
+
+// ── Cheap signal: the front window (app + title) ──────────────────────
+// No image and no LLM needed: ~0.5 s and free. Pixel diff is a very coarse
+// measure: scrolling, video playback and typing all produce large diffs while
+// the user is doing the SAME work. That once produced 52 nearly identical
+// (paid) vision calls and 52 duplicate memory entries in a day. The expensive
+// analysis now runs only when the CONTEXT really changes.
 const FRONT_WINDOW_SCRIPT = 'tell application "System Events"\n' +
   '  set frontApp to name of first application process whose frontmost is true\n' +
   '  set winName to ""\n' +
@@ -150,8 +155,7 @@ const FRONT_WINDOW_SCRIPT = 'tell application "System Events"\n' +
 
 function getFrontWindow() {
   try {
-    // timeout: System Events ba'zan javob bermay qolishi mumkin — butun
-    // kuzatuv halqasi shu sabab osilib qolmasin.
+    // Timeout: System Events sometimes stops responding; the loop must not hang on it.
     return execSync('osascript -e ' + JSON.stringify(FRONT_WINDOW_SCRIPT) + ' 2>/dev/null',
       { encoding: 'utf8', timeout: 5000 }).trim();
   } catch (e) { return null; }
@@ -163,27 +167,45 @@ function observeWorld(screen) {
   return worldModel.observe(context, { type: screen ? 'screen.analyzed' : 'context.observed' });
 }
 
+function recordAnalysis(state, summary) {
+  const result = parseScreenAnalysis(summary);
+  if (result.skip) return false;
+
+  // Urgent entries get an extra #urgent tag; the urgent-check job polls for it every
+  // few minutes (much more often than the 30-minute proactive cycle) and announces it.
+  const tags = result.urgent ? ['screen', 'trigger', 'auto', 'urgent'] : ['screen', 'trigger', 'auto'];
+  try {
+    const memPath = path.join(PROJECT_DIR, 'skills', 'memory', 'index.js');
+    if (fs.existsSync(memPath)) require(memPath).writeMemory('Screen change', result.text, tags);
+  } catch (e) {}
+
+  state.lastTrigger = Date.now();
+  state.lastSummary = result.text;
+  saveState(state);
+  return true;
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────
 async function runLoop() {
   const state = loadState();
   if (!state.enabled) {
-    console.log('Screen monitor o\'chirilgan (.screen-monitor-state)');
+    console.log('Screen monitor is disabled (.screen-monitor-state)');
     return;
   }
 
   isRunning = true;
-  console.log('Screen monitor ishga tushdi. Interval: ' + INTERVAL_MS + 'ms, Threshold: ' + DIFF_THRESHOLD + '%');
+  console.log('Screen monitor started. Interval: ' + INTERVAL_MS + 'ms, threshold: ' + DIFF_THRESHOLD + '%');
 
   while (isRunning) {
     try {
       const s = loadState();
-      if (!s.enabled) { console.log('O\'chirildi'); break; }
+      if (!s.enabled) { console.log('Disabled'); break; }
 
-      // 1. Skrinshot
+      // 1. Screenshot
       const ok = takeScreenshot(CUR_SCREENSHOT);
       if (!ok) { await sleep(INTERVAL_MS); continue; }
 
-      // 2. Diff (birinchisi o'tkazib yuboriladi)
+      // 2. Diff (the first frame is skipped)
       if (fs.existsSync(LAST_SCREENSHOT)) {
         const diff = pixelDiff(LAST_SCREENSHOT, CUR_SCREENSHOT);
         let observation = null;
@@ -194,55 +216,29 @@ async function runLoop() {
         const contextChanged = observation ? observation.diff.contextChanged : frontWindow !== null && frontWindow !== lastFrontWindow;
         if (frontWindow !== null) lastFrontWindow = frontWindow;
         console.log('Diff: ' + diff.toFixed(2) + '% (threshold: ' + DIFF_THRESHOLD + '%)' +
-          ' | oyna: ' + (frontWindow || '?') + (contextChanged ? ' [ALMASHDI]' : ''));
+          ' | window: ' + (frontWindow || '?') + (contextChanged ? ' [CHANGED]' : ''));
 
-        // Qimmat vision tahlili faqat KONTEKST almashganda. Piksel farqi
-        // katta bo'lsa-yu, foydalanuvchi o'sha ilova/oynada qolgan bo'lsa —
-        // bu yangi ma'lumot emas (aylantirish, video, yozish), o'tkazamiz.
+        // Expensive vision analysis only when the CONTEXT changed. A large pixel diff
+        // while the user stays in the same app/window (scrolling, video, typing) is
+        // not new information, so it is skipped.
         if (diff > DIFF_THRESHOLD && contextChanged) {
-          console.log('  ⚠️ TRIGGER: kontekst almashdi (' + diff.toFixed(1) + '%)');
+          console.log('  ⚠️ TRIGGER: context changed (' + diff.toFixed(1) + '%)');
 
-          // 3. Tahlil (faqat katta o'zgarishda)
+          // 3. Analysis (only on a real change)
           const analysis = await analyzeScreen(CUR_SCREENSHOT, observation?.snapshot);
           if (analysis.status === 'ok' && analysis.summary && analysis.summary.length > 5) {
             try { observeWorld({ summary: analysis.summary, imagePath: CUR_SCREENSHOT }); } catch (e) {}
-            const timestamp = new Date().toISOString();
-            const logEntry = timestamp + ' | DIFF=' + diff.toFixed(1) + '% | ' + analysis.summary + '\n';
-
-            // "SHOSHILINCH:" prefiksi bo'lsa, alohida #urgent teg bilan
-            // belgilanadi — jarvis_daemon.js buni tez-tez (30 daqiqalik
-            // umumiy proaktiv tsikldan farqli, bir necha daqiqada) tekshirib,
-            // DARHOL ovozli xabar berish uchun ishlatadi.
-            const urgentMatch = analysis.summary.match(/^SHOSHILINCH:\s*/i);
-            const cleanSummary = urgentMatch ? analysis.summary.slice(urgentMatch[0].length).trim() : analysis.summary;
-            const tags = urgentMatch ? ['screen', 'trigger', 'auto', 'urgent'] : ['screen', 'trigger', 'auto'];
-
-            // Memory'ga yozish
-            try {
-              const memPath = path.join(PROJECT_DIR, 'skills', 'memory', 'index.js');
-              if (fs.existsSync(memPath)) {
-                const mem = require(memPath);
-                mem.writeMemory('Ekran o\'zgarishi', cleanSummary, tags);
-              }
-            } catch (e) {}
-
-            // State yangilash
-            state.lastTrigger = Date.now();
-            state.lastSummary = cleanSummary;
-            saveState(state);
-
-            // Telegram'ga YUBORMAYMIZ (foydalanuvchini bezovta qilmaydi)
-            // Faqat console.log
-            console.log('  📋 Tahlil:', analysis.summary.substring(0, 120));
+            // Never sent to Telegram (it must not disturb the user); console only.
+            if (recordAnalysis(state, analysis.summary)) console.log('  📋 Analysis:', analysis.summary.substring(0, 120));
           }
         }
       }
 
-      // 4. Almashtirish
+      // 4. Rotate frames
       try { fs.copyFileSync(CUR_SCREENSHOT, LAST_SCREENSHOT); } catch (e) {}
 
     } catch (e) {
-      console.error('Screen monitor xatolik:', e.message);
+      console.error('Screen monitor error:', e.message);
     }
 
     await sleep(INTERVAL_MS);
@@ -256,7 +252,7 @@ function setEnabled(val) {
   const s = loadState();
   s.enabled = val;
   saveState(s);
-  console.log('Screen monitor:', val ? 'YONDI ✅' : 'O\'CHDI ❌');
+  console.log('Screen monitor:', val ? 'ON ✅' : 'OFF ❌');
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────
@@ -278,20 +274,22 @@ function main() {
       isRunning = false;
       console.log(JSON.stringify({ status: 'ok', enabled: false }));
       break;
-    case 'status':
+    case 'status': {
       const s = loadState();
       console.log(JSON.stringify({ status: 'ok', enabled: s.enabled, lastTrigger: s.lastTrigger, lastSummary: s.lastSummary }));
       break;
-    case 'toggle':
+    }
+    case 'toggle': {
       const st = loadState();
       setEnabled(!st.enabled);
       console.log(JSON.stringify({ status: 'ok', enabled: !st.enabled }));
       break;
+    }
     default:
-      console.log(JSON.stringify({ status: 'error', message: 'Noma\'lum action: ' + action }));
+      console.log(JSON.stringify({ status: 'error', message: 'Unknown action: ' + action }));
   }
 }
 
 if (require.main === module) main();
 
-module.exports = { runLoop, setEnabled, pixelDiff, loadState, observeWorld, analyzeScreen, metadataSummary };
+module.exports = { runLoop, setEnabled, pixelDiff, loadState, observeWorld, analyzeScreen, metadataSummary, parseScreenAnalysis };
