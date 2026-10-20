@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { validateAzureOpenAI, validateSpeech, validateTelegram, runWizard, parse, baseUrl } = require('../scripts/setup-env');
+const { validateAzureOpenAI, validateGemini, validateSpeech, validateTelegram, runWizard, parse, baseUrl } = require('../scripts/setup-env');
 
 const respond = status => async () => ({ status, body: '{}' });
 
@@ -36,6 +36,7 @@ test('wizard writes keys, copies voice defaults, generates a gateway token, sets
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiz-'));
   const envPath = path.join(dir, '.env');
   const io = scripted(['https://r.services.ai.azure.com', 'OPENAI-KEY', '',   // llm (Enter = default deployment)
+                       '',                                                    // gemini skipped
                        '', '', '',                                            // voice: Enter, Enter, Enter
                        'SPEECH-KEY', 'swedencentral',                          // speech
                        '', '',                                                 // telegram skipped
@@ -50,7 +51,7 @@ test('wizard writes keys, copies voice defaults, generates a gateway token, sets
   assert.equal(env.get('AZURE_VOICELIVE_API_KEY'), 'OPENAI-KEY');
   assert.equal(env.get('AZURE_VOICELIVE_MODEL'), 'gpt-realtime');
   assert.equal(env.get('JARVIS_CONFIRM_MODE'), 'payments');
-  // Har bir javob o'z maydoniga tushganini tekshiramiz (avval javoblar siljib, Telegram tokeniga region yozilib qolgan edi).
+  // Every answer must land in its own field (answers once shifted and the region ended up in the Telegram token).
   assert.equal(env.get('AZURE_SPEECH_KEY'), 'SPEECH-KEY');
   assert.equal(env.get('AZURE_SPEECH_REGION'), 'swedencentral');
   assert.equal(env.get('TELEGRAM_BOT_TOKEN') || '', '');
@@ -82,8 +83,9 @@ test('a rejected key can be re-entered in place, and deployment/region defaults 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wiz-'));
   const envPath = path.join(dir, '.env');
   const prompts = [];
-  const queue = ['https://r.services.ai.azure.com', 'BAD-KEY', 'my-deploy',     // llm, 1-urinish (kalit noto'g'ri)
-                 'y', '', 'GOOD-KEY', '',                                        // qayta: endpoint saqlanadi, yangi kalit, deployment saqlanadi
+  const queue = ['https://r.services.ai.azure.com', 'BAD-KEY', 'my-deploy',     // llm, first attempt (wrong key)
+                 'y', '', 'GOOD-KEY', '',                                        // retry: keep endpoint, new key, keep deployment
+                 '',                                                             // gemini skipped
                  '', '', '',                                                     // voice
                  'S', 'westeurope',                                              // speech
                  '', '',                                                         // telegram
@@ -97,8 +99,14 @@ test('a rejected key can be re-entered in place, and deployment/region defaults 
   assert.equal(env.get('AZURE_OPENAI_DEPLOYMENT'), 'my-deploy');
   assert.equal(env.get('AZURE_SPEECH_REGION'), 'westeurope');
   assert.equal(env.get('JARVIS_CONFIRM_MODE'), 'strict');
-  assert.ok(prompts.some(p => /Model deployment nomi \[gpt-5-mini\]/.test(p)), 'deployment default shown');
+  assert.ok(prompts.some(p => /Model deployment name \[gpt-5-mini\]/.test(p)), 'deployment default shown');
   assert.ok(prompts.some(p => /Speech region/.test(p)), 'region asked');
-  assert.ok(prompts.some(p => /Qayta kiritasizmi/.test(p)), 'retry offered');
-  assert.ok(prompts.some(p => /API key \[Enter = saqlangan\]/.test(p)), 'saved secret offered as default on retry');
+  assert.ok(prompts.some(p => /Try again\?/.test(p)), 'retry offered');
+  assert.ok(prompts.some(p => /API key \[Enter = saved\]/.test(p)), 'saved secret offered as default on retry');
+});
+
+test('Gemini key validation', async () => {
+  assert.equal((await validateGemini('k', respond(200))).ok, true);
+  assert.equal((await validateGemini('k', respond(400))).ok, false);
+  assert.equal((await validateGemini('k', async () => ({ status: 0, error: 'ENOTFOUND' }))).ok, null);
 });
