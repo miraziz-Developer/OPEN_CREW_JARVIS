@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Open Interpreter worker (Azure gpt-5-mini) — past reasoning_effort bilan tez.
+"""Open Interpreter worker (Azure gpt-5-mini), fast thanks to a low reasoning_effort.
 
-Kirish (stdin JSON): {"task": "...", "cwd": "/abs/dir"}
+Input (stdin JSON): {"task": "...", "cwd": "/abs/dir"}
 Muhit: OPENAI_API_KEY, OPENAI_API_BASE (Azure …/openai/v1), INTERPRETER_MODEL, INTERPRETER_REASONING
-Chiqish: oxirgi satr — JSON {"ok": bool, "output": str}
+Output: the last line is JSON {"ok": bool, "output": str}
 """
 import json
 import os
@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore")
 request = json.loads(sys.stdin.read() or "{}")
 task = str(request.get("task", "")).strip()
 if not task:
-    print(json.dumps({"ok": False, "output": "", "error": "task kerak"}))
+    print(json.dumps({"ok": False, "output": "", "error": "task is required"}))
     sys.exit(0)
 if request.get("cwd"):
     os.makedirs(request["cwd"], exist_ok=True)

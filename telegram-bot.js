@@ -419,7 +419,7 @@ async function handleMessage(chatId, userText, isVoice) {
   // 3a. XOTIRA: "eslab qol" buyruqi
   if (/eslab qol|esda tut|xotira|memory/i.test(userText) && userText.length > 20) {
     const clean = userText.replace(/eslab qol|esda tut|xotira|memory/gi, '').trim();
-    const wr = writeMemory('Telegram eslatma', clean, ['telegram']);
+    const wr = writeMemory('Telegram note', clean, ['telegram']);
     await bot.sendMessage(chatId, '✅ Remembered: ' + clean.substring(0, 100));
     return;
   }
@@ -640,7 +640,7 @@ async function handleRemoteCommand(chatId, text, msg) {
     await bot.sendChatAction(chatId, 'typing');
     try {
       const out = execSync(args, { encoding: 'utf8', timeout: 30000, cwd: os.homedir(), env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}` } });
-      const resText = (out || '(bo\'sh chiqish)').trim();
+      const resText = (out || '(empty output)').trim();
       if (resText.length > 3500) {
         const outPath = path.join('/tmp', `sh_out_${Date.now()}.txt`);
         fs.writeFileSync(outPath, resText, 'utf8');

@@ -9,7 +9,7 @@ const corpusPath = path.join(__dirname, '..', 'benchmarks', 'uzbek-pronunciation
 const corpus = JSON.parse(fs.readFileSync(corpusPath, 'utf8'));
 
 console.log('Uzbek speech A/B preview');
-console.log('A = xom matn, B = cinematic-uzbek uchun normalizatsiya\n');
+console.log('A = raw text, B = normalised for cinematic Uzbek speech\n');
 for (const sample of corpus) {
   console.log(`[${sample.id}]`);
   console.log(`A: ${sample.text}`);

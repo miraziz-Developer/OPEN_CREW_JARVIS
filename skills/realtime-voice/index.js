@@ -2266,7 +2266,7 @@ class RealtimeSession extends EventEmitter {
         output = 'Nothing about this was found in memory.';
       }
     } catch (e) {
-      output = 'Xotirani qidirib bo\'lmadi: ' + (e.message || '').slice(0, 150);
+      output = 'Memory search failed: ' + (e.message || '').slice(0, 150);
     }
     this.emit('tool_result', output.slice(0, 200), msg.call_id);
     try {
