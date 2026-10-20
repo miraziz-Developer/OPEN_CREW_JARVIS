@@ -348,9 +348,9 @@ test('Fn is a hands-free conversation trigger and release does not force VAD fin
   const realtimeSource = fs.readFileSync(path.join(__dirname, '..', 'skills', 'realtime-voice', 'index.js'), 'utf8');
 
   assert.match(daemonSource, /triggerVoice\('⌨️ Fn hands-free conversation'\)/);
-  assert.match(daemonSource, /Fn qo'yib yuborilishi suhbat turnini yopmaydi/);
+  assert.match(daemonSource, /Releasing Fn does not close the turn/);
   assert.match(daemonSource, /restartFromFn = true/);
-  assert.match(daemonSource, /Fn har doim yangi suhbatni boshlash tugmasi bo'lishi kerak/);
+  assert.match(daemonSource, /Fn must always start a new conversation/);
   assert.doesNotMatch(daemonSource, /finishPushToTalkTurn/);
   assert.doesNotMatch(realtimeSource, /finishPushToTalkTurn/);
 });

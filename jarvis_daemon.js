@@ -23,14 +23,14 @@ const net = require('net');
 const { PROJECT_DIR } = require('./core/paths');
 process.chdir(PROJECT_DIR);
 
-// openclaw agent skill/core kodni PROJECT_DIR'dan emas, ~/.openclaw/workspace'dan
-// o'qiydi (alohida nusxa). Sinxronlash avval faqat qo'lda ishga tushirilardi va
-// haftalab eskirib qolgan edi — natijada bir qancha skill (memory, desktop-control,
-// google-calendar, gmail, phone-control...) agent uchun butunlay ko'rinmas edi.
-// Har boot/restart'da avtomatik, jim va tez (diff asosida) qayta ishga tushiriladi.
+// The openclaw agent reads skill/core code from ~/.openclaw/workspace (a separate
+// copy), not from PROJECT_DIR. Syncing used to be manual and went stale for weeks,
+// leaving several skills (memory, desktop-control, google-calendar, gmail,
+// phone-control, ...) invisible to the agent. It now runs automatically, silently
+// and quickly (diff-based) on every boot/restart.
 try {
   require('child_process').execFileSync('bash', [require('path').join(PROJECT_DIR, 'scripts', 'sync-workspace.sh')], { timeout: 20000, stdio: 'ignore' });
-} catch (e) { wrnEarly('sync-workspace.sh muvaffaqiyatsiz: ' + e.message); }
+} catch (e) { wrnEarly('sync-workspace.sh failed: ' + e.message); }
 function wrnEarly(msg) { try { console.warn('⚠️  ' + msg); } catch (_) {} }
 
 const { writeMemory, searchMemory, upsertTurnMemory } = require('./skills/memory');
@@ -87,9 +87,8 @@ function runNodeWithInput(script, input) {
 const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
 function env(k) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : ''; }
 
-// Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
-// uchun UTC+8'da mahalliy soat 08:00gacha Obsidian yozuvlari "kechagi kun"
-// fayliga tushib qolardi.
+// Returns the local (timezone-aware) date. toISOString() returns UTC, so at UTC+8
+// Obsidian entries written before 08:00 local time landed in "yesterday's" file.
 function localDateStr(d) {
   d = d || new Date();
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
@@ -122,14 +121,14 @@ const SAMPLE_RATE = 16000;
 const MIC_FILTER_ENABLED = !/^(?:false|0|no|off)$/i.test(env('MIC_FILTER_ENABLED') || 'true');
 const MIC_HIGHPASS_HZ = parseFloat(env('MIC_HIGHPASS_HZ')) || 80;
 const MIC_LOWPASS_HZ = parseFloat(env('MIC_LOWPASS_HZ')) || 7600;
-const CHUNK_MS = 1200;             // overlap window (ms) — "Jarvis" to'liq sig'ish uchun
+const CHUNK_MS = 1200;             // overlap window (ms), long enough to contain a whole "Jarvis"
 const STEP_MS = 150;               // faster wake inference cadence without reducing confidence
-const ENERGY_MIN_STT = parseFloat(env('ENERGY_MIN_STT')) || 120; // past mikrofonlarda ham backup ishlasin
+const ENERGY_MIN_STT = parseFloat(env('ENERGY_MIN_STT')) || 120; // keep the backup working on quiet microphones
 const ENERGY_TARGET = 1500;        // adaptive gain target — low, no clip
 const SILENCE_MS = parseInt(env('SILENCE_MS'), 10) || 450;            // natural speech end pause
 const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 15; // voice activity threshold
 const CMD_MAX = 5.0;               // max command length (s)
-const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
+const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits, to avoid clipping
 const HOTWORD_COOLDOWN_MS = parseInt(env('HOTWORD_COOLDOWN_MS'), 10) || 3000;
 const OPENWAKEWORD_INPUT_GAIN = Math.max(1, Math.min(6, parseFloat(env('OPENWAKEWORD_INPUT_GAIN')) || 3));
 const WHISPER_WAKE_ENABLED = (env('WHISPER_WAKE_ENABLED') || 'false') === 'true';
@@ -147,30 +146,28 @@ const WAKE_STT_PREROLL_MS = 450;
 const WAKE_STT_MIN_SPEECH_MS = 480;
 
 const hasVoiceProviders = Boolean(buildVoiceProviders(env).length);
-const REALTIME_ENABLED = hasVoiceProviders && (env('REALTIME_ENABLED') || 'true') !== 'false'; // haqiqiy real-vaqtli (gpt-realtime) suhbat rejimi
+const REALTIME_ENABLED = hasVoiceProviders && (env('REALTIME_ENABLED') || 'true') !== 'false'; // true realtime (speech-to-speech) conversation mode
 const NATIVE_AEC = (env('JARVIS_NATIVE_AEC') || 'true') !== 'false';
-// Doim eshitib turish: faqat bulutli realtime provider mavjud bo'lganda faol bo'ladi
+// Always-listening is active only when a cloud realtime provider is available
 const ALWAYS_LISTEN = hasVoiceProviders && (env('JARVIS_ALWAYS_LISTEN') || 'true') !== 'false';
 const ALWAYS_LISTEN_MAX_AGE_MS = Math.max(5, parseInt(env('ALWAYS_LISTEN_MAX_AGE_MIN'), 10) || 25) * 60000;
-const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // shuncha vaqt jim bo'lsa, suhbat avtomatik yakunlanadi
-// Provider VAD `speech_stopped` hodisasini yo'qotsa idle timer qayta
-// qurollanmay qolishi mumkin. Bu mustaqil watchdog stuck realtime sessiyani
-// tiklaydi; oddiy 20s follow-up oynasidan ancha uzun, shuning uchun tabiiy
-// suhbatni uzmaydi.
+const REALTIME_IDLE_MS = parseInt(env('REALTIME_IDLE_MS'), 10) || 20000;  // end the conversation after this much silence
+// If provider VAD loses a `speech_stopped` event, the idle timer may never re-arm.
+// This independent watchdog recovers a stuck realtime session; it is much longer
+// than the normal 20 s follow-up window, so it never cuts a natural conversation.
 const REALTIME_STALE_SESSION_MS = Math.max(75000, parseInt(env('REALTIME_STALE_SESSION_MS'), 10) || 75000);
-// Provider `speech_started` yuborib `speech_stopped`ni yo'qotsa normal idle
-// timer ataylab qurollanmaydi. Bunday stuck VAD holati keyingi Fn triggerlarni
-// bloklamasligi uchun bitta nutq turni qancha davom etishi mumkinligini cheklaymiz.
+// If the provider sends `speech_started` but loses `speech_stopped`, the normal idle
+// timer deliberately stays disarmed. Cap how long one speech turn may last so such a
+// stuck VAD state cannot block later Fn triggers.
 const REALTIME_MAX_USER_SPEECH_MS = Math.max(30000, parseInt(env('REALTIME_MAX_USER_SPEECH_MS'), 10) || 45000);
 const REALTIME_WAKE_PREROLL_MS = parseInt(env('REALTIME_WAKE_PREROLL_MS'), 10) || 1800;
-const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 30000; // "Jarvis"siz davom etish oynasi (JARVIS javobidan keyin)
+const CONVERSATION_FOLLOWUP_MS = parseInt(env('CONVERSATION_FOLLOWUP_MS'), 10) || 30000; // window to keep talking without "Jarvis" (after a reply)
 const ACTION_CONFIRMATION_TTL_MS = parseInt(env('ACTION_CONFIRMATION_TTL_MS'), 10) || 30000;
 const TURN_STALE_TIMEOUT_MS = Math.max(30000, parseInt(env('TURN_STALE_TIMEOUT_MS'), 10) || 600000);
 
-// Parallel bajarilayotgan jonli vazifalar (run_task) holati — dashboard
-// buni /api/realtime-tasks orqali o'qib, "hozir nima ustida ishlayapti"
-// panelini ko'rsatadi. Daemon va dashboard alohida jarayon bo'lgani uchun
-// fayl orqali ulanadi (soddaroq, qo'shimcha IPC shart emas).
+// State of live tasks running in parallel (run_task). The dashboard reads it via
+// /api/realtime-tasks to show its "what is JARVIS working on" panel. Daemon and
+// dashboard are separate processes, so they share a file (simpler than extra IPC).
 const REALTIME_TASKS_STATE_FILE = path.join(PROJECT_DIR, '.realtime-tasks-state.json');
 const RUNTIME_STATE_FILE = path.join(PROJECT_DIR, '.jarvis-runtime.json');
 const RUNTIME_TELEMETRY_FILE = path.join(PROJECT_DIR, '.run', 'telemetry.json');
@@ -188,7 +185,7 @@ const DAEMON_STARTED_AT = Date.now();
 const runtimeIdentity = () => ({ pid: process.pid, startedAt: DAEMON_STARTED_AT });
 const missions = new MissionControl({ file: MISSION_CONTROL_FILE, defaultMaxAttempts: 3 });
 const skillPlatform = createSkillPlatform({ projectDir: PROJECT_DIR, env });
-// Avtonom missiyalar (soatlab/kunlab): alohida runner jarayoni bajaradi (core/mission-runner.js), daemon faqat ko'prik.
+// Autonomous missions (hours or days) run in a separate runner process (core/mission-runner.js); the daemon is only a bridge.
 const goalMissionStore = new GoalMissionStore({ dir: path.join(PROJECT_DIR, '.run', 'missions') });
 const goalMissionApi = createMissionApi(goalMissionStore);
 let goalEventOffset = goalMissionStore.eventsOffset();
@@ -224,7 +221,7 @@ turnJournal.on('materialized', (turn, metrics) => {
 });
 const recoveredMissions = missions.recoverStale();
 if (recoveredMissions) console.log('Mission Control: ' + recoveredMissions + ' ta stale worker tiklandi');
-runtime.on('runtime.error', error => console.error('Jarvis runtime state xatoligi:', error.message));
+runtime.on('runtime.error', error => console.error('Jarvis runtime state error:', error.message));
 
 function resultLooksSuccessful(result) {
   if (result === null || result === undefined || result === false) return false;
@@ -249,7 +246,7 @@ function recordMissionResult(missionId, stepId, result, evidence = {}) {
     try { structured = JSON.parse(result); } catch (_) {}
     if (structured) return missions.completeStep(missionId, stepId, structured);
   }
-  if (!resultLooksSuccessful(result)) return missions.failStep(missionId, stepId, result || 'Bo‘sh natija');
+  if (!resultLooksSuccessful(result)) return missions.failStep(missionId, stepId, result || 'Empty result');
   missions.submitResult(missionId, stepId, result, evidence);
   return missions.verifyStep(missionId, stepId, { ok: true, method: evidence.type || 'agent-result' });
 }
@@ -267,32 +264,29 @@ function rtTaskCompleted(callId, result) {
   saveRealtimeTasksState();
 }
 
-// Qarsak klaviatura/stol zarbalarida ko'p false-trigger bergani uchun opt-in.
-// Asosiy ishonchli triggerlar: Hey Jarvis va Fn push-to-talk.
+// Clap detection is opt-in because keyboard and desk knocks caused many false triggers.
+// The reliable primary triggers are "Hey Jarvis" and Fn push-to-talk.
 const CLAP_TRIGGER_ENABLED = (env('CLAP_TRIGGER_ENABLED') || 'false') === 'true';
 const CLAP_SPIKE_RATIO = parseFloat(env('CLAP_SPIKE_RATIO')) || 4;     // spike, tinch fondan necha barobar baland
-const CLAP_ABS_FLOOR = parseFloat(env('CLAP_ABS_FLOOR')) || 250;       // mutlaq minimal spike (juda tinch xonada ham)
-// Qolgan qarsak-vaqt konstantalari (quiet ratio, min/max gap) core/clap-detector.js
-// ichida saqlanadi — o'sha modulning o'z default qiymatlari shu yerdagi eski
-// qiymatlar bilan bir xil.
+const CLAP_ABS_FLOOR = parseFloat(env('CLAP_ABS_FLOOR')) || 250;       // absolute minimum spike (even in a very quiet room)
+// The remaining clap timing constants (quiet ratio, min/max gap) live in
+// core/clap-detector.js; that module's defaults match the old values here.
 
 let _gain = 2.0;  // START LOW — adapt, don't clip
 
 inf('JARVIS v5.1 BLAZING — 16 kHz stream | local wake-word | STT fallback');
 
-// ── UYG'ONISH OVOZI ── Trigger ishlagan zahoti Realtime ulanishini kutmasdan
-// qisqa original synthetic acknowledgement chime eshitiladi. Oldindan yozilgan
-// odam ovozi Cedar bilan tembr jihatdan mos kelmasdi va mikrofonni 0.94s band
-// qilardi; 180ms chime barcha og'zaki javoblarni canonical voice'da qoldiradi.
+// ── WAKE SOUND ── As soon as a trigger fires, a short original synthetic
+// acknowledgement chime plays without waiting for the Realtime connection. A
+// pre-recorded human voice clashed with Cedar's timbre and held the microphone for
+// 0.94 s; a 180 ms chime keeps every spoken reply in the canonical voice.
 const WAKE_SOUND_PATH = path.join(PROJECT_DIR, 'assets', 'wake-chime.wav');
 
-// Bu ovoz ijro etilayotgan vaqtda mikrofon jonli sessiyaga UMUMAN
-// yuborilmaydi (Jarvis o'z ovozini "foydalanuvchi gapirdi" deb qabul
-// qilmasligi uchun) — ya'ni bu butunlay O'LIK vaqt: foydalanuvchi
-// gapirsa ham eshitilmaydi. Shuning uchun ovoz imkon qadar QISQA
-// bo'lishi kerak (avvalgi spoken acknowledgement 0.84s edi; yangi chime 0.18s).
-// Davomiylik fayldan O'QIB olinadi — fayl almashtirilsa, qo'lda raqam
-// yangilash esdan chiqib, mos kelmay qolmasin.
+// While this sound plays the microphone is NOT sent to the live session at all
+// (so JARVIS never hears itself as the user). That makes it fully DEAD time: user
+// speech is not heard either, so the sound must be as SHORT as possible (the old
+// spoken acknowledgement was 0.84 s; the new chime is 0.18 s). The duration is
+// READ from the file, so swapping the file never leaves a stale hand-coded number.
 const WAKE_SOUND_MS = detectWakeSoundMs(WAKE_SOUND_PATH);
 
 // ════════════════════════════════════════════
@@ -306,9 +300,9 @@ const { sendTelegram, sendTelegramVoice, ttsToFile, askOpenClaw, agentProviders,
 });
 
 // ════════════════════════════════════════════
-// FON JOB'LARI (core/background-jobs/*.js) — har biri o'z holat faylini
-// va bog'liqliklarini o'zi oladi; bu yerda faqat yoqish/rejalashtirish
-// qoladi. proactivePolicy ikkalasiga (proactive + urgent) umumiy.
+// BACKGROUND JOBS (core/background-jobs/*.js). Each one loads its own state file
+// and dependencies; only enabling and scheduling happens here. proactivePolicy is
+// shared by both proactive and urgent checks.
 // ════════════════════════════════════════════
 const { createProactiveCheckJob } = require('./core/background-jobs/proactive-check');
 const { createUrgentCheckJob } = require('./core/background-jobs/urgent-check');
@@ -323,10 +317,10 @@ const { createProjectsJob } = require('./core/background-jobs/projects-job');
 const { createFastActionLearnJob } = require('./core/background-jobs/fast-action-learn-job');
 const { createEmbedIndexJob } = require('./core/background-jobs/embed-index-job');
 
-// PROAKTIV REJIM — davriy ravishda screen-monitor yozgan Obsidian
-// xotirasini ko'rib chiqadi; agent chindan foydali narsa topsa,
-// Telegram/ovoz orqali taklif qiladi. Hech qachon so'ramasdan mustaqil
-// harakat (klik/yozish) qilmaydi — faqat kuzatib, taklif beradi.
+// PROACTIVE MODE: periodically reviews the Obsidian memory the screen monitor
+// writes; when the agent finds something genuinely useful it suggests it via
+// Telegram or voice. It never acts on its own (no clicks or typing) without
+// asking; it only observes and suggests.
 const PROACTIVE_ENABLED_RT = (env('PROACTIVE_ENABLED') || 'false') === 'true';
 const PROACTIVE_INTERVAL_MIN_RT = parseInt(env('PROACTIVE_INTERVAL_MIN'), 10) || 30;
 const proactivePolicy = new ProactivePolicy({
@@ -343,63 +337,61 @@ const proactiveCheckJob = createProactiveCheckJob({
   projectDir: PROJECT_DIR, intervalMin: PROACTIVE_INTERVAL_MIN_RT, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile
 });
 if (PROACTIVE_ENABLED_RT) {
-  inf('Proaktiv rejim yoqilgan — har ' + PROACTIVE_INTERVAL_MIN_RT + ' daqiqada tekshiradi');
+  inf('Proactive mode enabled: checking every ' + PROACTIVE_INTERVAL_MIN_RT + ' minutes');
   setInterval(() => { proactiveCheckJob.run().catch(() => {}); }, PROACTIVE_INTERVAL_MIN_RT * 60 * 1000);
 }
 
-// SHOSHILINCH ekran ogohlantirishlari — proaktiv rejimning umumiy 30
-// daqiqalik tsiklidan FARQLI, screen-monitor #urgent deb belgilagan
-// (xato/crash, xavfsizlik, muddat kabi) yozuvlarni ANCHA tez-tez (default
-// 3 daqiqada) tekshiradi va DARHOL ovozli+Telegram xabar beradi.
+// URGENT screen alerts. Unlike the 30-minute proactive cycle, entries the screen
+// monitor tagged #urgent (errors/crashes, security, deadlines) are checked much
+// more often (every 3 minutes by default) and announced IMMEDIATELY by voice and
+// Telegram.
 const URGENT_CHECK_ENABLED = (env('URGENT_CHECK_ENABLED') || 'true') !== 'false';
 const URGENT_CHECK_INTERVAL_MIN = parseInt(env('URGENT_CHECK_INTERVAL_MIN'), 10) || 3;
 const urgentCheckJob = createUrgentCheckJob({ projectDir: PROJECT_DIR, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile });
 if (URGENT_CHECK_ENABLED) {
-  inf('Shoshilinch ekran ogohlantirishi yoqilgan — har ' + URGENT_CHECK_INTERVAL_MIN + ' daqiqada tekshiradi');
+  inf('Urgent screen alerts enabled: checking every ' + URGENT_CHECK_INTERVAL_MIN + ' minutes');
   setInterval(() => { urgentCheckJob.run().catch(() => {}); }, URGENT_CHECK_INTERVAL_MIN * 60 * 1000);
 }
 
-// Kunlik o'rganish: xom kuzatuvlardan barqaror naqshlarni ajratib,
-// profilga qo'shadi. Skill o'zi qaysi kunlar bajarilganini eslab qoladi,
-// shuning uchun tez-tez chaqirish xavfsiz (takror bajarilmaydi).
+// Daily learning: distils stable patterns from raw observations into the profile.
+// The skill remembers which days it already processed, so frequent calls are safe
+// (nothing runs twice).
 const SYNTHESIS_ENABLED = (env('DAILY_SYNTHESIS_ENABLED') || 'true') !== 'false';
 const dailySynthesisJob = createDailySynthesisJob({ sendTelegram });
 if (SYNTHESIS_ENABLED) {
-  inf('Kunlik o\'rganish yoqilgan');
-  setTimeout(() => { dailySynthesisJob.run(); }, 2 * 60 * 1000);          // ishga tushgach
-  setInterval(() => { dailySynthesisJob.run(); }, 60 * 60 * 1000);        // keyin har soatda tekshiradi
+  inf('Daily learning enabled');
+  setTimeout(() => { dailySynthesisJob.run(); }, 2 * 60 * 1000);          // shortly after startup
+  setInterval(() => { dailySynthesisJob.run(); }, 60 * 60 * 1000);        // then check every hour
 }
 
-// KUNLIK VAZIFALAR — Obsidian'dagi ro'yxat (skills/tasks). Ro'yxatga
-// tushgan narsa uchun alohida ruxsat so'ralmaydi — kun davomida navbat
-// bilan avtomatik bajariladi (SOUL.md Chegaralar hali kuchda: qaytarib
-// bo'lmaydigan amallar baribir so'raladi).
+// DAILY TASKS: the Obsidian list (skills/tasks). Listed items need no separate
+// permission and run automatically one after another during the day (SOUL.md
+// Boundaries still apply: irreversible actions are still confirmed).
 const DAILY_TASKS_ENABLED = (env('DAILY_TASKS_ENABLED') || 'true') !== 'false';
 const DAILY_TASK_LEAD_MIN = Math.max(0, parseInt(env('DAILY_TASK_LEAD_MIN'), 10) || 0);
 const dailyTasksJob = createDailyTasksJob({
   projectDir: PROJECT_DIR, localDateStr, leadMin: DAILY_TASK_LEAD_MIN, stableId, beginSingleStepMission, recordMissionResult, askAgent, sendTelegram, writeMemory
 });
 if (DAILY_TASKS_ENABLED) {
-  inf('Kunlik vazifalar rejimi yoqilgan');
+  inf('Daily tasks mode enabled');
   setTimeout(() => { dailyTasksJob.run().catch(() => {}); }, 3 * 60 * 1000);
   setInterval(() => { dailyTasksJob.run().catch(() => {}); }, 20 * 60 * 1000);
 }
 
-// KUNLIK O'Z-O'ZINI HISOBOT — kun oxirida (mahalliy soat) bugun mustaqil
-// bajarilgan barcha ishlar qisqa xulosa qilinib, Telegram+ovoz orqali
-// aytiladi. To'liq avtonom ruxsat berilgani uchun — nazorat o'rniga
-// shaffoflikni saqlash uchun.
+// DAILY SELF-REPORT: at the end of the (local) day, everything done autonomously
+// today is summarised and announced via Telegram and voice. With full autonomy
+// granted, this keeps things transparent instead of requiring oversight.
 const DAILY_REPORT_ENABLED = (env('DAILY_REPORT_ENABLED') || 'true') !== 'false';
 const DAILY_REPORT_HOUR = parseInt(env('DAILY_REPORT_HOUR'), 10) || 22; // mahalliy soat
 const dailyReportJob = createDailyReportJob({
   projectDir: PROJECT_DIR, localDateStr, reportHour: DAILY_REPORT_HOUR, askAgent, sendTelegram, writeMemory, ttsToFile
 });
 if (DAILY_REPORT_ENABLED) {
-  inf('Kunlik hisobot rejimi yoqilgan — har kuni soat ' + DAILY_REPORT_HOUR + ':00dan keyin');
+  inf('Daily report enabled: every day after ' + DAILY_REPORT_HOUR + ':00');
   setInterval(() => { dailyReportJob.run().catch(() => {}); }, 15 * 60 * 1000);
 }
 
-// PEAK: ertalabki brifing, ekran konteksti, o'zini-o'zi tiklash.
+// PEAK: morning brief, screen context, self-healing.
 if ((env('MORNING_BRIEF_ENABLED') || 'true') !== 'false') {
   const morningBrief = createMorningBriefJob({
     projectDir: PROJECT_DIR, localDateStr, hour: parseInt(env('MORNING_BRIEF_HOUR'), 10) || 8,
@@ -428,54 +420,52 @@ if ((env('HEALTH_WATCHDOG') || 'true') !== 'false') {
   }).start();
 }
 
-// LOYIHALAR — ko'p bosqichli, kun davomida ketma-ket bajariladigan
-// avtonom ishlar (skills/projects). Bosqichlar BITTA umumiy session'da
-// ketma-ket bajariladi, loyiha tugagach ALOHIDA yakuniy hisobot beriladi.
+// PROJECTS: multi-step autonomous work done in sequence during the day
+// (skills/projects). Steps run in ONE shared session, and a SEPARATE final report
+// is delivered when the project finishes.
 const PROJECTS_ENABLED = (env('PROJECTS_ENABLED') || 'true') !== 'false';
 const PROJECT_STEP_MAX_ATTEMPTS = parseInt(env('PROJECT_STEP_MAX_ATTEMPTS'), 10) || 2;
 const projectsJob = createProjectsJob({
   missions, stableId, beginSingleStepMission, recordMissionResult, stepMaxAttempts: PROJECT_STEP_MAX_ATTEMPTS, askAgent, sendTelegram, writeMemory
 });
 if (PROJECTS_ENABLED) {
-  inf('Ko\'p bosqichli loyihalar rejimi yoqilgan');
+  inf('Multi-step projects mode enabled');
   setTimeout(() => { projectsJob.run().catch(() => {}); }, 4 * 60 * 1000);
   setInterval(() => { projectsJob.run().catch(() => {}); }, 15 * 60 * 1000);
 }
 
-// TEZ AMALLARNI O'RGANISH (fast-actions) — vaqti-vaqti bilan Obsidian
-// xotirasidagi so'nggi kunlar vazifalarini ko'rib, "shunchaki biror
-// dastur ochish" turidagi, hali fast-actions ro'yxatida yo'q so'rovlarni
-// topadi va avtomatik qo'shadi.
+// FAST-ACTION LEARNING: periodically reviews recent days' tasks in Obsidian memory,
+// finds "just open some app"-style requests not yet in the fast-actions list,
+// and adds them automatically.
 const FAST_ACTION_LEARN_ENABLED = (env('FAST_ACTION_LEARN_ENABLED') || 'true') !== 'false';
-const FAST_ACTION_LEARN_INTERVAL_MIN = parseInt(env('FAST_ACTION_LEARN_INTERVAL_MIN'), 10) || 720; // 12 soatda bir
+const FAST_ACTION_LEARN_INTERVAL_MIN = parseInt(env('FAST_ACTION_LEARN_INTERVAL_MIN'), 10) || 720; // every 12 hours
 const fastActionLearnJob = createFastActionLearnJob({ projectDir: PROJECT_DIR, localDateStr, askAgent, sendTelegram, writeMemory, skillPlatform });
 if (FAST_ACTION_LEARN_ENABLED) {
-  inf('Tez amallarni o\'rganish yoqilgan — har ' + FAST_ACTION_LEARN_INTERVAL_MIN + ' daqiqada tekshiradi');
+  inf('Fast-action learning enabled: checking every ' + FAST_ACTION_LEARN_INTERVAL_MIN + ' minutes');
   setTimeout(() => { fastActionLearnJob.run().catch(() => {}); }, 10 * 60 * 1000);
   setInterval(() => { fastActionLearnJob.run().catch(() => {}); }, FAST_ACTION_LEARN_INTERVAL_MIN * 60 * 1000);
 }
 
-// XOTIRA INDEKSINI FONDA YANGILASH — semantik (ma'no bo'yicha) qidiruv
-// butun tarix bo'ylab ishlashi uchun har bir yangi xotira bloki
-// indekslanishi kerak; bu fonda, muntazam bajariladi, qidiruv esa doim
-// tayyor indeksdan o'qib, bir zumda javob beradi.
+// BACKGROUND MEMORY INDEXING: for semantic (meaning-based) search to cover the
+// whole history, every new memory block must be indexed. That happens regularly in
+// the background, so searches always read a ready index and answer instantly.
 const EMBED_INDEX_ENABLED = (env('EMBED_INDEX_ENABLED') || 'true') !== 'false';
 const EMBED_INDEX_INTERVAL_MIN = parseInt(env('EMBED_INDEX_INTERVAL_MIN'), 10) || 15;
 const embedIndexJob = createEmbedIndexJob();
 if (EMBED_INDEX_ENABLED) {
-  inf('Xotira indeksi fonda yangilanadi — har ' + EMBED_INDEX_INTERVAL_MIN + ' daqiqada');
+  inf('Memory index refreshes in the background every ' + EMBED_INDEX_INTERVAL_MIN + ' minutes');
   setTimeout(() => { embedIndexJob.run(); }, 60 * 1000);
   setInterval(() => { embedIndexJob.run(); }, EMBED_INDEX_INTERVAL_MIN * 60 * 1000);
 }
 turnJournal.startWatchdog({ maxAgeMs: TURN_STALE_TIMEOUT_MS, reason: 'turn watchdog timeout' });
-// Tiklash bo'lib-bo'lib bajariladi (event loop bloklanmaydi); allaqachon yozilganlari sidecar orqali o'tkazib yuboriladi.
+// Recovery runs in slices (the event loop is never blocked); entries already written are skipped via the sidecar.
 turnJournal.replayAsync().then(replayResult => {
   runtime.heartbeat('memory-recovery', { status: 'ready', ...replayResult });
   if (replayResult.replayed > 0) {
-    inf(`Turn journal recovery: ${replayResult.replayed} ta terminal turn qayta materialize qilindi (${replayResult.alreadyMaterialized || 0} tasi allaqachon yozilgan)`);
+    inf(`Turn journal recovery: re-materialized ${replayResult.replayed} terminal turns (${replayResult.alreadyMaterialized || 0} were already written)`);
     if (EMBED_INDEX_ENABLED) setTimeout(() => embedIndexJob.run(), 500).unref?.();
   }
-}).catch(error => wrn('Turn journal recovery xatosi: ' + (error.message || error)));
+}).catch(error => wrn('Turn journal recovery error: ' + (error.message || error)));
 
 function adaptGain(energy) {
   if (energy < ENERGY_MIN_STT) _gain = Math.min(_gain * 1.2, GAIN_MAX);
@@ -545,7 +535,7 @@ async function mainLoop() {
       wrn('Porcupine yuklanmadi — STT backup faol: ' + e.message);
     }
   } else {
-    wrn('openWakeWord o\'rnatilmagan — STT backup faol. scripts/setup-openwakeword.sh ni ishga tushiring');
+    wrn('openWakeWord is not installed; using the STT backup. Run scripts/setup-openwakeword.sh');
   }
   if (WHISPER_WAKE_ENABLED) {
     _whisperWakeDetector = new WhisperWakeDetector({
@@ -558,7 +548,7 @@ async function mainLoop() {
       cooldownMs: WHISPER_WAKE_COOLDOWN_MS,
       timeoutMs: WHISPER_WAKE_TIMEOUT_MS,
       coldStartTimeoutMs: WHISPER_WAKE_COLD_START_TIMEOUT_MS,
-      onReady: () => ok('whisper.cpp lokal wake transcript detector tayyor'),
+      onReady: () => ok('whisper.cpp local wake transcript detector ready'),
       onError: error => wrn('whisper.cpp wake detector: ' + error.message),
       onWake: ({ transcript }) => {
         if (state !== 'listening' || Date.now() - lastHotwordTime <= HOTWORD_COOLDOWN_MS) return;
@@ -574,8 +564,8 @@ async function mainLoop() {
   // If Azure VoiceLive is configured, create a lightweight wake worker that
   // keeps a transcription/VAD-only session open and emits transcripts.
   try {
-    // Bulutli VoiceLive wake worker qo'shimcha ulanish ochadi va mahalliy openWakeWord/Whisper bilan ikki marta uyg'otishi
-    // mumkin — shuning uchun faqat aniq yoqilganda (AZURE_VOICELIVE_WAKE_ENABLED=true) ishga tushadi.
+    // The cloud VoiceLive wake worker opens an extra connection and could wake JARVIS twice alongside the local
+    // openWakeWord/Whisper detectors, so it only starts when explicitly enabled (AZURE_VOICELIVE_WAKE_ENABLED=true).
     const wakeEnabled = (env('AZURE_VOICELIVE_WAKE_ENABLED') || 'false') === 'true';
     const vlProvider = wakeEnabled ? require('./core/voice-provider').buildVoiceProviders(env).find(p => p.id === 'voice-live') : null;
     if (vlProvider && wakeEnabled) {
@@ -628,14 +618,14 @@ async function mainLoop() {
   let cmdSpeechStarted = false;
   inConversation = false;
   let lastConversationActivityAt = 0;
-  // Fn push-to-talk emas: u hands-free realtime suhbatini ochadigan trigger.
-  // Sessiya ochilgach server VAD tabiiy pauzalarda turnlarni o'zi ajratadi.
+  // Fn is not push-to-talk: it is a trigger that opens a hands-free realtime conversation.
+  // Once the session is open, server VAD splits turns at natural pauses.
   let fnPressed = false;
   let lastFnDownAt = 0;
   let restartFromFn = false;
   let _startingRealtimeSession = false;
-  // Mac mikrofonining real tinch RMS'i sinovda 100–200 oralig'ida chiqdi.
-  // 40 dan boshlash shovqinni nutq deb olib, uzluksiz STT segment yuborardi.
+  // The Mac microphone's real quiet RMS measured 100-200 in tests. Starting at 40
+  // treated noise as speech and sent STT segments non-stop.
   let ambientEnergy = ENERGY_MIN_STT;
 
   function submitWakeStt(pcm, measuredEnergy) {
@@ -659,9 +649,9 @@ async function mainLoop() {
         if (wake && state === 'listening' && Date.now() - lastHotwordTime > HOTWORD_COOLDOWN_MS) {
           triggerVoice('🔥 HOTWORD (hybrid STT): "' + wake.text + '"', {
             addressedWake: true,
-            // Wake fallback aynan chaqiruv segmentini taniydi. STT qo'shib
-            // yuborgan tasodifiy trailing so'zni buyruq deb bajarmaymiz;
-            // chime'dan keyingi alohida turn haqiqiy buyruq hisoblanadi.
+            // The wake fallback recognises exactly the wake segment. A random trailing
+            // word that STT appended is not executed as a command; the separate turn
+            // after the chime is the real command.
             initialTranscript: '',
             playAck: true
           });
@@ -670,12 +660,12 @@ async function mainLoop() {
         const failed = results.find(r => r && r.reason && !['NoMatch', 'nomatch', 'unknown'].includes(r.reason));
         if (!failed || Date.now() - lastSttBackupNotice <= 60000) return;
         lastSttBackupNotice = Date.now();
-        wrn('STT backup vaqtincha javob bermadi: ' + failed.reason);
+        wrn('STT backup temporarily did not respond: ' + failed.reason);
       }
     }).catch(e => {
       if (Date.now() - lastSttBackupNotice > 60000) {
         lastSttBackupNotice = Date.now();
-        wrn('STT backup vaqtincha ishlamadi: ' + (e.message || e));
+        wrn('STT backup temporarily failed: ' + (e.message || e));
       }
     }).finally(() => { sttBackupInFlight = false; });
   }
@@ -686,21 +676,20 @@ async function mainLoop() {
     if (_startingRealtimeSession || _activeRealtimeSession || state !== 'listening') return false;
     _startingRealtimeSession = true;
     try {
-      // Wake so'zidan keyingi birinchi buyruq uchun suhbat oynasini ochamiz.
+      // Open the conversation window for the first command after the wake word.
       if (trigger.addressedWake) conversationContext.touch();
 
     const session = new RealtimeSession({
-      // Fon missiyalari bilan ko'prik: start/status/control millisekundlarda qaytadi (ovozli suhbat bloklanmaydi).
+      // Bridge to background missions: start/status/control return in milliseconds (the voice conversation never blocks).
       missions: goalMissionApi,
-      // "Jarvis" bilan uyg'otilgan sessiya ham: birinchi buyruqdan keyin faqat qisqa suhbat oynasida
-      // (JARVIS javobidan keyin CONVERSATION_FOLLOWUP_MS) yoki qayta "Jarvis" deyilganda javob beradi.
-      // Avval bu faqat always-on uchun yoqiq edi — wake sessiyasida xonadagi har qanday gap
-      // (TV, boshqa odamlar, noto'g'ri eshitilgan so'zlar) JARVIS'ga qaratilgan deb qabul qilinardi.
+      // A session woken by "Jarvis" also answers only within the short conversation window after the
+      // first command (CONVERSATION_FOLLOWUP_MS after a reply) or when "Jarvis" is said again.
+      // This used to apply only to always-on mode, so in a wake session any room talk (TV, other
+      // people, misheard words) was treated as addressed to JARVIS.
       wakeRequired: Boolean(trigger.alwaysOn || trigger.addressedWake),
-      // Fn hands-free trigger butun ochiq sessiya davomida foydalanuvchi
-      // Jarvisga murojaat qilayotganini tasdiqlaydi. Shuning uchun media
-      // background gate follow-up gaplarni bloklamaydi. Wake-word trigger
-      // esa faqat birinchi mazmunli turn uchun bir martalik bypass oladi.
+      // The Fn hands-free trigger confirms the user is addressing JARVIS for the
+      // whole open session, so the media background gate does not block follow-ups.
+      // A wake-word trigger only grants a one-time bypass for the first meaningful turn.
       explicitUserSession: reason.includes('Fn'),
       explicitUserTrigger: Boolean(trigger.addressedWake),
       addressedWakeTrigger: Boolean(trigger.addressedWake && !trigger.initialTranscript),
@@ -710,12 +699,11 @@ async function mainLoop() {
       // competing transcripts increase latency and can route the wrong action.
       conversationContext,
       actionConfirmationTtlMs: ACTION_CONFIRMATION_TTL_MS,
-      // Default RealtimeSession'ning o'z ichki askExpert()'i `openclaw agent`
-      // CLI'ni (run_task bilan bir xil primary model) spawn qiladi — haqiqiy
-      // kuchli `deep-think` (Grok Fast yoki GPT-5.6 Sol, to'g'ridan-to'g'ri Azure Responses
-      // API, tool-loop'siz — shu sabab tezroq)
-      // hech qachon ishlatilmasdi. Shu yerga ulash orqali `ask_expert` va
-      // deterministik expert/grounding yo'li ham haqiqiy kuchli modelga boradi.
+      // RealtimeSession's default askExpert() spawns the `openclaw agent` CLI (the
+      // same primary model as run_task), so the genuinely strong `deep-think` path
+      // (Grok Fast or GPT-5.6 Sol, called directly via the Azure Responses API with
+      // no tool loop, hence faster) was never used. Wiring it here sends both
+      // `ask_expert` and the deterministic expert/grounding path to the strong model.
       expertAnswer: async (question, callId, grounding) => {
         try {
           return await skillPlatform.invoke('deep-think', 'askExpert', { question, context: grounding });
@@ -723,10 +711,9 @@ async function mainLoop() {
           return "I couldn't reach the reasoning service.";
         }
       },
-      // fast-actions endi SkillPlatform orqali chaqiriladi -- osilib qolgan
-      // holat (masalan ruxsat dialogi kutayotgan osascript) platformaning
-      // timeout/circuit-breaker'i bilan himoyalanadi, o'zi hech qachon
-      // reject qilmasa ham.
+      // fast-actions now run through the SkillPlatform, so a hung action (e.g. an
+      // osascript waiting on a permission dialog) is bounded by the platform's
+      // timeout/circuit breaker even if it never rejects on its own.
       fastActionRunner: (id) => skillPlatform.invoke('fast-actions', 'runFastAction', { id })
     });
     const flightRecorder = new VoiceFlightRecorder({ file: VOICE_FLIGHT_RECORDER_FILE });
@@ -738,8 +725,8 @@ async function mainLoop() {
     runtime.beginConversation(reason.includes('Fn') ? 'fn-hands-free' : 'wake-word');
     const connectStartedAt = Date.now();
     _activeRealtimeSession = session;
-    // macOS Voice Processing (FaceTime darajasidagi exo bostirish): tayyor bo'lguncha va ishlamay qolsa
-    // oddiy mikrofon + mahalliy AEC yo'li ishlayveradi.
+    // macOS Voice Processing (FaceTime-grade echo cancellation): until it is ready, or if it fails,
+    // the plain microphone + local AEC path keeps working.
     let nativeMic = null;
     let nativeMicLastAt = 0;
     if (NATIVE_AEC && NativeMic.isSupported()) {
@@ -747,7 +734,7 @@ async function mainLoop() {
       nativeMic.on('data', chunk => {
         if (session.closed) return;
         nativeMicLastAt = Date.now();
-        if (!session._nativeAec) { session.enableNativeAec(); inf('🎧 Native AEC (Voice Processing) yoqildi'); }
+        if (!session._nativeAec) { session.enableNativeAec(); inf('🎧 Native AEC (Voice Processing) enabled'); }
         const queued = typeof session._jarvisQueueWakeAudio === 'function' && session._jarvisQueueWakeAudio(Buffer.from(chunk));
         if (!queued && Date.now() >= (session._jarvisWakeMuteUntil || 0)) session.feedAudio(chunk);
       });
@@ -755,19 +742,18 @@ async function mainLoop() {
         session.disableNativeAec('helper-exit');
         if (!session.closed) wrn('Native AEC to\'xtadi (' + (info.error || info.code) + ') — oddiy mikrofon yo\'liga qaytildi');
       });
-      nativeMic.on('unavailable', reason => { wrn('Native AEC mavjud emas: ' + reason); });
+      nativeMic.on('unavailable', reason => { wrn('Native AEC unavailable: ' + reason); });
       nativeMic.start();
     }
     state = 'realtime';
     lastHotwordTime = Date.now();
-    // Hotword ham, Fn ham foydalanuvchiga darhol bir xil qisqa synthetic chime
-    // beradi. Ack davomida mikrofon oqimini tashlaymiz: aks holda karnaydagi
-    // chime preroll'ga kirib, server uni foydalanuvchi nutqi deb qabul qiladi.
-    // Ack tugagach, ulanish hali tayyor bo'lmasa haqiqiy buyruq bounded
-    // preroll'ga yig'iladi va ready bo'lgan zahoti yuboriladi.
-    // WAKE_SOUND_MS ichida audio-driver uchun 100ms guard allaqachon bor.
-    // Bu yerda ikkinchi guard qo'shish foydalanuvchining birinchi so'zlarini
-    // keraksiz tashlab yuborar edi.
+    // Hotword and Fn both give the user the same short synthetic chime at once.
+    // Microphone audio is dropped during the ack; otherwise the chime from the
+    // speaker enters the preroll and the server takes it as user speech. If the
+    // connection is not ready when the ack ends, the real command is collected in
+    // a bounded preroll and sent as soon as it is ready. WAKE_SOUND_MS already
+    // includes a 100 ms audio-driver guard; a second guard here would needlessly
+    // drop the user's first words.
     const shouldPlayAck = trigger.playAck !== false;
     const wakeMuteUntil = shouldPlayAck ? Date.now() + WAKE_SOUND_MS : 0;
     if (shouldPlayAck) playWakeSound(WAKE_SOUND_PATH);
@@ -782,9 +768,9 @@ async function mainLoop() {
     const pendingTurnIds = [];
     let activeToolCount = 0;
     let awaitingFollowup = false;
-    // Provider VAD session.updated/ready'dan oldin speech_started yuborishi
-    // mumkin. Bu holatda ready handler idle timer o'rnatib, hali davom
-    // etayotgan gapni REALTIME_IDLE_MS o'tgach noto'g'ri yopmasligi kerak.
+    // Provider VAD may send speech_started before session.updated/ready. In that
+    // case the ready handler must not arm an idle timer that wrongly closes the
+    // ongoing speech after REALTIME_IDLE_MS.
     let userSpeaking = false;
     let userSpeechStartedAt = 0;
     const toolTurns = new Map();
@@ -808,24 +794,24 @@ async function mainLoop() {
 
     const armIdleTimer = () => {
       clearTimeout(idleTimer);
-      // Faol VAD turni uchun jimlik timeri bo'lmaydi. speech_stopped
-      // transcription oynasini yakunlagach ushbu timer yana qurollanadi.
+      // No silence timer runs during an active VAD turn. It is re-armed once
+      // speech_stopped closes the transcription window.
       if (userSpeaking) return;
-      if (trigger.alwaysOn) return;   // doim yoniq sessiya jimlikda yopilmaydi
+      if (trigger.alwaysOn) return;   // an always-on session is not closed on silence
       const delay = conversationIdleDelay({
         now: Date.now(),
         idleMs: REALTIME_IDLE_MS,
-        // Ulanish sukunatda REALTIME_IDLE_MS ochiq qoladi (qayta ulanish kutilmasin); "Jarvis"siz javob
-        // berish oynasi esa alohida — conversationContext (CONVERSATION_FOLLOWUP_MS) boshqaradi.
+        // The connection stays open for REALTIME_IDLE_MS of silence (no reconnect wait); the window for
+        // replying without "Jarvis" is separate and managed by conversationContext (CONVERSATION_FOLLOWUP_MS).
         followupMs: Math.max(CONVERSATION_FOLLOWUP_MS, REALTIME_IDLE_MS),
         playbackUntil: session._playbackUntil,
         awaitingFollowup
       });
       idleTimer = setTimeout(() => {
-        // Sessiyani yopish running run_task jarayonlarini cancel qiladi.
-        // Natija kelguncha timeout'ni uzaytirib turamiz.
+        // Closing the session cancels running run_task processes, so keep
+        // extending the timeout until a result arrives.
         if (activeToolCount > 0) return armIdleTimer();
-        finishRealtimeSession('jimlik timeout');
+        finishRealtimeSession('idle timeout');
       }, delay);
     };
     const markRealtimeActivity = () => { lastRealtimeActivityAt = Date.now(); };
@@ -839,13 +825,13 @@ async function mainLoop() {
         return;
       }
       if (trigger.alwaysOn) {
-        // Uzoq ochiq sessiya server tomonida eskirishi mumkin — vaqti-vaqti bilan yangilaymiz (jimlik paytida).
+        // A long-open session can go stale server-side; refresh it periodically (during silence).
         if (Date.now() - sessionStartedAt > ALWAYS_LISTEN_MAX_AGE_MS && !userSpeaking && !session.assistantSpeaking) finishRealtimeSession('always-on yangilanmoqda');
         return;
       }
       const inactiveMs = Date.now() - lastRealtimeActivityAt;
       if (inactiveMs < REALTIME_STALE_SESSION_MS) return;
-      wrn('Realtime sessiya faolliksiz qolgan (' + Math.round(inactiveMs / 1000) + 's) — tiklanish uchun yopilyapti');
+      wrn('Realtime session inactive for ' + Math.round(inactiveMs / 1000) + 's; closing it to recover');
       finishRealtimeSession('faolliksiz realtime watchdog');
     }, 5000);
     staleSessionTimer.unref?.();
@@ -869,11 +855,11 @@ async function mainLoop() {
       runtime.endConversation(why);
       runtime.heartbeat('voice-daemon', { state, ...runtimeIdentity() });
       nextStepTime = Date.now();
-      inf('Realtime suhbat yakunlandi: ' + why);
+      inf('Realtime conversation ended: ' + why);
       if (restartFromFn) {
         restartFromFn = false;
-        // close() callbacklari tugab state listening holatiga o'tgach yangi
-        // session ochiladi. Shu sabab Fn stuck realtime sessiyani tiklaydi.
+        // A new session opens after the close() callbacks finish and the state
+        // returns to listening, which is how Fn recovers a stuck realtime session.
         setTimeout(() => triggerVoice('⌨️ Fn hands-free conversation'), 0);
       } else scheduleAlwaysOn(1500);
     };
@@ -886,9 +872,9 @@ async function mainLoop() {
       runtime.observeLatency('realtime-connect', Date.now() - connectStartedAt);
       runtime.setConversationMode('listening');
       runtime.heartbeat('realtime-api', { status: 'ready' });
-      ok('Realtime ovoz sessiyasi ulandi');
-      // Wake chime/handshake vaqtida aytilgan "Hey Jarvis, ..." buyrug'ini
-      // yo'qotmasdan sessiya tayyor bo'lgach uzatamiz.
+      ok('Realtime voice session connected');
+      // A "Hey Jarvis, ..." command spoken during the wake chime/handshake is
+      // forwarded once the session is ready instead of being lost.
       for (const chunk of wakeAudioHandoff.drain()) session.feedAudio(chunk);
       wakeAudioHandoff.markReady();
       armIdleTimer();
@@ -922,7 +908,7 @@ async function mainLoop() {
     });
     session.on('turn_suppressed', (reason, text) => {
       markRealtimeActivity();
-      if (reason === 'no-wake') return;   // xona gapi: hech qayerga yozilmaydi
+      if (reason === 'no-wake') return;   // room talk: never recorded anywhere
       flightRecorder.textEvent('turn.suppressed', text, { reason });
       if (reason !== 'no-wake' && reason !== 'wake-only') inf('🔇 Realtime turn bloklandi (' + reason + '): ' + String(text || '').slice(0, 100));
       runtime.setConversationMode('listening');
@@ -957,7 +943,7 @@ async function mainLoop() {
       if (!clean) return;
       const accepted = runtime.acceptResponse(clean);
       if (!accepted.accepted) {
-        wrn('Takror realtime javob log/xotiraga yozilmadi');
+        wrn('Duplicate realtime reply not written to log/memory');
         return;
       }
       runtime.setConversationMode('speaking');
@@ -978,9 +964,9 @@ async function mainLoop() {
     });
     session.on('turn_done', ({ status, interrupted } = {}) => {
       markRealtimeActivity();
-      // Cancelled/incomplete response.done barge-in ochgan keyingi speech
-      // turniga kechikib kelishi mumkin. Faqat provider tasdiqlagan successful
-      // response aktiv turnni completed qilsin.
+      // A cancelled/incomplete response.done may arrive late, after barge-in opened
+      // the next speech turn. Only a successful response confirmed by the provider
+      // may mark the active turn completed.
       if (status === 'completed' && !interrupted) flightRecorder.event('turn.completed');
       if (status === 'completed' && !interrupted) awaitingFollowup = true;
       armIdleTimer();
@@ -1050,7 +1036,7 @@ async function mainLoop() {
         toolTurns.set(callId, currentTurnId);
         turnJournal.append(currentTurnId, 'tool.started', { description, callId });
       }
-      inf('🛠 Jonli vazifa: ' + description);
+      inf('🛠 Live task: ' + description);
       armIdleTimer();
     });
     session.on('tool_result', (result, callId) => {
@@ -1084,26 +1070,25 @@ async function mainLoop() {
         _realtimeDisabledUntil = Date.now() + REALTIME_COOLDOWN_MS;
       }
       runtime.heartbeat('realtime-api', { status: 'error', error: String(err.message || err).slice(0, 300) });
-      er('Realtime xatolik: ' + (err.message || err));
+      er('Realtime error: ' + (err.message || err));
       const shouldFallback = !sessionWasReady;
-      finishRealtimeSession('xatolik');
+      finishRealtimeSession('error');
       if (shouldFallback && state === 'listening') {
-        // Ulanishning o'zi ishlamasa foydalanuvchini tashlab qo'ymaymiz:
-        // wake sound'dan keyingi audioni batch STT orqali yozib olamiz.
+        // If the connection itself fails, do not leave the user hanging: record
+        // the audio after the wake sound through batch STT.
         state = 'command_record';
         cmdBuffers = [];
         cmdStartTime = Date.now();
         lastVoiceTime = cmdStartTime;
-        wrn('Realtime ulanmagan — batch STT fallback tinglayapti');
+        wrn('Realtime not connected; the batch STT fallback is listening');
       }
     });
     session.on('close', () => {
-      // WebSocket ko'pincha 'error' chiqarmasdan to'g'ridan-to'g'ri 'close'
-      // bilan uziladi (server-tomonidan yopilish/tarmoq uzilishi) — bu holda
-      // heartbeat oxirgi 'ready' holatida yopishib qolib, diagnose-voice.js
-      // muammoni ko'rmay qolardi. `finished` hali false bo'lsa (ya'ni 'error'
-      // yoki idle-timeout orqali allaqachon yakunlanmagan bo'lsa) — bu
-      // kutilmagan uzilish, holatni to'g'ri belgilaymiz.
+      // A WebSocket often drops straight to 'close' without an 'error' (server-side
+      // close or network loss). The heartbeat then stuck at its last 'ready' state
+      // and diagnose-voice.js could not see the problem. If `finished` is still
+      // false (not already ended by 'error' or the idle timeout), this is an
+      // unexpected disconnect, so mark the state correctly.
       if (!finished && !session.closed) {
         if (currentTurnId) turnJournal.append(currentTurnId, 'turn.failed', { error: 'socket-closed-unexpectedly' });
         runtime.heartbeat('realtime-api', {
@@ -1111,17 +1096,17 @@ async function mainLoop() {
           reason: 'socket-closed-unexpectedly'
         });
         if (sessionWasReady) {
-          // Doim eshitish sessiyasi serverdan vaqti-vaqti bilan uziladi va o'zi qayta ulanadi — bunda ovoz/xabar yo'q.
+          // Always-listening sessions are periodically dropped by the server and reconnect on their own; no sound or message.
           if (!trigger.alwaysOn) {
             playSystemSound('Basso');
             sendTelegram('⚠️ The voice session disconnected unexpectedly. It will reconnect on the next invocation.');
           }
         }
       }
-      finishRealtimeSession('ulanish yopildi');
+      finishRealtimeSession('connection closed');
     });
 
-    inf(reason + ' — realtime suhbat ulanmoqda');
+    inf(reason + ': connecting realtime conversation');
     session.connect();
     armIdleTimer();
     return true;
@@ -1130,15 +1115,15 @@ async function mainLoop() {
     }
   }
 
-  // Barcha triggerlar bitta state transition'dan o'tadi. Rekonstruksiya
-  // qilingan snapshotda triggerVoice chaqiriqlari qolib, funksiyaning o'zi
-  // yo'qolgan edi — Porcupine/qarsak topilganda ReferenceError bo'lib daemon
-  // qular edi. Fn DOWN hands-free suhbatni shu yer orqali ochadi.
-  // ── Doim eshitib turish sessiyasi ──
+  // Every trigger goes through one state transition. A reconstructed snapshot
+  // once kept the triggerVoice calls but lost the function itself, so the daemon
+  // crashed with a ReferenceError on Porcupine/clap detection. Fn DOWN opens the
+  // hands-free conversation through here.
+  // ── Always-listening session ──
   let alwaysOnTimer = null;
   function ensureAlwaysOnSession() {
     if (!ALWAYS_LISTEN || !REALTIME_ENABLED || _activeRealtimeSession || state !== 'listening' || Date.now() < _realtimeDisabledUntil) return false;
-    inf('👂 Doim eshitish sessiyasi ochilmoqda (faqat "Jarvis" deganingizda javob beradi)');
+    inf('👂 Opening always-listening session (answers only when you say "Jarvis")');
     return startRealtimeSession('always-on', { alwaysOn: true, playAck: false });
   }
   function scheduleAlwaysOn(delay = 1500) {
@@ -1159,9 +1144,9 @@ async function mainLoop() {
       try { const { execSync } = require('child_process'); execSync('killall afplay >/dev/null 2>&1'); } catch (_) {}
     }
     inf('[triggerVoice] ' + reason + ' @' + new Date().toISOString() + ' trigger=' + JSON.stringify(trigger).slice(0,200));
-    // Lokal model va STT fallback parallel tinglaydi. Ulardan biri trigger
-    // qilishi bilan ikkinchisining yarim yig'ilgan segmentini tashlaymiz;
-    // aks holda realtime tugagach eski “Hey Jarvis” keyingi nutqqa qo'shiladi.
+    // The local model and the STT fallback listen in parallel. As soon as one
+    // triggers, the other's half-collected segment is dropped; otherwise an old
+    // "Hey Jarvis" would be prepended to the next utterance after realtime ends.
     wakeSpeechBuffers = [];
     wakeSpeechStartedAt = 0;
     wakeSpeechLastVoiceAt = 0;
@@ -1172,7 +1157,7 @@ async function mainLoop() {
         fallback: 'batch-stt',
         retryAt: _realtimeDisabledUntil
       });
-      wrn('Realtime vaqtincha bloklangan — batch STT fallback ishlatiladi');
+      wrn('Realtime temporarily blocked; using the batch STT fallback');
     }
     const now = Date.now();
     lastHotwordTime = now;
@@ -1184,7 +1169,7 @@ async function mainLoop() {
     lastVoiceTime = now;
     cmdSpeechStarted = true;
     if (trigger.playAck !== false) playWakeSound(WAKE_SOUND_PATH);
-    inf(reason + ' — suhbat ochildi, tinglanyapti');
+    inf(reason + ': conversation opened, listening');
     return true;
   }
 
@@ -1197,7 +1182,7 @@ async function mainLoop() {
     cmdStartTime = now;
     lastVoiceTime = now;
     cmdSpeechStarted = true;
-    inf('💬 Suhbat davom etmoqda (hands-free) — gapirishingiz mumkin...');
+    inf('💬 Conversation continues (hands-free); go ahead and speak...');
   }
 
   const fnSocketPath = path.join(PROJECT_DIR, '.run', 'fnkey.sock');
@@ -1209,7 +1194,7 @@ async function mainLoop() {
     let fnBuf = '';
     fnClient.on('connect', () => {
       fnPressed = false;
-      inf('Fn-key broker ulandi');
+      inf('Fn-key broker connected');
     });
     fnClient.on('data', (data) => {
       fnBuf += data.toString();
@@ -1218,19 +1203,19 @@ async function mainLoop() {
       for (const raw of lines) {
         const event = raw.trim();
         if (event === 'DOWN') {
-          // flagsChanged dublikat hodisasi ikkinchi realtime sessiya ochmasin (400ms debounce).
+          // A duplicate flagsChanged event must not open a second realtime session (400 ms debounce).
           if (fnPressed || Date.now() - lastFnDownAt < 400) continue;
           fnPressed = true;
           lastFnDownAt = Date.now();
           if (state === 'realtime' && _activeRealtimeSession && !_activeRealtimeSession.closed) {
-            // Fn har doim yangi suhbatni boshlash tugmasi bo'lishi kerak. Idle
-            // timer/VAD sessionni hali yopmagan bo'lsa, u keyingi Fn'ni oldin
-            // jim rad etardi. Faol agent vazifasini esa hech qachon bekor
-            // qilmaymiz; bunday holatda mavjud sessiya saqlanadi.
+            // Fn must always start a new conversation. If the idle timer/VAD had
+            // not closed the session yet, it used to silently reject the next Fn.
+            // An active agent task is never cancelled; in that case the existing
+            // session is kept.
             if (_activeRealtimeSession._runningTasks?.size) {
-              inf('Fn qabul qilindi: faol vazifa bor, mavjud realtime suhbat saqlanadi');
+              inf('Fn accepted: a task is running, keeping the current realtime conversation');
             } else if (_activeRealtimeSession._isSpeakingNow?.()) {
-              inf('Fn bosildi: mavjud javob to\'xtatildi (barge-in)');
+              inf('Fn pressed: current reply stopped (barge-in)');
               _activeRealtimeSession._stopSpeakingByUser?.('fn-pressed');
             } else {
               restartFromFn = true;
@@ -1246,9 +1231,9 @@ async function mainLoop() {
           }
         } else if (event === 'UP') {
           fnPressed = false;
-          // Fn qo'yib yuborilishi suhbat turnini yopmaydi. Mikrofon realtime
-          // sessiya davomida oqishda qoladi; provider VAD tabiiy pauzada
-          // speech_stopped/transkript chiqaradi. Keyingi gaplar uchun Fn kerak emas.
+          // Releasing Fn does not close the turn. The microphone keeps streaming for
+          // the whole realtime session; provider VAD emits speech_stopped/transcripts
+          // at natural pauses. Fn is not needed for follow-up speech.
         } else if (event === 'RESET') {
           fnPressed = false;
           lastFnDownAt = 0;
@@ -1290,10 +1275,10 @@ async function mainLoop() {
         rolling.push(stepData);
         if (state === 'command_record') cmdBuffers.push(stepData);
         if (state === 'realtime' && _activeRealtimeSession) {
-          // RealtimeSession ichidagi DuplexVoiceEngine calibration thresholdlarini
-          // xom mikrofon RMS birliklarida qo'llaydi va yuboriladigan nutqni o'zi
-          // target RMS'ga kuchaytiradi. Bu yerda oldindan gain berish xona fonini
-          // ham "speech" qilib, server VAD'ni speech_started holatida qoldirardi.
+          // DuplexVoiceEngine inside RealtimeSession applies its calibration thresholds
+          // in raw microphone RMS units and boosts outgoing speech to the target RMS
+          // itself. Applying gain here as well turned room noise into "speech" and
+          // left server VAD stuck in speech_started.
           const realtimeChunk = Buffer.from(stepData);
           const queued = !_activeRealtimeSession._nativeAec && typeof _activeRealtimeSession._jarvisQueueWakeAudio === 'function'
             && _activeRealtimeSession._jarvisQueueWakeAudio(realtimeChunk);
@@ -1319,10 +1304,9 @@ async function mainLoop() {
         if (stepData) {
           nextStepTime = now + STEP_MS;
 
-          // Ikki marta qarsak — PEAK amplitudadan (RMS/getEnergy emas):
-          // qarsak juda qisqa zarba, 200ms oyna bo'yicha o'rtachalashtirilsa
-          // (RMS) tinch fon bilan aralashib "yumshab" ketardi va ko'p marta
-          // sezilmay qolardi. Peak eng baland cho'qqini yo'qotmaydi.
+          // Double clap uses PEAK amplitude (not RMS/getEnergy): a clap is a very
+          // short impulse; averaged over a 200 ms window (RMS) it blended into the
+          // quiet background and was often missed. Peak keeps the highest spike.
           if (_clap) {
             const stepPeak = getPeakAmplitude(stepData);
             const clapHit = _clap.feedEnergy(stepPeak, now);
@@ -1333,8 +1317,8 @@ async function mainLoop() {
             }
           }
 
-          // Lokal detektorga faqat yangi PCM step yuboriladi; rolling overlap
-          // yuborilsa bir audio qayta-qayta inference qilinardi.
+          // Only the new PCM step goes to the local detector; sending the rolling
+          // overlap would run inference on the same audio again and again.
           let detected = null;
           if (_detector) {
             detected = _detector.processChunk(applyGain(Buffer.from(stepData), OPENWAKEWORD_INPUT_GAIN));
@@ -1349,15 +1333,15 @@ async function mainLoop() {
               const wakeModel = detected.model || 'hey_jarvis';
               triggerVoice('🔥 HOTWORD: "' + wakeModel.replace(/_/g, ' ') + '" (openWakeWord)', {
                 addressedWake: true,
-                // Foydalanuvchi wake qabul qilinganini ko'rmasdan bilishi kerak.
-                // 180ms chime tugagach bounded preroll buyruqni saqlab qoladi.
+                // The user must know the wake was accepted without looking.
+                // After the 180 ms chime, a bounded preroll keeps the command.
                 playAck: true,
                 seedAudio: rolling.sliceLast(REALTIME_WAKE_PREROLL_MS)
               });
             return;
           }
 
-          // STT backup: faqat openWakeWord tayyor bo'lmaganda yoki maxsus yoqilganda ishlaydi.
+          // STT backup: runs only while openWakeWord is not ready, or when explicitly enabled.
           const energy = getEnergy(stepData);
           adaptGain(energy);
           if (env('DEBUG_ENERGY') === 'true' && (now % 2000) < 200) inf('Energy=' + Math.round(energy) + ' gain=' + _gain.toFixed(1));
@@ -1414,13 +1398,13 @@ async function mainLoop() {
             inConversation = false;
             state = 'listening';
             cmdBuffers = [];
-            inf('Suhbat avtomatik yakunlandi (jimlik)');
+            inf('Conversation ended automatically (silence)');
             return;
           }
           state = 'processing';
           const totalPCM = Buffer.concat(cmdBuffers);
           const wavBuf = pcmToWavBuffer(totalPCM);
-          inf('STT ishlanyapti...');
+          inf('Transcribing...');
           _sttPool.recognize(wavBuf, 'auto').then(r => {
             nextStepTime = Date.now(); // reset timing
             if (r && r.status === 'ok' && r.text && r.text.length > 1) {
@@ -1431,16 +1415,16 @@ async function mainLoop() {
               }
               ok('Buyruq: "' + cmd + '"');
               processCommand(cmd).catch(err => {
-                er('processCommand xatolik: ' + (err.message || err));
+                er('processCommand error: ' + (err.message || err));
                 if (inConversation) resumeConversationListening(); else state = 'listening';
               });
             } else {
-              wrn('STT natija topilmadi');
+              wrn('STT returned no result');
               if (inConversation) resumeConversationListening();
               else state = 'listening';
             }
           }).catch(err => {
-            er('STT xatolik: ' + (err.message || err));
+            er('STT error: ' + (err.message || err));
             if (inConversation) resumeConversationListening();
             else state = 'listening';
           });
@@ -1540,7 +1524,7 @@ async function processCommand(command) {
     if (q.length > 2) { const f = searchMemory(q, 3); if (f && f.status === 'ok' && f.results.length) mem = '\n[Xotira]:\n' + f.results.map(r => r.matches.map(m => m.text).join(' | ')).join('\n') + '\n'; }
   } catch(e){}
 
-  // Qiyin / murakkab tasklarni katta modelga (Antigravity/Gemini Pro) fonda yo'naltirish ("ularni gapirtirmay")
+  // Route hard/complex tasks to the big model (Antigravity/Gemini Pro) in the background, without speaking them aloud
   const isHardTask = isComplexTask(command) || /\b(yoz|tuzat|kod|dastur|tekshir|skript|fayl|terminal|build|deploy|code|fix|refactor|analyze|investigate|git|clone|search|qidir|yarat|arxitektura|yozib ber)\b/i.test(command);
   if (isHardTask) {
     const ack = 'Right away, sir. Processing your task in the background. What else can I do for you?';
@@ -1549,7 +1533,7 @@ async function processCommand(command) {
       await execFileAsync('afplay', [ackAudio], { timeout: 10000 }).catch(() => {});
       try { fs.unlinkSync(ackAudio); } catch (_) {}
     }
-    sendTelegram('⚙️ Ishga tushirildi: ' + command);
+    sendTelegram('⚙️ Started: ' + command);
 
     (async () => {
       try {
@@ -1564,7 +1548,7 @@ async function processCommand(command) {
         }
 
         if (taskResult) {
-          sendTelegram('✅ Vazifa bajarildi:\n\n' + taskResult.slice(0, 4000));
+          sendTelegram('✅ Task completed:\n\n' + taskResult.slice(0, 4000));
           turnJournal.append(batchTurnId, 'assistant.completed', { text: taskResult.slice(0, 4000) });
           if (state !== 'command_record') {
             const doneVoice = 'Task completed, sir. Full report sent to Telegram.';
@@ -1576,11 +1560,11 @@ async function processCommand(command) {
           }
         }
       } catch (err) {
-        sendTelegram('⚠️ Vazifani bajarishda xatolik: ' + err.message);
+        sendTelegram('⚠️ Task failed: ' + err.message);
       }
     })();
 
-    // Suhbati davom etsin: fon taski bajarilayotganda ham suhbat to'xtamaydi
+    // Keep the conversation going: it does not stop while a background task runs
     if (inConversation) resumeConversationListening(); else state = 'listening';
     return;
   }
@@ -1590,7 +1574,7 @@ async function processCommand(command) {
   if (reply) {
     const acceptedResponse = runtime.acceptResponse(reply);
     if (!acceptedResponse.accepted) {
-      wrn('Takror agent javobi ovozga chiqarilmadi');
+      wrn('Duplicate agent reply was not spoken');
       turnJournal.append(batchTurnId, 'turn.cancelled', { reason: 'duplicate-response' });
       if (inConversation) resumeConversationListening(); else state = 'listening';
       return;
@@ -1600,7 +1584,7 @@ async function processCommand(command) {
     turnJournal.append(batchTurnId, 'assistant.completed', { text: reply.substring(0, 4000) });
     const audio = await ttsToFile(reply.substring(0, 400));
     if (audio) {
-      await execFileAsync('afplay', [audio], { timeout: 15000 }).then(() => ok('🔊 Ovoz')).catch(() => {});
+      await execFileAsync('afplay', [audio], { timeout: 15000 }).then(() => ok('🔊 Voice')).catch(() => {});
       (async () => {
         try {
           const ogg = audio.replace(/\.[^.\/]+$/, '') + '.ogg';
@@ -1614,7 +1598,7 @@ async function processCommand(command) {
     if (inConversation) resumeConversationListening(); else state = 'listening';
   } else {
     const fallback = 'I could not prepare a response. Please say that again.';
-    wrn('Agent bo\'sh javob qaytardi');
+    wrn('Agent returned an empty reply');
     turnJournal.append(batchTurnId, 'turn.failed', { reason: 'agent-empty-response' });
     sendTelegram('⚠️ ' + fallback);
     const audio = await ttsToFile(fallback);
@@ -1641,7 +1625,7 @@ function cleanup(exitCode = 0) {
 }
 process.on('SIGINT', () => cleanup(0));
 process.on('SIGTERM', () => cleanup(0));
-process.on('SIGHUP', () => inf('SIGHUP qabul qilindi: keyingi action safety tekshiruvi .env dan yangi autonomy holatini o‘qiydi.'));
+process.on('SIGHUP', () => inf('SIGHUP received: the next action safety check re-reads the autonomy setting from .env.'));
 
 // ════════════════════════════════════════════
 // ENTRY
