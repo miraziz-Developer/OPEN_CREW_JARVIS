@@ -584,11 +584,15 @@ function buildTools() {
       "build or fix a project end to end, keep working until something is achieved, organise a lot of files, monitor and report. " +
       "It returns instantly and an autonomous agent team (computer agent, code interpreter, web browser, screen worker) works in " +
       "the background until the goal is verifiably achieved, asking the user only for risky steps. You can start several missions. " +
-      "For a single quick job (a few minutes) use run_task instead. After starting, answer in one short sentence and stay available.",
+      "For a single quick job (a few minutes) use run_task instead. After starting, answer in one short sentence and stay available. " +
+      "When the goal is about one of the user's own code projects (go into project X and build, fix or finish something), pass its name in project: " +
+      "the Antigravity coding agent then works inside that repository, JARVIS writes its prompts, checks every step and keeps going until it is verified. " +
+      "If the result says the project was not found, ask the user which one they mean.",
     parameters: {
       type: 'object',
       properties: {
         goal: { type: 'string', description: "The full goal in the user's words with every constraint and the definition of done" },
+        project: { type: 'string', description: "Optional: the user's project name or folder as they said it, for example forex-ai-analyst" },
         hours: { type: 'number', description: 'Optional time budget in hours (default 72)' }
       },
       required: ['goal']
@@ -1800,7 +1804,7 @@ class RealtimeSession extends EventEmitter {
     let output;
     try {
       if (!this._missions) output = 'Missions are not available in this session.';
-      else if (msg.name === 'start_mission') output = this._missions.start(String(args.goal || ''), { hours: args.hours });
+      else if (msg.name === 'start_mission') output = this._missions.start(String(args.goal || ''), { hours: args.hours, project: args.project });
       else if (msg.name === 'mission_status') output = this._missions.status(args.mission);
       else if (msg.name === 'standing_approval') output = this._standingApproval(args);
       else output = this._missions.control(args.mission, String(args.action || ''), { text: args.text });

@@ -95,7 +95,7 @@ function createWorkers(options = {}) {
   const interpreter = {
     available: () => Boolean(env('INTERPRETER_PYTHON')) || hasVenv('.venv-interpreter'),
     async run({ prompt, mission, timeoutMs }) {
-      const cwd = workspace(mission);
+      const cwd = mission?.context?.projectDir || workspace(mission);
       const brief = `Work in ${cwd} unless the task names another absolute path. Do not access secrets or credential stores. ` +
         `Do not send messages, publish, purchase, or delete data outside the task's scope. Finish with a concise summary of commands run, files changed and verified results.\n\nTask: ${prompt}`;
       const result = await runProcess(env('INTERPRETER_PYTHON', fs.existsSync(path.join(PROJECT_DIR, '.venv-interpreter', 'bin', 'python')) ? path.join(PROJECT_DIR, '.venv-interpreter', 'bin', 'python') : 'python3.11'), [path.join(__dirname, 'interpreter_worker.py')], {
@@ -212,10 +212,26 @@ function createWorkers(options = {}) {
     available: () => require('../../skills/antigravity').status().available,
     async run({ prompt, mission, task, timeoutMs }) {
       const { executePrompt } = require('../../skills/antigravity');
+      // Without a project the agent gets the mission's scratch workspace, never JARVIS's own repository.
+      const targetDir = mission?.context?.projectDir || task?.cwd || (mission ? workspace(mission) : null);
+      if (!targetDir) return { ok: false, output: '', error: 'Antigravity needs a project directory' };
+      const run = conversationId => executePrompt(prompt, {
+        projectDir: targetDir, timeoutMs: timeoutMs || 15 * 60 * 1000, json: true, conversationId
+      });
       try {
-        const targetDir = (mission && mission.context?.projectDir) || (task && task.cwd) || PROJECT_DIR;
-        const result = await executePrompt(prompt, { projectDir: targetDir, timeoutMs: timeoutMs || 15 * 60 * 1000 });
-        return { ok: result.status === 'ok', output: result.output || '', error: result.status === 'ok' ? '' : result.output };
+        const previous = mission?.context?.antigravityConversation || null;
+        let result;
+        try {
+          result = await run(previous);
+        } catch (err) {
+          // An expired conversation must not stall the mission: start a fresh one once.
+          if (!previous || err.name === 'AntigravityUnavailableError') throw err;
+          result = await run(null);
+        }
+        if (mission && result.conversationId) {
+          mission.context = { ...(mission.context || {}), antigravityConversation: result.conversationId };
+        }
+        return { ok: true, output: result.output || '', error: '' };
       } catch (err) {
         return { ok: false, output: '', error: err.message };
       }

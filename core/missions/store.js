@@ -66,6 +66,8 @@ class MissionStore {
       goal: text.slice(0, 2000), source: options.source || 'voice', status: 'planning',
       criteria: [], tasks: [], log: [], iteration: 0, consecutiveFailures: 0, summary: '',
       pendingApproval: null, result: null, notes: [],
+      // e.g. { projectDir, projectName, antigravityConversation } for project missions
+      context: options.context && typeof options.context === 'object' ? { ...options.context } : {},
       budget: {
         maxIterations: options.maxIterations || 300,
         maxHours: hours,

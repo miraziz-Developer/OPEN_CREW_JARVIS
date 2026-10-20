@@ -48,3 +48,16 @@ test('antigravity: createProject rejects path-traversal names', async () => {
   const skill = freshSkill(fakeAgy('echo ok'));
   await assert.rejects(skill.createProject('../../etc', 'x'), /Project name/);
 });
+
+test('antigravity: JSON mode returns the response and conversation id, and resumes it', async () => {
+  const argsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agy-args-')), 'args');
+  const skill = freshSkill(fakeAgy(`echo "$@" > "${argsFile}"; printf '%s\\n' '{"conversation_id":"c-1","status":"SUCCESS","response":"Done.\\n"}'`));
+  const result = await skill.executePrompt('build it', { json: true, conversationId: 'c-0', timeoutMs: 5000 });
+  assert.deepEqual(result, { status: 'ok', output: 'Done.', exitCode: 0, conversationId: 'c-1' });
+  assert.match(fs.readFileSync(argsFile, 'utf8'), /--conversation c-0 --output-format json/);
+});
+
+test('antigravity: a non-success JSON status is an error, not an answer', async () => {
+  const skill = freshSkill(fakeAgy(`echo '{"conversation_id":"c-1","status":"ERROR","response":"quota exceeded"}'`));
+  await assert.rejects(skill.executePrompt('x', { json: true, timeoutMs: 5000 }), /status ERROR: quota exceeded/);
+});

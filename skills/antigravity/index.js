@@ -106,6 +106,10 @@ async function executePrompt(prompt, options = {}) {
   const model = options.model || (effort === 'low' ? 'gemini-3.8-flash-low' : undefined);
   if (model) args.push('--model', model);
   if (targetDir) args.push('--add-dir', targetDir);
+  // A mission keeps one Antigravity conversation, so later steps remember
+  // what earlier steps changed in the project.
+  if (options.conversationId) args.push('--conversation', String(options.conversationId));
+  if (options.json) args.push('--output-format', 'json');
 
   const res = await runAgy(args, { cwd, timeoutMs: options.timeoutMs });
   const combined = `${res.stdout}\n${res.stderr}`;
@@ -116,7 +120,24 @@ async function executePrompt(prompt, options = {}) {
   if (res.code !== 0) {
     throw new Error(`Antigravity exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`);
   }
-  return { status: 'ok', output: res.stdout, exitCode: res.code };
+  if (!options.json) return { status: 'ok', output: res.stdout, exitCode: res.code };
+  const parsed = parseJsonResult(res.stdout);
+  if (!parsed) return { status: 'ok', output: res.stdout, exitCode: res.code, conversationId: null };
+  if (parsed.status && parsed.status !== 'SUCCESS') {
+    throw new Error(`Antigravity finished with status ${parsed.status}: ${String(parsed.response || parsed.error || '').slice(0, 300)}`);
+  }
+  return { status: 'ok', output: String(parsed.response || '').trim(), exitCode: res.code, conversationId: parsed.conversation_id || null };
+}
+
+// `--output-format json` prints one object; tolerate log lines before it.
+function parseJsonResult(stdout) {
+  const lines = String(stdout || '').trim().split('\n').reverse();
+  for (const line of lines) {
+    const text = line.trim();
+    if (!text.startsWith('{')) continue;
+    try { return JSON.parse(text); } catch (_) {}
+  }
+  try { return JSON.parse(String(stdout || '').trim()); } catch (_) { return null; }
 }
 
 /**

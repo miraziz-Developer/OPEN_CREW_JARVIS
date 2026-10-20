@@ -48,6 +48,19 @@ const NEGATED_ACTIONS = new RegExp(
   "\\b(?:do\\s+not|don['’]?t|never|must\\s+not|should\\s+not|without|avoid)\\s+(?:\\w+\\s+){0,3}?(?:" + RISK_VERBS + ")\\w*" +
   "(?:\\s*(?:,|\\bor\\b|\\band\\b|\\bnor\\b)\\s*(?:(?:any|the|a|an|my|or|and)\\s+){0,2}(?:" + RISK_VERBS + ")\\w*)*", 'gi');
 
+// Tells the planner which repository the mission is about. Code work goes to the
+// Antigravity coding agent when it is signed in, and the plan must end by
+// verifying the result inside that project.
+function projectBrief(mission, workers) {
+  const dir = mission.context?.projectDir;
+  if (!dir) return '';
+  const coder = workers.includes('antigravity') ? 'antigravity' : 'interpreter';
+  return `\nProject directory: ${dir} (project "${mission.context.projectName || dir}"). All work happens inside this directory. ` +
+    `Use the ${coder} worker for reading, writing and fixing code there; write each of its prompts as a precise engineering brief ` +
+    '(what to change, which files, acceptance checks). Start by inspecting the project, and finish with a task that verifies the ' +
+    'result in that directory (run its tests, linter or build) and reports the exact outcome.';
+}
+
 function sanitizeForRisk(text) {
   return String(text || '')
     .replace(/https?:\/\/\S+/gi, ' ')                                                    // URL ichidagi ?format=3, /post/ kabilar
@@ -176,12 +189,13 @@ class GoalEngine {
   // ── Reja ──────────────────────────────────────────────────────────────────
   async plan(mission) {
     const notes = mission.notes.length ? `\nUser notes:\n- ${mission.notes.join('\n- ')}` : '';
+    const workers = this.availableWorkers();
     const plan = await this.llm.completeJson({
-      system: buildPlanSystem(this.availableWorkers()), user: `Goal: ${mission.goal}${notes}`, model: this.model, hard: true, effort: 'medium', maxOutputTokens: 6000
+      system: buildPlanSystem(workers), user: `Goal: ${mission.goal}${notes}${projectBrief(mission, workers)}`, model: this.model, hard: true, effort: 'medium', maxOutputTokens: 6000
     });
     mission.criteria = (Array.isArray(plan.criteria) ? plan.criteria : []).map(c => clip(c, 300)).filter(Boolean).slice(0, 8);
     if (!mission.criteria.length) mission.criteria = [`The goal is fully achieved: ${clip(mission.goal, 200)}`];
-    mission.tasks = normalizeTasks(plan.tasks, 0, this.now(), this.availableWorkers());
+    mission.tasks = normalizeTasks(plan.tasks, 0, this.now(), workers);
     if (!mission.tasks.length) throw new Error('The plan came back empty');
     mission.status = 'running';
     this._log(mission, 'plan', `${mission.tasks.length} tasks, ${mission.criteria.length} criteria`);
@@ -268,7 +282,8 @@ class GoalEngine {
 
   _taskPrompt(mission, task) {
     const context = mission.notes.length ? `\nUser notes: ${mission.notes.join(' | ')}` : '';
-    return `${task.prompt}\n\nOverall goal: ${mission.goal}${context}\nReply with a concise factual summary of what you did and the concrete results (paths, values, outputs).`;
+    const project = mission.context?.projectDir ? `\nProject directory: ${mission.context.projectDir}` : '';
+    return `${task.prompt}\n\nOverall goal: ${mission.goal}${project}${context}\nReply with a concise factual summary of what you did and the concrete results (paths, values, outputs).`;
   }
 
   async _reflect(mission, task, outcome) {
@@ -353,4 +368,4 @@ class GoalEngine {
   }
 }
 
-module.exports = { GoalEngine, normalizeTasks, buildPlanSystem, WORKERS, sanitizeForRisk };
+module.exports = { GoalEngine, normalizeTasks, buildPlanSystem, projectBrief, WORKERS, sanitizeForRisk };

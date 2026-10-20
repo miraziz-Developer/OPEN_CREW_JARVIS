@@ -3,6 +3,7 @@
 const path = require('path');
 const { OPEN } = require('./store');
 const { StandingApprovals, SCOPES } = require('./standing');
+const { resolveProject } = require('../project-locator');
 
 const ACTIONS = new Set(['pause', 'resume', 'cancel', 'approve', 'reject', 'note']);
 
@@ -18,8 +19,18 @@ function createMissionApi(store, options = {}) {
 
     start(goal, options = {}) {
       const hours = Number(options.hours);
-      const mission = store.create(goal, { source: 'voice', maxHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 14) : 72 });
-      return `Mission ${mission.n} started. It runs in the background until the goal is achieved or it needs you; I will report progress.`;
+      let context = {};
+      if (options.project) {
+        const project = (options.resolveProject || resolveProject)(options.project);
+        if (!project.ok) {
+          const choices = project.candidates?.length ? ` Projects I found: ${project.candidates.join(', ')}.` : '';
+          return `Mission not started: ${project.reason}.${choices} Ask the user which project they mean.`;
+        }
+        context = { projectDir: project.path, projectName: project.name };
+      }
+      const mission = store.create(goal, { source: 'voice', context, maxHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 14) : 72 });
+      const where = context.projectDir ? ` in project ${context.projectName}` : '';
+      return `Mission ${mission.n} started${where}. It runs in the background until the goal is achieved or it needs you; I will report progress.`;
     },
 
     status(idOrNumber) {
