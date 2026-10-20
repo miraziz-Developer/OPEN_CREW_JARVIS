@@ -115,22 +115,35 @@ async function pause() {
     try { execSync('launchctl bootout gui/' + UID + '/' + label, { timeout: 15000 }); } catch (e) {}
   }
   fs.writeFileSync(PAUSE_MARKER, String(Date.now()));
-  log('Pauzada. RAM bo\'shatildi.');
+  log('Paused. RAM freed.');
+}
+
+function labelLoaded(label) {
+  try { execSync('launchctl print gui/' + UID + '/' + label, { stdio: 'ignore', timeout: 5000 }); return true; } catch (_) { return false; }
+}
+
+// A bootstrap issued right after a bootout (e.g. Fn+Shift pressed twice quickly) fails with
+// "5: Input/output error" while launchd is still tearing the job down, which used to leave
+// JARVIS fully stopped. Retry until the label is loaded.
+async function bootstrapWithRetry(plistPath, label, attempts = 6) {
+  for (let i = 1; i <= attempts; i++) {
+    if (labelLoaded(label)) return true;
+    try { execSync('launchctl bootstrap gui/' + UID + ' "' + plistPath + '"', { stdio: 'ignore', timeout: 15000 }); } catch (_) {}
+    if (labelLoaded(label)) return true;
+    await new Promise(r => setTimeout(r, 1000 * i));
+  }
+  return false;
 }
 
 async function resume() {
-  log('Uyg\'otilmoqda...');
+  log('Waking up...');
   try { fs.unlinkSync(PAUSE_MARKER); } catch (e) {}
   for (const label of BRAIN_LABELS.slice().reverse()) {
     if (!fs.existsSync(agentPlist(label))) continue;
-    try { execSync('launchctl bootstrap gui/' + UID + ' "' + agentPlist(label) + '"', { timeout: 15000 }); } catch (e) {}
+    await bootstrapWithRetry(agentPlist(label), label, 3);
   }
-  try {
-    execSync('launchctl bootstrap gui/' + UID + ' "' + PLIST_PATH + '"', { timeout: 15000 });
-    log('launchctl bootstrap sent.');
-  } catch (e) {
-    log('bootstrap error: ' + e.message);
-  }
+  if (await bootstrapWithRetry(PLIST_PATH, PLIST_LABEL)) log('launchctl bootstrap done.');
+  else log('bootstrap failed after retries; run: launchctl bootstrap gui/' + UID + ' "' + PLIST_PATH + '"');
   log('Wake request sent; waiting for services to become ready.');
   const ready = await waitUntilReady(45000);
   speak(ready ? 'Back online.' : 'Coming online. This may take a moment.');
