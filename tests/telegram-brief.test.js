@@ -8,7 +8,7 @@ function brief(options = {}) {
   let now = 1000000;
   const calls = [];
   const llm = options.llm === undefined ? { complete: async request => { calls.push(request); return '✅ Report written. Nothing needed from you.'; } } : options.llm;
-  // Eski xulq testlari verbose rejimda (filtrsiz); standart filtr pastdagi alohida testda. Log yozilmaydi.
+  // Old-behaviour tests run in verbose mode (unfiltered); the default filter has its own test below. Nothing is logged.
   const instance = new TelegramBrief({ llm, now: () => now, verbose: true, log: () => {}, ...options.config });
   return { instance, calls, tick: ms => { now += ms; } };
 }

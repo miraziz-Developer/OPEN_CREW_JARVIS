@@ -1,6 +1,6 @@
 'use strict';
 
-// Testlar jonli .env sozlamalariga bog'liq bo'lmasin.
+// Tests must not depend on the live .env settings.
 process.env.REALTIME_BARGE_IN_CONFIRM_MS = '420';
 process.env.REALTIME_VAD_SILENCE_MS = '180';
 process.env.REALTIME_NORMAL_DUPLEX_HANGOVER_MS = '330';
@@ -14,7 +14,7 @@ const {
   loadInstructions, runFullAgent
 } = require('../skills/realtime-voice');
 
-// Uslub/til qoidalari sessiya ko'rsatmalarida (response.create'dagi `instructions` ularni almashtirib yuborardi).
+// Style/language rules live in the session instructions (`instructions` in response.create would replace them).
 const sessionInstructions = () => buildSessionUpdate({ id: 'voice-live', voice: 'x' }, { instructions: '', tools: [] }).session.instructions;
 
 test('voice instructions default to English, permit explicit translation, and require real task execution', () => {
@@ -746,13 +746,13 @@ test('a confident native transcript responds without waiting for authoritative S
     item_id: 'native-fast', transcript: "Xo'p, Chrome dasturini och"
   }) });
 
-  // Authoritative Azure STT hali javob bermagan (Promise pending) --
-  // shunga qaramay, native ishonchli bo'lgani uchun darhol qabul qilingan.
+  // The authoritative Azure STT has not answered yet (Promise pending),
+  // but the native transcript was trusted and accepted immediately.
   assert.deepEqual(accepted, ["Xo'p, Chrome dasturini och"]);
   assert.equal(session._pendingAuthoritativeTurn, null);
   assert.ok(telemetry.includes('stt.native-fast-path'));
 
-  // Authoritative kech kelsa ham -- ikkinchi/dublikat javob YARATILMAYDI.
+  // Even when the authoritative result arrives late, no second/duplicate reply is CREATED.
   resolveAuthoritative({ text: 'boshqacha eshitilgan matn', confidence: 0.4 });
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(accepted, ["Xo'p, Chrome dasturini och"]);
@@ -762,9 +762,8 @@ test('a confident native transcript responds without waiting for authoritative S
 test('a short or ambiguous native transcript still waits for authoritative STT', async () => {
   const session = new RealtimeSession({
     authoritativeTranscribe: async () => ({ text: 'Musiqani to\'xtat', confidence: 0.85 }),
-    // "Musiqani to'xtat" bir vaqtning o'zida matchDirectFastAction
-    // (media:spotify_stop) bilan mos keladi -- fastActionRunner
-    // mock qilinmasa bu HAQIQIY AppleScript chaqiruvini ishga tushiradi.
+    // "Musiqani to'xtat" also matches matchDirectFastAction (media:spotify_stop);
+    // without mocking fastActionRunner this would run a REAL AppleScript call.
     fastActionRunner: async () => ({ status: 'ok', message: 'Bajarildi' })
   });
   session.ready = true;
@@ -779,7 +778,7 @@ test('a short or ambiguous native transcript still waits for authoritative STT',
     item_id: 'native-short', transcript: 'Musiqani toxtat'
   }) });
 
-  // Native 2 token -- fast-path chegarasidan past, hali qaror qilinmagan.
+  // Native 2 tokens: below the fast-path threshold, not decided yet.
   assert.deepEqual(accepted, []);
   assert.notEqual(session._pendingAuthoritativeTurn, null);
 
@@ -812,7 +811,7 @@ test('contextual turns speak immediately and deliver grounded verification as a 
   assert.match(calls[1][2], /OBSIDIAN/);
   const responses = sent.filter(message => message.type === 'response.create');
   assert.equal(responses.length, 1);
-  // Suhbat javobi sessiya ko'rsatmalarini ishlatadi (alohida `instructions` yo'q), tasdiqlangan matn hali yo'q.
+  // A conversational reply uses the session instructions (no separate `instructions`); no confirmed text yet.
   assert.equal(responses[0].response.instructions, undefined);
 
   session._onMessage({ data: JSON.stringify({ type: 'response.done', response: { status: 'completed' } }) });
@@ -1059,7 +1058,7 @@ test('playback requires sustained local speech before forwarding barge-in audio'
   assert.equal(processed, 5);
   assert.equal(appended.length, 1);
   assert.equal(Buffer.from(appended[0].audio, 'base64').length, 24000);
-  // Barge-in tasdiqlanganda karnay pauza qilinadi; javob transkript tekshirilgunicha bekor qilinmaydi.
+  // When barge-in is confirmed the speaker pauses; the reply is not cancelled until the transcript is checked.
   assert.ok(session._duck);
   assert.equal(sent.filter(message => message.type === 'response.cancel').length, 0);
   assert.equal(flushed, 0);

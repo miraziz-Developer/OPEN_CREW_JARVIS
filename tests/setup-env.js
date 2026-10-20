@@ -1,5 +1,5 @@
 'use strict';
-// Testlar hech qachon haqiqiy .env, kalit yoki Postgres'ga tayanmasligi kerak.
+// Tests must never rely on a real .env, keys or Postgres.
 for (const [key, value] of Object.entries({
   JARVIS_TEST: '1',
   OPENCLAW_GATEWAY_TOKEN: 'test-gateway-token',
@@ -12,5 +12,5 @@ for (const [key, value] of Object.entries({
   DEEP_THINK_COMPLEX_MODEL: 'gpt-6-sol',
   JARVIS_CONFIRM_MODE: 'strict' // kod yo'llari to'liq sinaladi; standart (off) alohida testda tekshiriladi
 })) process.env[key] = value;
-// Testlar hech qachon haqiqiy Telegram'ga yubormasligi kerak (avval har `npm test` chatga 'Bajarildi: system:empty_trash' yuborardi).
+// Tests must never send to real Telegram (every `npm test` used to post 'Bajarildi: system:empty_trash' to the chat).
 for (const key of ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_OWNER_IDS']) if (process.env[key] === undefined) process.env[key] = '';

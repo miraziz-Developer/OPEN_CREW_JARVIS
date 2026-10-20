@@ -59,7 +59,7 @@ test('media mode rejects foreign playback but preserves concise Uzbek commands',
     accept: true,
     reason: 'speech'
   });
-  // Chaqiruvsiz bitta so'z media paytida ham rad etiladi (sababi: bir so'zli shovqin filtri birinchi ishlaydi).
+  // A single word without the wake word is rejected even during media (the one-word noise filter runs first).
   assert.equal(classifyUserTurn('Salaam.', { mediaMode: true }).accept, false);
 });
 
