@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
- * FAST ACTIONS — tez-tez ishlatiladigan oddiy amallar (dastur ochish,
- * ovoz, ekran surati, ma'lumot so'rash) uchun to'liq agent (openclaw
- * agent, LLM fikrlash zanjiri) ISHGA TUSHIRMASDAN, to'g'ridan-to'g'ri
- * tizim buyrug'i orqali bajariladi — natija soniyaning ulushida qaytadi
- * (run_task orqali bajarilsa 10-25s ketishi mumkin bo'lgan narsa).
+ * FAST ACTIONS: common simple actions (opening apps, volume, screenshots, info
+ * queries) run directly as system commands WITHOUT starting the full agent
+ * (openclaw agent, LLM reasoning chain), returning in a fraction of a second
+ * (the same thing through run_task can take 10-25 s).
  *
- * Ikki qatlam: `actions.json` — qo'lda tekshirilgan, git'ga committed
- * asosiy ro'yxat; `.fast-actions-learned.json` — Jarvisning o'zi vaqt
- * o'tishi bilan (jarvis_daemon.js'dagi davriy tekshiruv orqali)
- * qo'shadigan yangi yozuvlar (faqat xavfsiz "open_app" turi bilan
- * cheklangan — ixtiyoriy shell buyruqlarini avtomatik qo'shmaydi).
+ * Two layers: `actions.json` is the hand-reviewed base list committed to git;
+ * `.fast-actions-learned.json` holds entries JARVIS adds over time (via the
+ * periodic check in jarvis_daemon.js). Learned entries are limited to the safe
+ * "open_app" type; arbitrary shell commands are never added automatically.
  */
 const fs = require('fs');
 const path = require('path');
@@ -58,9 +56,9 @@ function loadActionsSync() {
 }
 
 function loadActions() {
-  // Realtime yo'li xotiradagi nusxani oladi; asinxron preload modul yuklanganda boshlanadi. Modul aynan shu
-  // sessiya ochilayotganda birinchi marta yuklansa, nusxa hali bo'sh bo'ladi va fast_action tool'i ro'yxatsiz
-  // qolib, JARVIS oddiy amallarni sekin run_task'ga yuborardi — shuning uchun bo'sh bo'lsa bir marta sinxron o'qiymiz.
+  // The realtime path reads the in-memory copy; the async preload starts when the module loads. If the module is
+  // first loaded exactly while a session opens, the copy is still empty, the fast_action tool has no list and JARVIS
+  // would send simple actions to the slow run_task. So an empty copy is read once synchronously.
   if (!cachedActions.length && !syncFallbackTried) {
     syncFallbackTried = true;
     const merged = loadActionsSync();
@@ -226,7 +224,7 @@ function findAction(id) {
           }
           return txt.length > 90 ? (txt.slice(0, 87) + '...') : txt;
         };
-        const summary = pending.map((t, idx) => `${idx + 1}-vazifa: ${formatTask(t.text)}`).join('. ');
+        const summary = pending.map((t, idx) => `${idx + 1}. ${formatTask(t.text)}`).join('. ');
         return {
           status: 'ok',
           uz: `Bugungi kutilayotgan ${pending.length} ta vazifangiz bor: ${summary}.`,
@@ -332,7 +330,7 @@ function findAction(id) {
       handler: async () => {
         const { exec } = require('child_process');
         return new Promise((resolve) => {
-          exec("BATT=$(pmset -g batt | grep -Eo '[0-9]+%' | head -1); DISK=$(df -h / | tail -1 | awk '{print $4}'); UPTIME=$(uptime | sed 's/.*up //;s/,.*load.*//'); echo \"Batareya: $BATT, Bo'sh disk: $DISK, Ish vaqti: $UPTIME\"", (err, stdout) => {
+          exec("BATT=$(pmset -g batt | grep -Eo '[0-9]+%' | head -1); DISK=$(df -h / | tail -1 | awk '{print $4}'); UPTIME=$(uptime | sed 's/.*up //;s/,.*load.*//'); echo \"Battery: $BATT, free disk: $DISK, uptime: $UPTIME\"", (err, stdout) => {
             const out = (stdout || '').trim();
             resolve({ status: 'ok', uz: `Tizim holati: ${out}`, en: `System diagnostics: ${out}` });
           });
@@ -347,50 +345,51 @@ function runFastAction(id) {
   return new Promise((resolve) => {
     preloadActions().then(async () => {
       const a = findAction(id);
-      if (!a) { resolve({ status: 'error', message: "Noma'lum action: " + id }); return; }
+      if (!a) { resolve({ status: 'error', message: 'Unknown action: ' + id }); return; }
 
-    const done = (status, message) => resolve({ status, message, id, uz: a.uz });
+    const label = a.en || a.uz || a.id;
+    const done = (status, message) => resolve({ status, message, id, uz: a.uz, en: a.en });
 
       try {
       switch (a.type) {
         case 'custom': {
           if (typeof a.handler === 'function') {
             const res = await a.handler();
-            done(res.status || 'ok', res.uz || res.en || res.message || 'Bajarildi');
+            done(res.status || 'ok', res.en || res.message || res.uz || 'Done');
           } else {
-            done('error', 'Handler topilmadi');
+            done('error', 'Handler not found');
           }
           break;
         }
         case 'open_app':
           execFile('open', ['-a', a.target], (err) => {
-            if (err) done('error', a.target + " topilmadi yoki ochilmadi");
-            else done('ok', a.uz + ' — bajarildi');
+            if (err) done('error', a.target + ' was not found or could not be opened');
+            else done('ok', label + ': done');
           });
           break;
         case 'open_url':
           execFile('open', [a.target], (err) => {
-            if (err) done('error', 'Ochib bo\'lmadi: ' + a.target);
-            else done('ok', a.uz + ' — bajarildi');
+            if (err) done('error', 'Could not open: ' + a.target);
+            else done('ok', label + ': done');
           });
           break;
         case 'applescript':
           execFile('osascript', ['-e', a.target], (err) => {
-            if (err) done('error', 'AppleScript xatolik: ' + (err.message || '').slice(0, 200));
-            else done('ok', a.en || (a.uz + ' — bajarildi'));
+            if (err) done('error', 'AppleScript error: ' + (err.message || '').slice(0, 200));
+            else done('ok', label + ': done');
           });
           break;
         case 'shell':
           execFile('/bin/bash', ['-c', a.target], (err, stdout) => {
-            if (err) done('error', 'Buyruq xatolik: ' + (err.message || '').slice(0, 200));
-            else done('ok', (stdout || '').trim() || (a.uz + ' — bajarildi'));
+            if (err) done('error', 'Command error: ' + (err.message || '').slice(0, 200));
+            else done('ok', (stdout || '').trim() || (label + ': done'));
           });
           break;
         case 'screenshot': {
           const args = a.target === 'clipboard' ? ['-c'] : ['-x', path.join(require('os').homedir(), 'Desktop', 'jarvis-screenshot-' + Date.now() + '.png')];
           execFile('screencapture', args, (err) => {
-            if (err) done('error', 'Skrinshot olinmadi: ' + err.message);
-            else done('ok', a.target === 'clipboard' ? 'Skrinshot olindi, clipboard\'da' : 'Skrinshot olindi, Desktop\'ga saqlandi');
+            if (err) done('error', 'Screenshot failed: ' + err.message);
+            else done('ok', a.target === 'clipboard' ? 'Screenshot copied to the clipboard' : 'Screenshot saved to the Desktop');
           });
           break;
         }
@@ -422,10 +421,9 @@ function runFastAction(id) {
   });
 }
 
-// Faqat "open_app" turi avtomatik o'rganiladi — bu eng past xavfli
-// (mavjud bo'lmagan ilova nomi shunchaki xato qaytaradi, hech qanday
-// zararli ta'sir yo'q). Ixtiyoriy shell/applescript buyruqlar hech
-// qachon avtomatik qo'shilmaydi.
+// Only the "open_app" type is learned automatically: it is the lowest risk (an
+// unknown app name simply returns an error, with no harmful effect). Arbitrary
+// shell/AppleScript commands are never added automatically.
 async function learnOpenAppAction(appName) {
   if (!appName || typeof appName !== 'string') return { status: 'error' };
   const clean = appName.trim();

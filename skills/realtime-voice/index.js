@@ -442,7 +442,7 @@ function buildTools() {
     const fa = require('../fast-actions');
     const actions = fa.loadActions();
     fastActionIds = actions.map(a => a.id);
-    fastActionsDoc = actions.map(a => a.id + ' — ' + a.uz).join('; ');
+    fastActionsDoc = actions.map(a => a.id + ' — ' + (a.en || a.uz)).join('; ');
   } catch (e) {}
 
   const tools = [{
