@@ -40,9 +40,9 @@ const REFLECT_SYSTEM =
   "blocked=true only when progress needs something the user must provide (credentials, a decision, a missing file) and say exactly what in blocker. " +
   "Add \"skip_tasks\":[ids] to drop pending tasks that are already satisfied by the results so far (do this whenever a task already did the work of later ones).";
 
-// Kalit-so'z siyosati inkorlarni ("do not delete") va zararsiz iboralarni ("file permissions", /private/tmp yo'li) ham
-// xavfli deb hisoblaydi. Missiyalarda bu doimiy to'siq bo'lardi, shuning uchun baholashdan oldin ularni olib tashlaymiz;
-// haqiqiy "delete X", "send an email" kabi buyruqlar esa o'zgarishsiz qoladi.
+// The keyword policy also treats negations ("do not delete") and harmless phrases ("file permissions", a
+// /private/tmp path) as risky. In missions that would be a constant blocker, so they are removed before
+// assessment; real commands like "delete X" or "send an email" stay unchanged.
 const RISK_VERBS = 'delet|remov|eras|modif|send|email|post|publish|upload|shar|purchas|buy|pay|transfer|chang|touch|access|writ|creat';
 const NEGATED_ACTIONS = new RegExp(
   "\\b(?:do\\s+not|don['’]?t|never|must\\s+not|should\\s+not|without|avoid)\\s+(?:\\w+\\s+){0,3}?(?:" + RISK_VERBS + ")\\w*" +
@@ -61,9 +61,9 @@ function sanitizeForRisk(text) {
     .replace(/\/private\//g, '/');
 }
 
-// Ish arizasi, HR/recruiter xabari va shunga o'xshash tashqi yuborish amallari doim tasdiq talab qiladi
-// (umumiy siyosat "apply"/"submit" so'zlarini tashqi ta'sir deb bilmaydi).
-// Ariza/xat yuborish tasdig'i faqat strict rejimda (standart: to'liq avtonomiya).
+// Job applications, HR/recruiter messages and similar outbound actions need confirmation (the general
+// policy does not treat "apply"/"submit" as external effects). Confirmation for applications and
+// messages applies only in strict mode (default: full autonomy).
 function confirmModeStrict() {
   let v = process.env.JARVIS_CONFIRM_MODE;
   if (v === undefined) { try { const m = require('fs').readFileSync(require('path').join(require('../paths').PROJECT_DIR, '.env'), 'utf8').match(/^JARVIS_CONFIRM_MODE\s*=\s*(.*)$/m); if (m) v = m[1]; } catch (_) {} }
@@ -96,10 +96,10 @@ class GoalEngine {
     this.fullAutonomy = options.fullAutonomy || (() => new ActionSafetyPolicy().fullAutonomyProvider());
     this.emit = options.emit || (event => this.store.appendEvent(event));
     this.model = options.model;
-    // Missiyani boshlash oddiy lokal amallarni (fayl, o'rnatish, hisobot) ruxsat etadi; tashqi xabar, o'chirish, to'lov, parol —
-    // doim tasdiq bilan. 'strict' rejimida hammasi tasdiqli.
+    // Starting a mission allows routine local actions (files, installs, reports); outbound messages,
+    // deletion, payments and passwords always need confirmation. In 'strict' mode everything does.
     this.routineAutonomy = options.routineAutonomy !== false;
-    this.standing = options.standing || null;   // StandingApprovals (doimiy ruxsatlar)
+    this.standing = options.standing || null;   // StandingApprovals (standing permissions)
   }
 
   /** Workers that exist and report themselves usable (missing venvs, signed-out CLIs are excluded). */
@@ -182,7 +182,7 @@ class GoalEngine {
     mission.criteria = (Array.isArray(plan.criteria) ? plan.criteria : []).map(c => clip(c, 300)).filter(Boolean).slice(0, 8);
     if (!mission.criteria.length) mission.criteria = [`The goal is fully achieved: ${clip(mission.goal, 200)}`];
     mission.tasks = normalizeTasks(plan.tasks, 0, this.now(), this.availableWorkers());
-    if (!mission.tasks.length) throw new Error('Reja bo\'sh chiqdi');
+    if (!mission.tasks.length) throw new Error('The plan came back empty');
     mission.status = 'running';
     this._log(mission, 'plan', `${mission.tasks.length} tasks, ${mission.criteria.length} criteria`);
     this._event(mission, 'mission.planned', `Mission ${mission.n} planned: ${mission.tasks.length} tasks.`);
@@ -201,7 +201,7 @@ class GoalEngine {
     const assessment = this.assess({ kind: 'task', description: text });
     const outreach = confirmModeStrict() && OUTREACH_RISK.test(text);
     if (outreach || assessment.requiresConfirmation) {
-      // Doimiy ruxsat (kunlik limit ichida) mos kelsa so'ramaymiz; xavfli toifalar hech qachon qoplanmaydi.
+      // A matching standing permission (within its daily limit) means no prompt; risky categories are never covered.
       const rule = this.standing?.consume(text, outreach && !assessment.externalSideEffect ? { ...assessment, category: 'external-communication' } : assessment);
       if (rule) { task.approved = true; task.approvedBy = `standing:${rule.id}`; return null; }
     }
@@ -217,7 +217,7 @@ class GoalEngine {
     return lines.slice(-30).join('\n');
   }
 
-  // ── Bitta iteratsiya: bajarish → tekshirish → yangilash ─────────────────
+  // ── One iteration: execute → verify → update ──────────────────────────
   async step(mission) {
     if (mission.status === 'planning') {
       try { await this.plan(mission); } catch (error) {
@@ -234,7 +234,7 @@ class GoalEngine {
 
     const task = this._nextTask(mission);
     if (!task) {
-      // Vazifa qolmadi, lekin maqsad tasdiqlanmagan: reja tuzuvchidan yakuniy tekshiruv/yangi vazifalar so'raymiz.
+      // No tasks left but the goal is not confirmed: ask the planner for a final check or new tasks.
       return this._reflectWithoutTask(mission);
     }
 
@@ -257,7 +257,7 @@ class GoalEngine {
     } catch (error) { outcome = { ok: false, output: '', error: error.message }; }
     task.result = clip(outcome.output, 4000) || null;
     task.error = outcome.ok ? null : clip(outcome.error || 'worker failed', 500);
-    // Vazifa bajarilayotganda foydalanuvchi bekor/pauza qilgan bo'lishi mumkin — holatni bosib ketmaymiz.
+    // The user may have cancelled or paused while the task ran; do not overwrite that state.
     if (mission.status === 'cancelled') { task.status = 'skipped'; return this.store.save(mission); }
     if (['paused', 'awaiting_approval'].includes(mission.status)) {
       task.status = 'pending'; task.attempts = Math.max(0, task.attempts - 1);

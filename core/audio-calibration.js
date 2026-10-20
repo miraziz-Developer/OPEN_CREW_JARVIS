@@ -30,7 +30,7 @@ function pcmFromWav(buffer) {
     if (id === 'data') return buffer.subarray(offset + 8, Math.min(buffer.length, offset + 8 + size));
     offset += 8 + size + (size % 2);
   }
-  throw new Error('WAV ichida PCM data chunk topilmadi');
+  throw new Error('No PCM data chunk found in the WAV');
 }
 
 function estimateEchoLag(recording, probe, { sampleRate = 16000, expectedStartMs = 400, searchMs = 450 } = {}) {
@@ -59,35 +59,34 @@ function estimateEchoLag(recording, probe, { sampleRate = 16000, expectedStartMs
 function buildCalibration({ silence, speech, echo = null, sampleRate = 16000, now = () => Date.now() }) {
   const quiet = chunkRms(pcmFromWav(silence), sampleRate).filter(value => value > 0);
   const spoken = chunkRms(pcmFromWav(speech), sampleRate).filter(value => value > 0);
-  if (quiet.length < 20) throw new Error('Kamida 0.8 soniya xona jimligi kerak');
-  if (spoken.length < 20) throw new Error('Kamida 0.8 soniya nutq namunasi kerak');
+  if (quiet.length < 20) throw new Error('At least 0.8 seconds of room silence is needed');
+  if (spoken.length < 20) throw new Error('At least 0.8 seconds of speech sample is needed');
 
   const noiseP50 = percentile(quiet, 0.5);
   const noiseP95 = percentile(quiet, 0.95);
-  // Speech sample ichidagi pauzalarni chiqarish uchun xona P95'idan ancha
-  // yuqori chunklargina ovoz sifatida olinadi.
+  // Only chunks well above the room P95 count as speech, to drop the pauses inside the
+  // speech sample.
   const activeSpeech = spoken.filter(value => value >= Math.max(noiseP95 * 1.8, 60));
-  if (activeSpeech.length < 8) throw new Error('Nutq namunasi juda past yoki topilmadi');
+  if (activeSpeech.length < 8) throw new Error('The speech sample is too quiet or missing');
   const speechP20 = percentile(activeSpeech, 0.2);
   const speechP50 = percentile(activeSpeech, 0.5);
   const separation = speechP20 / Math.max(noiseP95, 1);
-  if (separation < 1.6) throw new Error('Nutq va xona shovqini yetarlicha ajralmadi; mikrofonni yaqinlashtiring');
+  if (separation < 1.6) throw new Error('Speech and room noise are not separated enough; move the microphone closer');
 
-  // P95 qisqa click/echo burstlarini ham o'z ichiga oladi. P50 asosiy floor;
-  // P95 faqat cheklangan margin bo'lib qolishi kerak.
+  // P95 also includes short click/echo bursts. P50 is the base floor; P95 should remain
+  // only a limited margin.
   const noiseFloor = Math.round(clamp(Math.max(
     noiseP50 * 1.15,
     Math.min(noiseP95 * 1.15, noiseP50 * 1.8)
   ), 20, 1200));
   const desiredThreshold = Math.sqrt(Math.max(noiseFloor, 1) * speechP20);
-  // Engine threshold'i noiseFloor × multiplier; P50 bilan bo'lish P50/P95
-  // farqini ikkinchi marta qo'shib yuboradi.
+  // The engine threshold is noiseFloor × multiplier; dividing by P50 would add the
+  // P50/P95 gap a second time.
   const noiseMultiplier = Math.round(clamp(desiredThreshold / Math.max(noiseFloor, 1), 1.35, 4.5) * 100) / 100;
-  // Playback paytida AEC'dan qolgan karnay reverberatsiyasi oddiy xona
-  // shovqinidan ancha baland bo'lishi mumkin. Speech P20'ning 42 foizi real
-  // qurilmada echo'ni 360ms davomida near-end speech deb qabul qildi va tayyor
-  // javobni client_cancelled bilan kesdi. Past ovozni saqlagan holda echo uchun
-  // yetarli margin qoldirish uchun barge-in threshold P20'ning 70 foizida.
+  // During playback, speaker reverberation left over after AEC can be much louder than
+  // ordinary room noise. At 42% of speech P20, a real device took echo as near-end speech
+  // for 360 ms and cut a finished reply with client_cancelled. Barge-in threshold is 70% of
+  // P20, keeping quiet speech while leaving enough margin for echo.
   const bargeInResidual = Math.round(clamp(speechP20 * 0.70, 300, 3200));
   const inputGain = Math.round(clamp(1800 / Math.max(speechP50, 1), 1, 6) * 100) / 100;
   const echoLagMs = Number.isFinite(echo?.lagMs) ? Math.round(clamp(echo.lagMs, 20, 500)) : null;

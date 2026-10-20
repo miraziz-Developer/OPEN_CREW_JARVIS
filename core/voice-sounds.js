@@ -4,22 +4,20 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 
-// Bu ovoz ijro etilayotgan vaqtda mikrofon jonli sessiyaga UMUMAN
-// yuborilmaydi (Jarvis o'z ovozini "foydalanuvchi gapirdi" deb qabul
-// qilmasligi uchun) — ya'ni bu butunlay O'LIK vaqt: foydalanuvchi
-// gapirsa ham eshitilmaydi. Shuning uchun ovoz imkon qadar QISQA
-// bo'lishi kerak. Davomiylik fayldan O'QIB olinadi — fayl almashtirilsa,
-// qo'lda raqam yangilash esdan chiqib, mos kelmay qolmasin.
+// While this sound plays the microphone is NOT sent to the live session at all (so
+// JARVIS never hears itself as the user), which makes it fully DEAD time: the user is
+// not heard either. So the sound must be as SHORT as possible. The duration is READ
+// from the file, so swapping the file never leaves a stale hand-coded number.
 function detectWakeSoundMs(wakeSoundPath) {
   try {
     const out = execSync('afinfo "' + wakeSoundPath + '" 2>/dev/null | grep -i "estimated duration"', { encoding: 'utf8' });
     const m = out.match(/([\d.]+)\s*sec/);
-    // `afplay` qaytishidan oldingi karnay/driver dumini yopish uchun bitta
-    // kichik zaxira yetadi. Daemon bu qiymat ustiga yana guard qo'shmaydi:
-    // aks holda 0.84s "Labbay, boss" amalda 1.12s mikrofon dead-time bergan.
+    // One small margin is enough to cover the speaker/driver tail before `afplay`
+    // returns. The daemon adds no extra guard on top: otherwise the 0.84 s "Labbay,
+    // boss" clip actually caused 1.12 s of microphone dead time.
     if (m) return Math.round(parseFloat(m[1]) * 1000) + 100;
   } catch (e) {}
-  return 1000; // afinfo ishlamasa — ehtiyotkor, lekin eski 2400dan ancha kichik qiymat
+  return 1000; // if afinfo fails: cautious, but far below the old 2400
 }
 
 function playWakeSound(wakeSoundPath) {
@@ -31,13 +29,11 @@ function playWakeSound(wakeSoundPath) {
   } catch (e) {}
 }
 
-// ── QOSHIMCHA TOVUSH BELGILARI ── tizimning tayyor (macOS) tovushlaridan
-// foydalaniladi — sifatli, yangi audio generatsiya qilish shart emas.
-// Sosumi = klassik "diqqat" ogohlantirish tovushi (shoshilinch signal
-// oldidan); Glass = yengil, ijobiy "tugadi" tovushi (uzoqroq run_task
-// vazifasi tugaganda — HUD-dek "bajarildi" hissi beradi). fast_action
-// uchun ATAYIN ishlatilmaydi — u allaqachon deyarli oniy, qo'shimcha
-// tovush faqat ortiqcha shovqin bo'lardi.
+// ── EXTRA SOUND CUES ── built-in macOS system sounds are used (good quality, no new
+// audio generation needed). Sosumi = the classic "attention" alert (before an urgent
+// signal); Glass = a light, positive "done" sound (when a longer run_task finishes,
+// giving a HUD-like "completed" feel). Deliberately NOT used for fast_action: it is
+// already near-instant, so an extra sound would only be noise.
 function playSystemSound(name) {
   const p_ = path.join('/System/Library/Sounds', name + '.aiff');
   if (!fs.existsSync(p_)) return;

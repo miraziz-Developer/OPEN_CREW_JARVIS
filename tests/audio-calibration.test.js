@@ -70,5 +70,5 @@ test('echo estimator finds delayed probe', () => {
 });
 
 test('calibration rejects speech indistinguishable from noise', () => {
-  assert.throws(() => buildCalibration({ silence: constant(2, 100), speech: constant(2, 120) }), /Nutq namunasi|yetarlicha ajralmadi/);
+  assert.throws(() => buildCalibration({ silence: constant(2, 100), speech: constant(2, 120) }), /speech sample is too quiet|not separated enough/i);
 });
