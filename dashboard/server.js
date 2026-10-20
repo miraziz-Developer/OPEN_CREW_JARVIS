@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * JARVIS DASHBOARD — mahalliy veb-server
- * Faqat 127.0.0.1'da ishlaydi (tashqi tarmoqqa ochiq emas).
- * Statik HUD sahifasini va real holat/vazifa/faoliyat ma'lumotlarini
- * JSON API orqali beradi. Yangi npm paket kerak emas — faqat Node'ning
- * o'zidagi `http` moduli.
+ * JARVIS DASHBOARD: local web server.
+ * Listens only on 127.0.0.1 (never exposed to the network). Serves the static
+ * HUD page plus live status/task/activity data as a JSON API, using only Node's
+ * built-in `http` module (no extra npm packages).
  */
 
 const http = require('http');
@@ -16,7 +15,7 @@ const { findMatchingProcesses } = require('../core/runtime-health');
 
 const PORT = parseInt(process.env.DASHBOARD_PORT, 10) || 7890;
 const { isTrustedLocalRequest } = require('../core/local-request-guard');
-// Standart faqat lokal. Docker'da konteyner ichida 0.0.0.0 qilinadi, lekin host tomonda faqat 127.0.0.1 ga e'lon qilinadi.
+// Local only by default. In Docker it is 0.0.0.0 inside the container but published only on 127.0.0.1 on the host.
 const HOST = process.env.DASHBOARD_HOST || '127.0.0.1';
 
 let ENV = '';
@@ -37,16 +36,24 @@ const agentBridge = createAgentBridge({
   skillPlatform: createSkillPlatform({ projectDir: PROJECT_DIR, env }), runtime: {}, telemetry: runtimeTelemetry
 });
 
-// Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
-// uchun UTC+8'da mahalliy soat 08:00gacha dashboard "kechagi kun" faylini
-// ko'rsatib qolardi.
+// Returns the local (timezone-aware) date. toISOString() returns UTC, so at UTC+8
+// the dashboard showed "yesterday's" file until 08:00 local time.
 function localDateStr(d) {
   d = d || new Date();
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
   return y + '-' + m + '-' + day;
 }
 
-// ── Yordamchi funksiyalar ───────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+// The realtime voice that will actually answer: the first configured provider, in the same order core/voice-provider.js uses.
+function realtimeModelLabel() {
+  const provider = require('../core/voice-provider').buildVoiceProviders(env)[0];
+  if (!provider) return 'not configured';
+  if (provider.id === 'gemini-live') return `Gemini Live · ${env('GEMINI_LIVE_MODEL', 'gemini-3.1-flash-live-preview')}`;
+  if (provider.id === 'voice-live') return `Voice Live · ${env('AZURE_VOICELIVE_MODEL', 'gpt-realtime')}`;
+  return `${provider.id} · ${env('AZURE_REALTIME_DEPLOYMENT', env('OPENAI_REALTIME_MODEL', 'gpt-realtime'))}`;
+}
 function isAlive(scriptPath) {
   return findMatchingProcesses(scriptPath).length > 0;
 }
@@ -78,7 +85,7 @@ function getStatus() {
     protocol,
     model: {
       primary: env('AGENT_FAST_MODEL', 'gemini-3.8-flash'),
-      realtime: String(env('JARVIS_BRAIN', '')).toLowerCase() === 'gemini' ? 'gemini-voice' : env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1'),
+      realtime: realtimeModelLabel(),
       vision: String(env('JARVIS_BRAIN', '')).toLowerCase() === 'gemini' ? 'gemini-3.8-flash' : env('AZURE_OPENAI_VISION_DEPLOYMENT', 'gpt-4.1'),
       expert: env('AGENT_STRONG_MODEL', env('DEEP_THINK_COMPLEX_MODEL', 'gemini-3.8-pro'))
     },
@@ -86,7 +93,7 @@ function getStatus() {
   };
 }
 
-// ── /api/activity — bugungi (va kechagi, agar bo'sh bo'lsa) xotira yozuvlari ──
+// ── /api/activity: today's memory entries (and yesterday's if today is empty) ──
 function parseMemoryFile(filePath) {
   if (!fs.existsSync(filePath)) return [];
   const content = fs.readFileSync(filePath, 'utf8');
@@ -111,15 +118,15 @@ function getActivity(limit) {
   return entries.slice(0, limit || 30);
 }
 
-// ── /api/tasks — kunlik vazifalar + bugun bajarilganlari ──────────────────
+// ── /api/tasks: daily tasks plus those completed today ────────────────────
 function getTasks() {
   const list = tasks.listTasks().tasks;
   const state = readJsonSafe(path.join(PROJECT_DIR, '.daily-tasks-state.json'), { completed: [] });
   return list.map(t => ({ text: t.text, doneToday: (state.completed || []).includes(t.text) }));
 }
 
-// ── /api/realtime-tasks — jonli suhbat paytida parallel bajarilayotgan/
-// bajarilgan vazifalar (multi-tasking holati) ──────────────────────────────
+// ── /api/realtime-tasks: tasks running or finished in parallel during a live
+// conversation (multi-tasking state) ──────────────────────────────────────
 function getRealtimeTasks() {
   const s = readJsonSafe(path.join(PROJECT_DIR, '.realtime-tasks-state.json'), []);
   return Array.isArray(s) ? s.slice().reverse() : [];
@@ -134,7 +141,7 @@ function getAgentTasks() {
   }));
 }
 
-// Avtonom missiyalar (core/mission-runner.js): ovozli daemon va runner umumiy `.run/missions` papkasidan o'qiydi.
+// Autonomous missions (core/mission-runner.js): the voice daemon and the runner share the `.run/missions` folder.
 function getHud() {
   const { sharedMeter } = require('../core/usage-meter');
   const telemetry = readJsonSafe(path.join(PROJECT_DIR, '.run', 'telemetry.json'), {});
@@ -169,13 +176,13 @@ function getVoiceTelemetry() {
 
 function getRuntimeTelemetry() { return runtimeTelemetry.snapshot(); }
 
-// ── /api/profile — so'nggi o'rganilgan naqshlar ────────────────────────────
+// ── /api/profile: the most recently learned patterns ────────────────────────
 function getProfile() {
   const pr = mem.readProfile();
   if (pr.status !== 'ok') return [];
   const sections = pr.content.split(/^## /m).slice(1);
   return sections
-    .filter(s => s.startsWith('O\'rganilgan naqshlar'))
+    .filter(s => /^(?:O'rganilgan naqshlar|Learned patterns)/.test(s))
     .slice(-5)
     .reverse()
     .map(s => {
@@ -184,7 +191,7 @@ function getProfile() {
     });
 }
 
-// ── /api/chat — dashboard'dan to'g'ridan-to'g'ri Jarvisga yozish ──────────
+// ── /api/chat: write to JARVIS directly from the dashboard ────────────────
 function askAgent(message) {
   return agentBridge.askAgent(message, 'agent:main:dashboard', {
     source: 'dashboard-chat',
@@ -210,7 +217,7 @@ async function handleChat(req, res) {
 
   const reply = await askAgent(message);
   if (reply) {
-    try { mem.writeMemory('Dashboard chat', 'Foydalanuvchi: ' + message + '\nJarvis: ' + reply.slice(0, 500), ['dashboard', 'chat']); } catch (e) {}
+    try { mem.writeMemory('Dashboard chat', 'User: ' + message + '\nJarvis: ' + reply.slice(0, 500), ['dashboard', 'chat']); } catch (e) {}
   }
   json(res, { reply: reply || 'I could not respond right now.' });
 }
@@ -279,7 +286,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Statik fayllar (faqat dashboard papkasi ichida)
+  // Static files (only inside the dashboard folder)
   let filePath = url.pathname === '/' ? '/index.html' : url.pathname;
   filePath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
   const full = path.join(STATIC_DIR, filePath);

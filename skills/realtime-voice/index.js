@@ -330,7 +330,7 @@ function profileSummaryBlock() {
     if (profile.status !== 'ok' || !profile.content) return '';
     const sections = profile.content.split(/^## /m).slice(1);
     if (!sections.length) return '';
-    const isDailyPattern = s => /^O['ʼ`]?rganilgan naqshlar\s*—\s*\d{4}/i.test(s.trim());
+    const isDailyPattern = s => /^(?:O['ʼ`]?rganilgan naqshlar|Learned patterns)\s*—\s*\d{4}/i.test(s.trim());
     const stable = sections.filter(s => !isDailyPattern(s));
     const recent = sections.filter(isDailyPattern).slice(-PROFILE_SUMMARY_MAX_SECTIONS);
     const combined = [...stable, ...recent].map(s => '## ' + s.trim()).join('\n\n').slice(0, PROFILE_SUMMARY_MAX_CHARS);

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="uz">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -189,55 +189,55 @@ body.mode-combat .panel {
 <div id="scannerBeam"></div>
 <div id="boot">
   <div id="bootLogo">J.A.R.V.I.S</div>
-  <div id="bootSub">OPEN CREW JARVIS — O'ZBEK TILIDAGI YORDAMCHI</div>
+  <div id="bootSub">OPEN CREW JARVIS — PERSONAL AI ASSISTANT</div>
   <div id="bootLines"></div>
 </div>
 <div id="grid">
   <header>
     <h1>J.A.R.V.I.S</h1>
-    <div class="sub">DASHBOARD &nbsp;//&nbsp; <span id="connState">ULANMOQDA</span></div>
+    <div class="sub">DASHBOARD &nbsp;//&nbsp; <span id="connState">CONNECTING</span></div>
     <div id="clock">--:--:--</div>
   </header>
 
   <!-- LEFT -->
   <div class="col">
-    <div class="panel"><h2><span>TIZIM HOLATI</span><span class="num">01</span></h2>
+    <div class="panel"><h2><span>SYSTEM STATUS</span><span class="num">01</span></h2>
       <div class="kv"><span><span class="dot" id="d-gateway"></span>Gateway</span><b id="s-gateway">—</b></div>
       <div class="kv"><span><span class="dot" id="d-bot"></span>Telegram Bot</span><b id="s-bot">—</b></div>
-      <div class="kv"><span><span class="dot" id="d-daemon"></span>Ovozli Daemon</span><b id="s-daemon">—</b></div>
-      <div class="kv"><span><span class="dot" id="d-mic"></span>Mikrofon Pipeline</span><b id="s-mic">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-daemon"></span>Voice daemon</span><b id="s-daemon">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-mic"></span>Microphone pipeline</span><b id="s-mic">—</b></div>
       <div class="kv"><span><span class="dot" id="d-realtime"></span>Realtime API</span><b id="s-realtime">—</b></div>
-      <div class="kv"><span>Suhbat holati</span><b id="s-conversation">—</b></div>
-      <div class="kv"><span>P95 kechikish</span><b id="s-latency">—</b></div>
-      <div class="kv"><span><span class="dot" id="d-monitor"></span>Ekran Kuzatuv</span><b id="s-monitor">—</b></div>
+      <div class="kv"><span>Conversation</span><b id="s-conversation">—</b></div>
+      <div class="kv"><span>P95 latency</span><b id="s-latency">—</b></div>
+      <div class="kv"><span><span class="dot" id="d-monitor"></span>Screen monitor</span><b id="s-monitor">—</b></div>
       <div class="kv"><span><span class="dot" id="d-sentinel"></span>Fn+Shift Sentinel</span><b id="s-sentinel">—</b></div>
     </div>
     <div class="panel"><h2><span>VAD / LATENCY</span><span class="num">04</span></h2>
       <div class="kv"><span>Speech start / stop</span><b id="t-vad-turns">—</b></div>
-      <div class="kv"><span>Match bo'lmagan stop</span><b id="t-vad-unmatched">—</b></div>
+      <div class="kv"><span>Unmatched stops</span><b id="t-vad-unmatched">—</b></div>
       <div class="kv"><span>VAD watchdog</span><b id="t-vad-watchdog">—</b></div>
-      <div class="kv"><span>Speaking yoshi</span><b id="t-vad-speaking">—</b></div>
-      <div class="kv"><span>So'nggi N o'rtacha</span><b id="t-latency-average">—</b></div>
-      <div class="kv"><span>Eng sekin bosqich</span><b id="t-latency-slowest">—</b></div>
+      <div class="kv"><span>Speaking for</span><b id="t-vad-speaking">—</b></div>
+      <div class="kv"><span>Recent average</span><b id="t-latency-average">—</b></div>
+      <div class="kv"><span>Slowest stage</span><b id="t-latency-slowest">—</b></div>
       <div id="t-providers"></div>
     </div>
     <div class="panel"><h2><span>MODEL</span><span class="num">02</span></h2>
-      <div class="kv"><span>Asosiy</span><b id="m-primary">—</b></div>
-      <div class="kv"><span>Ovozli (Realtime)</span><b id="m-realtime">—</b></div>
-      <div class="kv"><span>Ekran ko'rish</span><b id="m-vision">—</b></div>
+      <div class="kv"><span>Primary</span><b id="m-primary">—</b></div>
+      <div class="kv"><span>Realtime voice</span><b id="m-realtime">—</b></div>
+      <div class="kv"><span>Vision</span><b id="m-vision">—</b></div>
       <div class="kv"><span>Expert (deep-think)</span><b id="m-fallback">—</b></div>
     </div>
-    <div class="panel"><h2><span>FAOLIYAT (LOG)</span><span class="num">03</span></h2>
-      <div id="activity"><div>— yuklanmoqda —</div></div>
+    <div class="panel"><h2><span>ACTIVITY (LOG)</span><span class="num">03</span></h2>
+      <div id="activity"><div>— loading —</div></div>
     </div>
-    <div class="panel"><h2><span>HUD — HOZIR</span><span class="num">04a</span></h2>
-      <div id="hud" style="font-size:12.5px"><div>— yuklanmoqda —</div></div>
+    <div class="panel"><h2><span>HUD — NOW</span><span class="num">04a</span></h2>
+      <div id="hud" style="font-size:12.5px"><div>— loading —</div></div>
     </div>
-    <div class="panel"><h2><span>AVTONOM MISSIYALAR</span><span class="num">04b</span></h2>
-      <div id="missionsList" style="max-height:220px;overflow-y:auto;font-size:12.5px"><div>— hozircha yo'q —</div></div>
+    <div class="panel"><h2><span>AUTONOMOUS MISSIONS</span><span class="num">04b</span></h2>
+      <div id="missionsList" style="max-height:220px;overflow-y:auto;font-size:12.5px"><div>— none yet —</div></div>
     </div>
-    <div class="panel"><h2><span>JONLI VAZIFALAR</span><span class="num">04</span></h2>
-      <div id="rtTasksList" style="max-height:150px;overflow-y:auto;font-size:12.5px"><div>— hozircha yo'q —</div></div>
+    <div class="panel"><h2><span>LIVE TASKS</span><span class="num">04</span></h2>
+      <div id="rtTasksList" style="max-height:150px;overflow-y:auto;font-size:12.5px"><div>— none yet —</div></div>
     </div>
   </div>
 
@@ -245,7 +245,7 @@ body.mode-combat .panel {
   <div id="center">
     <div id="reactorWrap">
       <canvas id="reactor"></canvas>
-      <div id="coreState"><div class="st" id="stateLabel">STANDBY</div><div class="hint" id="stateHint">TIZIM HOLATI KUZATILMOQDA</div></div>
+      <div id="coreState"><div class="st" id="stateLabel">STANDBY</div><div class="hint" id="stateHint">MONITORING SYSTEM STATUS</div></div>
     </div>
     <div id="protocolBar">
       <button class="proto-btn combat-btn" id="btnCombat" onclick="triggerProtocol('protocol:combat')">⚔️ COMBAT PROTOCOL</button>
@@ -258,17 +258,17 @@ body.mode-combat .panel {
     <div id="chatFeed"></div>
     <div id="chatRow">
       <input id="chatInput" placeholder="Jarvisga yozing…" autocomplete="off">
-      <button class="btn" id="sendBtn">YUBOR</button>
+      <button class="btn" id="sendBtn">SEND</button>
     </div>
   </div>
 
   <!-- RIGHT -->
   <div class="col">
-    <div class="panel"><h2><span>BUGUNGI VAZIFALAR</span><span class="num">05</span></h2>
-      <div id="tasksList"><div>— yuklanmoqda —</div></div>
+    <div class="panel"><h2><span>TODAY'S TASKS</span><span class="num">05</span></h2>
+      <div id="tasksList"><div>— loading —</div></div>
     </div>
-    <div class="panel"><h2><span>O'RGANILGAN NAQSHLAR</span><span class="num">06</span></h2>
-      <div id="profileList"><div>— yuklanmoqda —</div></div>
+    <div class="panel"><h2><span>LEARNED PATTERNS</span><span class="num">06</span></h2>
+      <div id="profileList"><div>— loading —</div></div>
     </div>
   </div>
 
@@ -463,16 +463,16 @@ async function refreshStatus(){
     const realtimeHealthy = !realtime.status || ["ready","healthy"].includes(realtime.status);
     const latencyEntries = Object.entries(rt.latency || {});
     const worstP95 = latencyEntries.length ? latencyEntries.reduce((a,b)=>(Number(a[1].p95Ms||0)>Number(b[1].p95Ms||0)?a:b)) : null;
-    $("connState").textContent = "ULANGAN";
-    setDot("d-gateway", s.gateway); $("s-gateway").textContent = s.gateway ? "sog'lom" : "o'chirilgan";
-    setDot("d-bot", s.bot); $("s-bot").textContent = s.bot ? "faol" : "o'chirilgan";
-    setDot("d-daemon", s.daemon); $("s-daemon").textContent = s.daemon ? "faol" : "o'chirilgan";
-    setDot("d-mic", micHealthy); $("s-mic").textContent = micHealthy ? "tinglamoqda" : (mic.status || "signal yo'q");
-    setDot("d-realtime", realtimeHealthy); $("s-realtime").textContent = realtime.status || "kutilmoqda";
+    $("connState").textContent = "CONNECTED";
+    setDot("d-gateway", s.gateway); $("s-gateway").textContent = s.gateway ? "healthy" : "off";
+    setDot("d-bot", s.bot); $("s-bot").textContent = s.bot ? "active" : "off";
+    setDot("d-daemon", s.daemon); $("s-daemon").textContent = s.daemon ? "active" : "off";
+    setDot("d-mic", micHealthy); $("s-mic").textContent = micHealthy ? "listening" : (mic.status || "no signal");
+    setDot("d-realtime", realtimeHealthy); $("s-realtime").textContent = realtime.status || "waiting";
     $("s-conversation").textContent = (rt.conversation && rt.conversation.mode) || "idle";
     $("s-latency").textContent = worstP95 ? `${worstP95[0]} ${Math.round(worstP95[1].p95Ms)}ms` : "—";
-    setDot("d-monitor", s.monitor); $("s-monitor").textContent = s.monitor ? "faol" : "o'chirilgan";
-    setDot("d-sentinel", s.sentinel); $("s-sentinel").textContent = s.sentinel ? "tinglamoqda" : "yo'q";
+    setDot("d-monitor", s.monitor); $("s-monitor").textContent = s.monitor ? "active" : "off";
+    setDot("d-sentinel", s.sentinel); $("s-sentinel").textContent = s.sentinel ? "listening" : "missing";
     $("m-primary").textContent = s.model.primary;
     $("m-realtime").textContent = s.model.realtime;
     $("m-vision").textContent = s.model.vision;
@@ -490,14 +490,14 @@ async function refreshStatus(){
       `<div class="kv"><span>${esc(id)}</span><b class="${p.circuit === 'open' ? 'warn' : ''}">${p.successCount || 0}✓ / ${p.failureCount || 0}✕ · ${esc(p.circuit || 'closed')}</b></div>`
     ).join("") || '<div class="kv"><span>Providerlar</span><b>—</b></div>';
 
-    if (s.paused) setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
-    else if (s.gateway && s.bot && s.daemon && micHealthy && realtimeHealthy) setState("active", "FAOL", "HAMMASI ISHLAMOQDA");
-    else if (s.daemon && !micHealthy) setState("degraded", "ESHITMAYAPTI", "MIKROFON PIPELINE'INI TEKSHIRING");
-    else if (s.daemon && !realtimeHealthy) setState("degraded", "FALLBACK", "REALTIME NOSOZ — BATCH STT FAOL");
-    else setState("degraded", "QISMAN", "BA'ZI QISMLAR O'CHIRILGAN");
+    if (s.paused) setState("paused", "PAUSED", "PRESS FN+SHIFT TO WAKE");
+    else if (s.gateway && s.bot && s.daemon && micHealthy && realtimeHealthy) setState("active", "ACTIVE", "ALL SYSTEMS RUNNING");
+    else if (s.daemon && !micHealthy) setState("degraded", "NOT LISTENING", "CHECK THE MICROPHONE PIPELINE");
+    else if (s.daemon && !realtimeHealthy) setState("degraded", "FALLBACK", "REALTIME DOWN — BATCH STT ACTIVE");
+    else setState("degraded", "PARTIAL", "SOME COMPONENTS ARE OFF");
   }catch(e){
     $("connState").textContent = "UZILDI";
-    setState("degraded", "ULANMADI", "DASHBOARD SERVERGA ULANOLMADI");
+    setState("degraded", "OFFLINE", "CANNOT REACH THE DASHBOARD SERVER");
   }
   $("footRefresh").textContent = "yangilandi: " + new Date().toTimeString().slice(0,8);
 }
@@ -511,13 +511,14 @@ async function refreshActivity(){
         `<div><b>${esc(it.time)}</b> ${esc(it.topic)}</div>`
       ).join("");
     } else {
-      a.innerHTML = "<div>— hali faoliyat yo'q —</div>";
+      a.innerHTML = "<div>— no activity yet —</div>";
     }
   }catch(e){}
 }
 
 /* ============================== chat ================================= */
-const CHAT_TOPICS = ["Ovozli buyruq","Telegram suhbat","Dashboard chat"];
+// Older entries were written under Uzbek titles; keep matching them.
+const CHAT_TOPICS = ["Voice command","Ovozli buyruq","Telegram chat","Telegram suhbat","Dashboard chat"];
 function addBubble(cls, text){
   const feed = $("chatFeed");
   const d = document.createElement("div");
@@ -541,7 +542,7 @@ async function loadChatHistory(){
         addBubble("jarvis", m[2].trim());
       }
     }
-    if (!convo.length) addBubble("jarvis", "Salom! Sizga qanday yordam bera olaman?");
+    if (!convo.length) addBubble("jarvis", "Good day. What can I do for you?");
   }catch(e){}
 }
 
@@ -552,7 +553,7 @@ async function sendChat(){
   if (!text || chatBusy) return;
   input.value = "";
   addBubble("you", text);
-  const pending = addBubble("jarvis pending", "o'ylayapman…");
+  const pending = addBubble("jarvis pending", "thinking…");
   chatBusy = true; $("sendBtn").disabled = true;
   try{
     const r = await fetch("/api/chat", {
@@ -560,10 +561,10 @@ async function sendChat(){
       body: JSON.stringify({ message: text })
     });
     const data = await r.json();
-    pending.textContent = data.reply || "Xatolik yuz berdi.";
+    pending.textContent = data.reply || "Something went wrong.";
     pending.className = "bubble jarvis";
   }catch(e){
-    pending.textContent = "Ulanishda xatolik.";
+    pending.textContent = "Connection error.";
     pending.className = "bubble jarvis";
   }
   chatBusy = false; $("sendBtn").disabled = false;
@@ -583,22 +584,22 @@ async function refreshHud(){
     const u = d.usage || {}, esc = t => String(t==null?"":t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
     const cost = Number(u.cost_usd||u.cost||0).toFixed(2);
     const c = d.conversation, st = c ? esc(c.mode || "—") : "uxlayapti";
-    el.innerHTML = "<div>Holat: <b>"+st+"</b></div><div>Ekran: "+(a?esc(a.app)+(a.title?" — "+esc(a.title):""):"—")+"</div>"+
-      "<div>Bugungi xarajat: $"+cost+"</div>"+
-      "<div>Ovoz: "+Math.round(u.voice_seconds||0)+" s</div>";
+    el.innerHTML = "<div>State: <b>"+st+"</b></div><div>Screen: "+(a?esc(a.app)+(a.title?" — "+esc(a.title):""):"—")+"</div>"+
+      "<div>Cost today: $"+cost+"</div>"+
+      "<div>Voice: "+Math.round(u.voice_seconds||0)+" s</div>";
   }catch(e){}
 }
 async function refreshMissions(){
   try{
     const data = await jget("/api/missions");
     const el = $("missionsList");
-    const head = `<div style="color:var(--txt-dim);font-size:11px">Runner: ${data.runnerAlive ? "ishlayapti" : "to'xtagan"}</div>`;
-    if(!data.missions.length){ el.innerHTML = head + "<div>— hozircha yo'q —</div>"; return; }
+    const head = `<div style="color:var(--txt-dim);font-size:11px">Runner: ${data.runnerAlive ? "running" : "stopped"}</div>`;
+    if(!data.missions.length){ el.innerHTML = head + "<div>— none yet —</div>"; return; }
     const icon = {planning:"🧭",running:"⏳",paused:"⏸",awaiting_approval:"🔐",completed:"✅",blocked:"🚧",failed:"❌",cancelled:"⛔"};
     el.innerHTML = head + data.missions.map(m => {
       const done = m.tasks.filter(t => t.status === "done").length;
-      const extra = m.pendingApproval ? `<br><span style="color:var(--warn,#ffb020)">tasdiq kerak: ${esc(m.pendingApproval.reason)}</span>` : (m.summary ? `<br><span style="color:var(--txt-dim);font-size:11px">${esc(m.summary)}</span>` : "");
-      return `<div class="task"><span class="box">${icon[m.status]||"•"}</span><span>#${m.n} ${esc(m.goal)}<br><span style="color:var(--txt-dim);font-size:11px">${m.status} · ${done}/${m.tasks.length} vazifa</span>${extra}</span></div>`;
+      const extra = m.pendingApproval ? `<br><span style="color:var(--warn,#ffb020)">needs approval: ${esc(m.pendingApproval.reason)}</span>` : (m.summary ? `<br><span style="color:var(--txt-dim);font-size:11px">${esc(m.summary)}</span>` : "");
+      return `<div class="task"><span class="box">${icon[m.status]||"•"}</span><span>#${m.n} ${esc(m.goal)}<br><span style="color:var(--txt-dim);font-size:11px">${m.status} · ${done}/${m.tasks.length} tasks</span>${extra}</span></div>`;
     }).join("");
   }catch(e){}
 }
@@ -606,10 +607,10 @@ async function refreshRealtimeTasks(){
   try{
     const items = await jget("/api/realtime-tasks");
     const el = $("rtTasksList");
-    if(!items.length){ el.innerHTML = "<div>— hozircha yo'q —</div>"; return; }
+    if(!items.length){ el.innerHTML = "<div>— none yet —</div>"; return; }
     el.innerHTML = items.map(t => {
       const icon = t.status === "in_progress" ? "⏳" : "✅";
-      const when = t.status === "in_progress" ? timeAgo(t.startedAt)+" davom etmoqda" : timeAgo(t.completedAt)+" oldin tugadi";
+      const when = t.status === "in_progress" ? "running for "+timeAgo(t.startedAt) : "finished "+timeAgo(t.completedAt)+" ago";
       return `<div class="task"><span class="box">${icon}</span><span>${esc(t.description)}<br><span style="color:var(--txt-dim);font-size:11px">${when}</span></span></div>`;
     }).join("");
   }catch(e){}
@@ -619,7 +620,7 @@ async function refreshTasks(){
   try{
     const items = await jget("/api/tasks");
     const el = $("tasksList");
-    if(!items.length){ el.innerHTML = "<div>— vazifalar ro'yxati bo'sh —</div>"; return; }
+    if(!items.length){ el.innerHTML = "<div>— the task list is empty —</div>"; return; }
     el.innerHTML = items.map(t =>
       `<div class="task"><span class="box">${t.doneToday ? "✅" : "⬜"}</span><span>${esc(t.text)}</span></div>`
     ).join("");
@@ -630,7 +631,7 @@ async function refreshProfile(){
   try{
     const items = await jget("/api/profile");
     const el = $("profileList");
-    if(!items.length){ el.innerHTML = "<div>— hali naqsh o'rganilmagan —</div>"; return; }
+    if(!items.length){ el.innerHTML = "<div>— no patterns learned yet —</div>"; return; }
     el.innerHTML = items.map(p =>
       `<div class="pf"><div class="title">${esc(p.title)}</div><div class="body">${esc(p.body)}</div></div>`
     ).join("");
@@ -676,7 +677,7 @@ async function refreshQuickState() {
     } else if (proto === 'lockdown') {
       setState("lockdown", "LOCKDOWN ENGAGED", "SECURITY CONTAINMENT ACTIVE");
     } else if (s.paused) {
-      setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
+      setState("paused", "PAUSED", "PRESS FN+SHIFT TO WAKE");
     } else if (mode === 'user-speaking') {
       setState("user_speaking", "VOICE DETECTED", "LISTENING TO USER COMMAND");
     } else if (mode === 'thinking') {
@@ -735,7 +736,7 @@ function triggerScreenScan() {
 async function sendChatDirect(text) {
   if (!text) return;
   addBubble("you", text);
-  const pending = addBubble("jarvis pending", "ekranni skaner qilmoqda…");
+  const pending = addBubble("jarvis pending", "scanning the screen…");
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: {"Content-Type":"application/json"},
@@ -745,7 +746,7 @@ async function sendChatDirect(text) {
     pending.textContent = data.reply || "Tahlil tugadi.";
     pending.className = "bubble jarvis";
   } catch(e) {
-    pending.textContent = "Ulanishda xatolik.";
+    pending.textContent = "Connection error.";
     pending.className = "bubble jarvis";
   }
 }
@@ -761,8 +762,8 @@ function toggleFullscreen() {
 
 /* ============================== boot sequence ========================= */
 const BOOT_LINES=[
-  ["GATEWAY ALOQASI",120],["OVOZLI DAEMON",100],["EKRAN KUZATUV",100],
-  ["OBSIDIAN XOTIRA",90],["KUNLIK VAZIFALAR",90],["MODEL: GPT-6 ASTRA",110],
+  ["GATEWAY LINK",120],["VOICE DAEMON",100],["SCREEN MONITOR",100],
+  ["OBSIDIAN MEMORY",90],["DAILY TASKS",90],["MODEL ROUTING",110],
 ];
 async function bootSequence(){
   const boot=$("boot");
