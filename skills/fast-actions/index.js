@@ -155,40 +155,40 @@ function findAction(id) {
   if (id === 'protocol:combat') {
     return {
       id: 'protocol:combat',
-      en: 'Combat mode engaged, sir. All defense protocols active and systems online.',
-      uz: 'Jang rejimi faollashtirildi, ser. Barcha himoya protokollari shay holatda.',
+      en: 'Combat protocol: security and system sweep (firewall, encryption, open ports, disk, battery, memory, internet, JARVIS services)',
+      uz: 'Jang rejimi: xavfsizlik va tizim tekshiruvi',
       type: 'protocol',
       mode: 'combat',
       name: 'Combat Protocol 07',
       color: '#ff3b30',
       sound: '/System/Library/Sounds/Hero.aiff',
-      script: 'tell application "System Events" to tell appearance preferences to set dark mode to true\nset volume output volume 85'
+      run: 'combatSweep'
     };
   }
   if (id === 'protocol:standby') {
     return {
       id: 'protocol:standby',
-      en: 'Standing down. Systems back to nominal standby.',
-      uz: 'Standart rejimga qaytildi. Tizimlar barqaror holatda.',
+      en: 'Standby: return to normal and undo lockdown (restore audio, resume paused missions)',
+      uz: 'Standart rejim: qulflashni bekor qilish',
       type: 'protocol',
       mode: 'standby',
       name: 'Nominal Standby',
       color: '#00e5ff',
       sound: '/System/Library/Sounds/Ping.aiff',
-      script: 'set volume output volume 50'
+      run: 'standby'
     };
   }
   if (id === 'protocol:lockdown') {
     return {
       id: 'protocol:lockdown',
-      en: 'Lockdown engaged. Display is going to sleep.',
-      uz: 'Qulflash rejimi yoqildi. Ekran o\'chirilmoqda.',
+      en: 'Lockdown: lock the Mac screen, mute audio and pause running missions',
+      uz: 'Qulflash: ekranni qulflash, ovozni o\'chirish, missiyalarni to\'xtatish',
       type: 'protocol',
       mode: 'lockdown',
       name: 'Emergency Lockdown',
       color: '#ff2a2a',
       sound: '/System/Library/Sounds/Sosumi.aiff',
-      shell: 'sleep 1 && pmset displaysleepnow'
+      run: 'lockdown'
     };
   }
   if (id === 'protocol:focus') {
@@ -348,7 +348,7 @@ function runFastAction(id) {
       if (!a) { resolve({ status: 'error', message: 'Unknown action: ' + id }); return; }
 
     const label = a.en || a.uz || a.id;
-    const done = (status, message) => resolve({ status, message, id, uz: a.uz, en: a.en });
+    const done = (status, message, details) => resolve({ status, message, id, uz: a.uz, en: a.en, ...(details ? { details } : {}) });
 
       try {
       switch (a.type) {
@@ -398,7 +398,12 @@ function runFastAction(id) {
           if (a.sound) {
             execFile('afplay', [a.sound], () => {});
           }
-          if (a.script) {
+          if (a.run) {
+            // Real protocols (core/protocols.js) report what they actually found or changed.
+            require('../../core/protocols')[a.run]()
+              .then(result => done('ok', result.summary, result))
+              .catch(error => done('error', `${a.name} failed: ${error.message}`));
+          } else if (a.script) {
             execFile('osascript', ['-e', a.script], () => {
               if (a.shell) execFile('/bin/bash', ['-c', a.shell], () => {});
               done('ok', a.en);

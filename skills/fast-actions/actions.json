@@ -121,9 +121,9 @@
   { "id": "info:disk", "uz": "Bo'sh disk joyi", "en": "Free disk space", "type": "shell", "target": "df -h / | tail -1 | awk '{print $4\" bo'\\''sh (jami \"$2\"dan)\"}'" },
   { "id": "info:uptime", "uz": "Kompyuter qancha vaqtdan beri ishlayapti", "en": "How long the computer has been running", "type": "shell", "target": "uptime | sed 's/.*up //;s/,.*load.*//'" },
 
-  { "id": "protocol:combat", "uz": "Jang rejimi (Combat Mode)", "en": "Combat mode", "type": "protocol" },
-  { "id": "protocol:standby", "uz": "Standart rejim (Standby Mode)", "en": "Standby mode", "type": "protocol" },
-  { "id": "protocol:lockdown", "uz": "Favqulodda qulflash (Lockdown Protocol)", "en": "Lockdown protocol", "type": "protocol" },
+  { "id": "protocol:combat", "uz": "Jang rejimi (Combat Mode)", "en": "Combat protocol: security and system sweep", "type": "protocol" },
+  { "id": "protocol:standby", "uz": "Standart rejim (Standby Mode)", "en": "Standby: return to normal, undo lockdown", "type": "protocol" },
+  { "id": "protocol:lockdown", "uz": "Favqulodda qulflash (Lockdown Protocol)", "en": "Lockdown: lock the screen, mute, pause missions", "type": "protocol" },
   { "id": "protocol:focus", "uz": "Fokus rejimi (Focus Mode)", "en": "Focus mode", "type": "protocol" },
 
   { "id": "tasks:list", "uz": "Bugungi vazifalar ro'yxatini ko'rish", "en": "Read today's task list", "type": "custom" },

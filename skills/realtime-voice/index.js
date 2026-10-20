@@ -707,6 +707,8 @@ function buildTools() {
       description: "For FAST, SIMPLE one-step actions: opening apps (open:*), opening sites (web:*), " +
         "volume (volume:*), system actions (system:*), screenshots (screenshot:*), " +
         "Music/Spotify control (media:*), and info queries: time/date/battery/Wi-Fi/disk (info:*). " +
+        "Protocols: protocol:combat runs a real security and system sweep (read its findings to the user), " +
+        "protocol:lockdown locks the Mac, mutes audio and pauses missions, protocol:standby undoes lockdown. " +
         "Much FASTER than `run_task` (no full agent is started); whenever a matching action exists, " +
         "ALWAYS prefer it over run_task. The exact list is in the enum of the `id` field below.",
       parameters: {
@@ -969,8 +971,8 @@ function matchDirectFastAction(text) {
   if (/^(?:keyingi|navbatdagi)\s+(?:qo'shiq|musiqa)$/.test(value)) return 'media:spotify_next';
   if (/^(?:oldingi)\s+(?:qo'shiq|musiqa)$/.test(value)) return 'media:spotify_prev';
 
-  if (/^(?:combat mode|protocol combat|protocol alpha|jang rejimi)$/i.test(value)) return 'protocol:combat';
-  if (/^(?:standby mode|normal mode|protocol normal|oddiy rejim)$/i.test(value)) return 'protocol:standby';
+  if (/^(?:combat (?:mode|protocol)|protocol combat|protocol alpha|jang rejimi|(?:run (?:a )?)?(?:security|system) (?:sweep|scan|check))$/i.test(value)) return 'protocol:combat';
+  if (/^(?:standby(?: mode| protocol)?|stand down|normal mode|protocol normal|oddiy rejim)$/i.test(value)) return 'protocol:standby';
   if (/^(?:lock(?:down)?(?: protocol)?|lock the system|tizimni qulfla|ekranni qulfla)$/i.test(value)) return 'protocol:lockdown';
   if (/^(?:focus mode|protocol focus|fokus rejimi)$/i.test(value)) return 'protocol:focus';
 

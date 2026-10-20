@@ -60,7 +60,7 @@ header .sub{font-size:12px; letter-spacing:3px; color:var(--txt-dim)}
 #coreState .hint{font-size:9px; letter-spacing:2px; color:var(--txt-dim); margin-top:6px}
 #chatFeed{width:100%; max-width:720px; flex:1; overflow-y:auto; margin-top:6px; padding:0 10px;
   display:flex; flex-direction:column; gap:8px; scrollbar-width:thin; min-height:80px}
-.bubble{font-size:14.5px; line-height:1.4; padding:8px 13px; border:1px solid var(--line); background:#08152399; max-width:86%}
+.bubble{font-size:14.5px; line-height:1.4; padding:8px 13px; border:1px solid var(--line); background:#08152399; max-width:86%; white-space:pre-line}
 .bubble.you{align-self:flex-end; border-color:#205a6e; color:#cfeefb}
 .bubble.jarvis{align-self:flex-start; border-left:2px solid var(--cyan)}
 .bubble.pending{opacity:.6; font-style:italic}
@@ -693,17 +693,32 @@ setInterval(refreshQuickState, 350);
 refreshQuickState();
 
 /* ============================== Protocol & Action Handlers ========================= */
+// Protocols do real work (core/protocols.js); their findings appear in the chat feed.
+const PROTOCOL_PENDING = {
+  'protocol:combat': 'running security and system sweep…',
+  'protocol:lockdown': 'locking the Mac…',
+  'protocol:standby': 'standing down…'
+};
 async function triggerProtocol(id) {
   playUiSound('beep');
+  const pending = addBubble('jarvis pending', PROTOCOL_PENDING[id] || 'working…');
   try {
-    await fetch('/api/action', {
+    const r = await fetch('/api/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id })
     });
+    const data = await r.json();
+    const findings = (data.details && data.details.findings) || [];
+    const icon = { ok: '✅', warn: '⚠️', info: 'ℹ️' };
+    pending.className = 'bubble jarvis';
+    pending.textContent = findings.length
+      ? data.message + '\n' + findings.map(f => (icon[f.level] || '•') + ' ' + f.text).join('\n')
+      : (data.message || data.error || 'Done.');
     refreshQuickState();
   } catch(e) {
-    console.error("Action error:", e);
+    pending.className = 'bubble jarvis';
+    pending.textContent = 'Protocol error: ' + e.message;
   }
 }
 
