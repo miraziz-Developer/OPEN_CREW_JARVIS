@@ -101,6 +101,11 @@ async function main() {
   }
 
   checkSupervisor();
+  if (process.platform === 'darwin') {
+    const voiceIo = path.join(PROJECT_DIR, '.run', 'bin', 'jarvis-voice-io');
+    add('audio:echo-cancellation', fs.existsSync(voiceIo) ? 'ok' : 'warn', fs.existsSync(voiceIo) ? 'Voice Processing helper present' : 'helper missing: JARVIS hears its own voice and pauses mid-sentence',
+      fs.existsSync(voiceIo) ? null : 'bash scripts/build-voice-io.sh');
+  }
   checkProcess('voice-daemon', 'jarvis_daemon.js');
   checkProcess('pause-sentinel', 'scripts/pause-sentinel.js');
   checkProcess('dashboard', 'dashboard/server.js');

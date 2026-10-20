@@ -130,3 +130,27 @@ test('committing a barge-in marks JARVIS as no longer speaking so the user is he
   assert.equal(session.assistantSpeaking, false);
   session.close();
 });
+
+test('missing Voice Processing helper is built in the background, present one is left alone', async () => {
+  const { ensureNativeMicBinary } = require('../core/native-mic');
+  const { EventEmitter } = require('node:events');
+  let built = false;
+  const spawned = [];
+  const fakeSpawn = (cmd, args) => {
+    spawned.push([cmd, ...args]);
+    const proc = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    setImmediate(() => { built = true; proc.emit('exit', 0); });
+    return proc;
+  };
+  const status = await new Promise(resolve => ensureNativeMicBinary({
+    platform: 'darwin', binary: '/x/jarvis-voice-io', script: '/x/build.sh',
+    exists: () => built, spawn: fakeSpawn, onDone: resolve
+  }));
+  assert.equal(status, 'built');
+  assert.deepEqual(spawned, [['/bin/bash', '/x/build.sh']]);
+
+  const again = await new Promise(resolve => ensureNativeMicBinary({ platform: 'darwin', exists: () => true, spawn: fakeSpawn, onDone: resolve }));
+  assert.equal(again, 'present');
+  assert.equal(spawned.length, 1);
+});

@@ -35,7 +35,7 @@ function wrnEarly(msg) { try { console.warn('⚠️  ' + msg); } catch (_) {} }
 
 const { writeMemory, searchMemory, upsertTurnMemory } = require('./skills/memory');
 const { RealtimeSession } = require('./skills/realtime-voice');
-const { NativeMic } = require('./core/native-mic');
+const { NativeMic, ensureNativeMicBinary } = require('./core/native-mic');
 const { MissionStore: GoalMissionStore } = require('./core/missions/store');
 const { createMissionApi } = require('./core/missions/api');
 const { JarvisRuntime } = require('./core/jarvis-runtime');
@@ -1251,6 +1251,12 @@ async function mainLoop() {
   connectFnBroker();
 
   inf('Mic stream started — listening for "Jarvis"...');
+  if (NATIVE_AEC) {
+    ensureNativeMicBinary({ onDone: status => {
+      if (status === 'built') inf('🎧 Built the Voice Processing helper (native echo cancellation)');
+      else if (status.startsWith('build-failed')) wrn('Native echo cancellation unavailable (' + status + '); run: bash scripts/build-voice-io.sh');
+    } });
+  }
   runtime.heartbeat('microphone', { status: 'streaming' });
   runtime.heartbeat('realtime-api', { status: 'ready', provider: hasVoiceProviders ? 'azure-realtime' : 'gemini-voice' });
   runtime.heartbeat('voice-daemon', { state: 'listening', ...runtimeIdentity() });

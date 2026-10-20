@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const { PROJECT_DIR } = require('./paths');
 
 const DEFAULT_BINARY = path.join(PROJECT_DIR, '.run', 'bin', 'jarvis-voice-io');
+const BUILD_SCRIPT = path.join(PROJECT_DIR, 'scripts', 'build-voice-io.sh');
 
 /**
  * macOS Voice Processing (AEC + noise suppression) microphone stream.
@@ -68,4 +69,26 @@ class NativeMic extends EventEmitter {
   }
 }
 
-module.exports = { NativeMic, DEFAULT_BINARY };
+/**
+ * Builds the helper in the background when it is missing. Without it JARVIS falls
+ * back to the software echo canceller, which lets its own voice through as a
+ * false barge-in and pauses replies mid-sentence. Calls back with a status string.
+ */
+function ensureNativeMicBinary(options = {}) {
+  const exists = options.exists || (file => fs.existsSync(file));
+  const run = options.spawn || spawn;
+  const binary = options.binary || DEFAULT_BINARY;
+  const done = options.onDone || (() => {});
+  if ((options.platform || process.platform) !== 'darwin') return done('unsupported-platform');
+  if (exists(binary)) return done('present');
+  let proc;
+  try {
+    proc = run('/bin/bash', [options.script || BUILD_SCRIPT], { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (error) { return done('build-failed: ' + error.message); }
+  let stderr = '';
+  proc.stderr?.on('data', chunk => { stderr += chunk; });
+  proc.on('error', error => done('build-failed: ' + error.message));
+  proc.on('exit', code => done(code === 0 && exists(binary) ? 'built' : 'build-failed: ' + (stderr.trim().split('\n').pop() || `exit ${code}`)));
+}
+
+module.exports = { NativeMic, DEFAULT_BINARY, ensureNativeMicBinary };
