@@ -2,10 +2,13 @@
 
 /**
  * ANTIGRAVITY SKILL for JARVIS
- * 
- * Allows JARVIS to delegate complex software engineering, multi-file code editing,
- * project generation, debugging, and terminal operations to the Antigravity assistant
- * running inside Gemini Desktop.
+ *
+ * Delegates software-engineering work (multi-file edits, project generation,
+ * debugging, terminal operations) to the Antigravity CLI (`agy`) that ships
+ * with Gemini Desktop.
+ *
+ * Failures are reported as errors, never as output: callers must not mistake
+ * an "authentication required" banner for a model answer.
  */
 
 const fs = require('fs');
@@ -13,21 +16,44 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { PROJECT_DIR } = require('../../core/paths');
 
+const AUTH_REQUIRED_PATTERN = /authentication required|run 'agy' to log in|not logged in/i;
+const UNAVAILABLE_COOLDOWN_MS = 10 * 60 * 1000;
+
+let unavailableUntil = 0;
+let unavailableReason = '';
+
+class AntigravityUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'AntigravityUnavailableError';
+  }
+}
+
 function findAgy() {
   const candidates = [
+    process.env.AGY_PATH,
     '/Applications/Gemini.app/Contents/Helpers/agy',
     path.join(process.env.HOME || '', '.gemini', 'antigravity', 'bin', 'agy'),
     '/usr/local/bin/agy',
     '/opt/homebrew/bin/agy'
   ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return 'agy';
+  return candidates.find(p => p && fs.existsSync(p)) || null;
+}
+
+function markUnavailable(reason) {
+  unavailableUntil = Date.now() + UNAVAILABLE_COOLDOWN_MS;
+  unavailableReason = reason;
+}
+
+function assertAvailable() {
+  if (Date.now() < unavailableUntil) throw new AntigravityUnavailableError(unavailableReason);
+  const agy = findAgy();
+  if (!agy) throw new AntigravityUnavailableError('Antigravity CLI (agy) is not installed');
+  return agy;
 }
 
 function runAgy(args, options = {}) {
-  const agy = findAgy();
+  const agy = assertAvailable();
   const cwd = options.cwd || PROJECT_DIR;
   const timeoutMs = options.timeoutMs || 10 * 60 * 1000;
 
@@ -35,10 +61,7 @@ function runAgy(args, options = {}) {
     let stdout = '', stderr = '';
     const proc = spawn(agy, args, {
       cwd,
-      env: {
-        ...process.env,
-        PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}`
-      },
+      env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
@@ -49,26 +72,25 @@ function runAgy(args, options = {}) {
 
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
+    proc.stdin.on('error', () => {}); // agy may exit before reading stdin
 
     proc.on('close', code => {
       clearTimeout(timer);
       resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() });
     });
-
     proc.on('error', err => {
       clearTimeout(timer);
       reject(err);
     });
 
-    if (options.stdin) {
-      try { proc.stdin.write(options.stdin); } catch (_) {}
-    }
-    try { proc.stdin.end(); } catch (_) {}
+    if (options.stdin) proc.stdin.write(options.stdin);
+    proc.stdin.end();
   });
 }
 
 /**
- * Antigravity orqali dasturlash vazifasini bajarish
+ * Runs a coding task through Antigravity.
+ * Resolves with `{ status: 'ok', output }` on success; throws on any failure.
  */
 async function executePrompt(prompt, options = {}) {
   const targetDir = options.projectDir;
@@ -82,48 +104,52 @@ async function executePrompt(prompt, options = {}) {
     '--disable-slash-commands'
   ];
   const model = options.model || (effort === 'low' ? 'gemini-3.8-flash-low' : undefined);
-  if (model) {
-    args.push('--model', model);
-  }
-  if (targetDir) {
-    args.push('--add-dir', targetDir);
-  }
+  if (model) args.push('--model', model);
+  if (targetDir) args.push('--add-dir', targetDir);
 
   const res = await runAgy(args, { cwd, timeoutMs: options.timeoutMs });
-  return {
-    status: res.code === 0 ? 'ok' : 'error',
-    output: res.stdout || res.stderr,
-    exitCode: res.code
-  };
+  const combined = `${res.stdout}\n${res.stderr}`;
+  if (AUTH_REQUIRED_PATTERN.test(combined)) {
+    markUnavailable('Antigravity is not signed in. Run `agy` once in a terminal to log in.');
+    throw new AntigravityUnavailableError(unavailableReason);
+  }
+  if (res.code !== 0) {
+    throw new Error(`Antigravity exited with code ${res.code}: ${(res.stderr || res.stdout).slice(0, 300)}`);
+  }
+  return { status: 'ok', output: res.stdout, exitCode: res.code };
 }
 
 /**
- * Yangi loyiha yaratish yoki mavjud loyihada modul qo'shish
+ * Creates a new project directory and asks Antigravity to scaffold it.
  */
 async function createProject(name, description, options = {}) {
+  const safeName = String(name || '').trim();
+  if (!/^[\w.-]+$/.test(safeName) || safeName.startsWith('.')) {
+    throw new Error('Project name may only contain letters, digits, ".", "_" and "-"');
+  }
   const baseDir = options.targetDir || path.join(process.env.HOME || '', 'projects');
-  const projectPath = path.join(baseDir, name);
+  const projectPath = path.join(baseDir, safeName);
   fs.mkdirSync(projectPath, { recursive: true });
 
-  const prompt = `Yangi loyiha yarat: ${name}. Tavsif: ${description}. Loyiha fayllarini yarat, README.md, package.json yoki talab qilingan muhitni sozla va kodni yoz.`;
+  const prompt = `Create a new project named "${safeName}". Description: ${description}. ` +
+    'Create the project files, a README.md, a package manifest or whatever environment it needs, and write the code.';
   return executePrompt(prompt, { projectDir: projectPath, effort: 'high' });
 }
 
-/**
- * Holatni tekshirish
- */
 function status() {
   const agyPath = findAgy();
-  const available = fs.existsSync(agyPath);
+  const signedOut = Date.now() < unavailableUntil;
   return {
     status: 'ok',
-    available,
+    available: Boolean(agyPath) && !signedOut,
     agyPath,
+    reason: signedOut ? unavailableReason : (agyPath ? '' : 'agy not installed'),
     geminiDesktop: fs.existsSync('/Applications/Gemini.app')
   };
 }
 
 module.exports = {
+  AntigravityUnavailableError,
   executePrompt,
   createProject,
   status,
