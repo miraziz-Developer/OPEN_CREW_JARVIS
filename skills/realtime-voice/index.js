@@ -1554,6 +1554,9 @@ class RealtimeSession extends EventEmitter {
       lastAssistant: this._lastAssistantTranscript,
       mediaMode: this._mediaModeActive,
       explicitUserTrigger: this._explicitUserSession || this._explicitUserTurnPending,
+      // A hands-free session keeps conversation open during media, but only the
+      // first turn after Fn/wake may launch apps or media without the wake name.
+      explicitTriggerTurn: this._explicitUserTurnPending,
       conversationActive: this._conversationContext.isActive()
     });
     if (!policy.accept) {

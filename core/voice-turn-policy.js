@@ -70,7 +70,7 @@ function looksLikeEnglishIntent(text) {
 }
 
 function looksLikeAddressedTurn(text) {
-  return looksLikeUzbekTurn(text) || looksLikeEnglishIntent(text);
+  return hasWakeName(normalize(text)) || looksLikeUzbekTurn(text) || looksLikeEnglishIntent(text);
 }
 
 function similarity(a, b) {
@@ -87,6 +87,15 @@ function similarity(a, b) {
 const FOREIGN_SCRIPT = /[\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
 // Addressing another voice assistant (TV/phone "Hey Siri", "Hey Cortana"), not JARVIS.
 const OTHER_ASSISTANT = /\b(?:hey|hi|ok|okay)[,\s]+(?:cortana|siri|alexa|google|gemini|bixby)\b/i;
+
+// STT spells the wake name many ways ("Jaris", "Charis", "Jarisch", "Javis").
+const WAKE_NAME = /\b(?:j|dj|ch)a(?:r)?v?[iy]s(?:ch|h)?\b|\bjarus\b/;
+// Commands that open an app or a page, or start playback. While media plays,
+// the media's own audio can sound exactly like these ("Play ...", "Open ..."),
+// and acting on it opens more media, which produces more false commands.
+const LAUNCH_COMMAND = /^(?:please )?(?:play|open|launch|start|run)\b|\b(?:och|ishga tushir|qo'y|qoy)$/;
+
+function hasWakeName(value) { return WAKE_NAME.test(value); }
 
 function classifyUserTurn(text, context = {}) {
   if (FOREIGN_SCRIPT.test(String(text || ''))) return { accept: false, reason: 'foreign-script' };
@@ -115,6 +124,10 @@ function classifyUserTurn(text, context = {}) {
   }
   if (context.mediaMode && !context.explicitUserTrigger && !looksLikeAddressedTurn(value)) {
     return { accept: false, reason: 'media-background' };
+  }
+  const deliberateTurn = context.explicitTriggerTurn ?? context.explicitUserTrigger;
+  if (context.mediaMode && !deliberateTurn && LAUNCH_COMMAND.test(value) && !hasWakeName(value)) {
+    return { accept: false, reason: 'media-command-without-wake' };
   }
   const lastAssistant = normalize(context.lastAssistant);
   if (lastAssistant && (lastAssistant.includes(value) || similarity(value, lastAssistant) >= (context.echoSimilarity || 0.72))) {
@@ -193,5 +206,5 @@ function conversationIdleDelay(options = {}) {
 module.exports = {
   normalize, similarity, looksLikeUzbekTurn, looksLikeEnglishIntent,
   looksLikeAddressedTurn, classifyUserTurn, isRepeatedResponse,
-  conversationIdleDelay, isStopIntent
+  conversationIdleDelay, isStopIntent, hasWakeName
 };

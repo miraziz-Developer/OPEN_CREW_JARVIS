@@ -1144,3 +1144,13 @@ test('a newer accepted turn invalidates an older grounded answer', async () => {
   assert.match(responses.at(-1).response.instructions, /Telegram ochildi/);
   assert.doesNotMatch(responses.map(response => response.response.instructions).join('\n'), /Eski javob/);
 });
+test('Fn hands-free follow-up during media cannot launch media without the wake name', async () => {
+  const sent = [];
+  const session = new RealtimeSession({ explicitUserSession: true, speakText: async () => {} });
+  session.ws = { send: raw => sent.push(JSON.parse(raw)) };
+  session._flushPlayback = () => {};
+  session._mediaModeActive = true;
+
+  assert.equal(session._acceptTranscript('Play "Shadhani".'), false);
+  assert.equal(session._acceptTranscript('Jarvis, play Shadhani'), true);
+});

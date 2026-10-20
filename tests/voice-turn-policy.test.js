@@ -71,7 +71,7 @@ test('English questions and commands are accepted while passive media dialogue s
   assert.equal(classifyUserTurn('Thanks for watching, see you next time.', { mediaMode: true }).reason, 'media-background');
   assert.equal(classifyUserTurn('Happiness will come to you.', { mediaMode: true }).reason, 'media-background');
   assert.equal(classifyUserTurn('What time is it?', { mediaMode: true }).accept, true);
-  assert.equal(classifyUserTurn('Please open Chrome', { mediaMode: true }).accept, true);
+  assert.equal(classifyUserTurn('Jarvis, please open Chrome', { mediaMode: true }).accept, true);
   assert.equal(classifyUserTurn('Analyze why this architecture is better.', { mediaMode: true }).accept, true);
   assert.equal(classifyUserTurn("Who's first is Agent A. Look for Agent A. Agent B is Agent A. Let's look for Agent B.", { mediaMode: true }).reason, 'media-background');
   assert.equal(classifyUserTurn("Damn, he looks like he is from a big city. I don't remember what country he is from.", { mediaMode: true }).reason, 'media-background');
@@ -100,4 +100,20 @@ test('room noise from the logs is rejected; real commands and answers to a quest
   for (const [text, ctx] of [['open safari', {}], ['what is on my calendar today', { conversationActive: true }], ['Telegram', { conversationActive: true, lastAssistant: 'Which app?' }], ['stop', {}]]) {
     assert.equal(classifyUserTurn(text, ctx).accept, true, text);
   }
+});
+
+test('during media, commands that open apps or start media need the wake word', () => {
+  // Real log: song lyrics transcribed as "Play Shadhani" re-opened YouTube, whose
+  // audio produced more "commands", so browsers kept opening on their own.
+  assert.equal(classifyUserTurn('Play "Shadhani".', { mediaMode: true }).reason, 'media-command-without-wake');
+  assert.equal(classifyUserTurn('Open nach Rome.', { mediaMode: true }).reason, 'media-command-without-wake');
+  assert.equal(classifyUserTurn('Safari och', { mediaMode: true }).reason, 'media-command-without-wake');
+  assert.equal(classifyUserTurn('Charis, play my favorite music.', { mediaMode: true }).accept, true);
+  assert.equal(classifyUserTurn('Jarvis, open Chrome', { mediaMode: true }).accept, true);
+  // The first turn right after Fn/wake is deliberate.
+  assert.equal(classifyUserTurn('Play Billie Jean', { mediaMode: true, explicitUserTrigger: true }).accept, true);
+  // Questions and other requests are not affected.
+  assert.equal(classifyUserTurn('What time is it?', { mediaMode: true }).accept, true);
+  // Without media nothing changes.
+  assert.equal(classifyUserTurn('Play Billie Jean', {}).accept, true);
 });
