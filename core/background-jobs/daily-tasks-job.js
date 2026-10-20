@@ -14,8 +14,8 @@ function saveDailyTasksState(stateFile, s) {
   try { fs.writeFileSync(stateFile, JSON.stringify(s)); } catch (e) {}
 }
 
-// Vazifa matnidagi vaqt belgisi ("Har kuni 19:30 — ...", "soat 11:00 da")
-// — shu vaqtdan OLDIN bajarilmasligi kerak.
+// A time in the task text ("Every day 19:30 — ...", "at 11:00") means it must not
+// run BEFORE that time.
 function scheduledMinutes(text) {
   const m = String(text).match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/);
   if (!m) return null;
@@ -26,10 +26,9 @@ function nowMinutes() {
   return d.getHours() * 60 + d.getMinutes();
 }
 
-// KUNLIK VAZIFALAR — Obsidian'dagi ro'yxat (skills/tasks). Ro'yxatga
-// tushgan narsa uchun alohida ruxsat so'ralmaydi — kun davomida navbat
-// bilan avtomatik bajariladi (SOUL.md Chegaralar hali kuchda: qaytarib
-// bo'lmaydigan amallar baribir so'raladi).
+// DAILY TASKS: the Obsidian list (skills/tasks). Listed items need no separate
+// permission and run automatically one after another during the day (SOUL.md
+// Boundaries still apply: irreversible actions are still confirmed).
 function createDailyTasksJob({ projectDir, localDateStr, leadMin, stableId, beginSingleStepMission, recordMissionResult, askAgent, sendTelegram, writeMemory }) {
   const stateFile = path.join(projectDir, '.daily-tasks-state.json');
   const todayStr = () => localDateStr();
@@ -42,14 +41,12 @@ function createDailyTasksJob({ projectDir, localDateStr, leadMin, stableId, begi
 
     const state = loadDailyTasksState(stateFile, todayStr);
     const cur = nowMinutes();
-    // Vaqti belgilangan vazifa faqat o'sha vaqt kelgach bajariladi. Vaqt
-    // yozilmagan vazifa (avvalgidek) istalgan paytda bajarilaveradi.
-    // Belgilangan vaqt o'tib ketgan bo'lsa ham bajariladi (masalan kompyuter
-    // 19:30da o'chiq bo'lsa, 20:10da yoqilganda baribir eslatadi).
-    // Oldindan tayyorlanish: vazifaning o'zi bajarilishi ham vaqt oladi
-    // (agent chaqiruvi, brauzer va h.k.), shuning uchun belgilangan vaqtdan
-    // leadMin daqiqa oldin boshlanadi — natija/eslatma foydalanuvchiga
-    // aynan kerakli vaqtda yetib borsin, kechikib emas.
+    // A task with a time runs only once that time arrives; a task without one
+    // (as before) can run at any time. A time that already passed still runs
+    // (e.g. the Mac was off at 19:30 and is turned on at 20:10: it still reminds).
+    // Lead time: running the task itself takes time (agent call, browser, ...),
+    // so it starts leadMin minutes early and the result or reminder reaches the
+    // user exactly on time, not late.
     const next = active.find(t => {
       if (state.completed.includes(t)) return false;
       const sched = scheduledMinutes(t);
@@ -62,19 +59,19 @@ function createDailyTasksJob({ projectDir, localDateStr, leadMin, stableId, begi
       idempotencyKey: 'daily:' + todayStr() + ':' + next, maxAttempts: 3
     });
     if (!execution.step) return;
-    const prompt = 'Kunlik vazifalar ro\'yxatidagi vazifa: "' + next + '". Buni bajaring va natijani qisqa ayting.';
+    const prompt = 'Task from the daily task list: "' + next + '". Do it and report the result briefly.';
     const reply = await askAgent(prompt, 'agent:main:jarvis-daily-tasks-' + Date.now());
     const verified = recordMissionResult(execution.mission.id, execution.step.id, reply, { type: 'agent-result', value: reply });
     if (!verified || verified.status !== 'verified') {
-      wrn('📋 Vazifa tasdiqlanmadi, completed qilinmadi: ' + next);
+      wrn('📋 Task not confirmed, not marked completed: ' + next);
       return;
     }
     state.completed.push(next);
     saveDailyTasksState(stateFile, state);
     if (reply) {
-      ok('📋 Vazifa bajarildi: ' + next);
+      ok('📋 Task done: ' + next);
       sendTelegram('✅ "' + next + '":\n' + reply);
-      try { writeMemory('Kunlik vazifa bajarildi', 'Vazifa: ' + next + '\nNatija: ' + reply.substring(0, 500), ['daily-task', 'autonomous']); } catch (e) {}
+      try { writeMemory('Daily task done', 'Task: ' + next + '\nResult: ' + reply.substring(0, 500), ['daily-task', 'autonomous']); } catch (e) {}
     }
   }
 
