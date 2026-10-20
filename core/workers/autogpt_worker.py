@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""AutoGPT (Significant-Gravitas/Auto-GPT, agpt 0.2.2) worker — Azure gpt-5-mini bilan.
+"""AutoGPT (Significant-Gravitas/Auto-GPT, agpt 0.2.2) worker with Azure gpt-5-mini.
 
-AutoGPT maqsadga qarab o'zi fikrlaydi -> buyruq tanlaydi -> natijani ko'radi -> davom etadi (continuous rejim).
-Xavfsizlik: faqat ishchi papka (RESTRICT_TO_WORKSPACE), lokal shell o'chiq (EXECUTE_LOCAL_COMMANDS=False), yuklab olish yo'q,
-iteratsiya chegarasi bor. Kod bajarish kerak bo'lsa — interpreter/babyagi worker'lari.
+AutoGPT reasons toward the goal on its own -> picks a command -> looks at the result -> continues (continuous mode).
+Safety: workspace folder only (RESTRICT_TO_WORKSPACE), local shell disabled (EXECUTE_LOCAL_COMMANDS=False), no downloads,
+an iteration limit. For code execution use the interpreter/babyagi workers.
 
-Kirish (stdin JSON): {"task": "...", "cwd": "/abs/workspace", "max_iterations": 12}
+Input (stdin JSON): {"task": "...", "cwd": "/abs/workspace", "max_iterations": 12}
 Muhit: OPENAI_API_KEY, OPENAI_API_BASE, AUTOGPT_MODEL, AUTOGPT_REASONING
-Chiqish: oxirgi satr — JSON {"ok": bool, "output": str}
+Output: the last line is JSON {"ok": bool, "output": str}
 """
 import io
 import json
@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 request = json.loads(sys.stdin.read() or "{}")
 task = str(request.get("task", "")).strip()
 if not task:
-    print(json.dumps({"ok": False, "output": "", "error": "task kerak"}))
+    print(json.dumps({"ok": False, "output": "", "error": "task is required"}))
     sys.exit(0)
 cwd = request.get("cwd") or os.getcwd()
 os.makedirs(cwd, exist_ok=True)
@@ -33,7 +33,7 @@ max_iterations = int(request.get("max_iterations", 12))
 model = os.environ.get("AUTOGPT_MODEL", "gpt-5-mini")
 effort = os.environ.get("AUTOGPT_REASONING", "low")
 os.environ.update({
-    # AutoGPT token hisoblagichi faqat taniydigan nomlarni qabul qiladi; haqiqiy chaqiruv pastda Azure modeliga almashtiriladi.
+    # AutoGPT's token counter only accepts names it knows; the real call is swapped to the Azure model below.
     "SMART_LLM_MODEL": "gpt-4", "FAST_LLM_MODEL": "gpt-3.5-turbo", "MEMORY_BACKEND": "no_memory",
     "EXECUTE_LOCAL_COMMANDS": "False", "RESTRICT_TO_WORKSPACE": "True", "ALLOW_DOWNLOADS": "False",
     "ANONYMIZED_TELEMETRY": "false", "PLAIN_OUTPUT": "True",
@@ -53,7 +53,7 @@ with open(os.path.join(cwd, "ai_settings.yaml"), "w", encoding="utf-8") as handl
 
 import importlib.util  # noqa: E402
 
-# AutoGPT JSON sxema faylini cwd'ga nisbatan "autogpt/json_utils/llm_response_format_1.json" yo'lidan ochadi (wheel'da yo'q).
+# AutoGPT opens its JSON schema file at "autogpt/json_utils/llm_response_format_1.json" relative to cwd (missing from the wheel).
 _schema_dir = os.path.join(cwd, "autogpt", "json_utils")
 os.makedirs(_schema_dir, exist_ok=True)
 import shutil  # noqa: E402
@@ -71,7 +71,7 @@ _original_create = openai.ChatCompletion.create
 
 
 def _patched_create(*args, **kwargs):
-    # gpt-5-mini: temperature faqat 1, max_tokens o'rniga max_completion_tokens; reasoning past.
+    # gpt-5-mini: temperature must be 1, max_completion_tokens instead of max_tokens; low reasoning.
     kwargs["model"] = model
     kwargs.pop("temperature", None)
     max_tokens = kwargs.pop("max_tokens", None)
@@ -84,7 +84,7 @@ def _patched_create(*args, **kwargs):
 
 openai.ChatCompletion.create = _patched_create
 
-# tiktoken yangi modellarni bilmasligi mumkin — cl100k'ga tushamiz
+# tiktoken may not know newer models; fall back to cl100k
 try:
     import tiktoken
     _encoding_for_model = tiktoken.encoding_for_model
@@ -99,7 +99,7 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# Eski AutoGPT `from duckduckgo_search import ddg` ishlatadi; yangi paketda u yo'q — moslik qatlami.
+# Old AutoGPT uses `from duckduckgo_search import ddg`, which the new package lacks: a compatibility shim.
 try:
     import duckduckgo_search
 
@@ -115,13 +115,13 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# Eski AutoGPT veb vositalari zamonaviy muhitda ishlamaydi (Selenium `executable_path`, spaCy modeli): xuddi shu vositalar
-# nomi bilan requests + BeautifulSoup asosida almashtiramiz.
+# Old AutoGPT web tools do not work in a modern environment (Selenium `executable_path`, spaCy model), so they
+# are replaced, under the same tool names, with requests + BeautifulSoup.
 def _patch_web_tools():
     import requests
     from bs4 import BeautifulSoup
 
-    import autogpt.cli  # noqa: F401  (aylanma import tartibi uchun __main__ bilan bir xil)
+    import autogpt.cli  # noqa: F401  (same circular-import order as __main__)
     from autogpt.commands import web_selenium
     from autogpt.processing import text as text_processing
 
@@ -156,7 +156,7 @@ def _patch_web_tools():
     web_selenium.scrape_links_with_selenium = scrape_links
     web_selenium.close_browser = lambda driver: None
     text_processing.split_text = split_text
-    text_processing.scroll_to_percentage = lambda *args, **kwargs: None  # brauzer yo'q
+    text_processing.scroll_to_percentage = lambda *args, **kwargs: None  # there is no browser
 
 
 try:

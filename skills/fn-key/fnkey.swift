@@ -1,16 +1,15 @@
-// Fn tugmasi bosilishi/qo'yib yuborilishini kuzatadi (push-to-talk trigger),
-// va Fn+Shift birga bosilishini alohida (pauza/uyg'otish trigger) aniqlaydi.
-// Chiqish qatorlari: "DOWN" | "UP" (oddiy Fn) | "COMBO" (Fn+Shift birga)
-// Kerak: Tizim sozlamalari -> Maxfiylik va xavfsizlik -> Input Monitoring ruxsati
+// Watches Fn presses/releases (push-to-talk trigger) and separately detects Fn+Shift
+// pressed together (pause/wake trigger).
+// Output lines: "DOWN" | "UP" (plain Fn) | "COMBO" (Fn+Shift together)
+// Requires: System Settings -> Privacy & Security -> Input Monitoring permission
 
 import Cocoa
 
 var fnPressed = false
 var shiftPressed = false
 var comboFired = false
-// Oddiy Fn DOWN yuborilgan bo'lsa, fizik Fn qo'yib yuborilganda Shift holatidan
-// qat'i nazar mos UP ham yuborilishi shart. Aks holda daemon pttActive=true
-// holatida osilib qoladi.
+// Once a plain Fn DOWN was sent, a matching UP must be sent when the physical Fn is
+// released, whatever the Shift state. Otherwise the daemon hangs with pttActive=true.
 var plainFnDownSent = false
 var pendingFnToken = 0
 
@@ -27,12 +26,11 @@ guard let eventTap = CGEvent.tapCreate(
             let isFn = flags.contains(.maskSecondaryFn)
             let isShift = flags.contains(.maskShift)
 
-            // Fn+Shift birga bosilgan payt — bitta fizik kombinatsiyada faqat
-            // bir marta COMBO chiqaradi. Tugmalardan ikkalasi ham qo'yilmaguncha
-            // qayta qurollanmaydi.
+            // Fn+Shift pressed together: emit COMBO only once per physical combination.
+            // It does not re-arm until both keys are released.
             if isFn && isShift && !comboFired {
                 comboFired = true
-                pendingFnToken += 1 // kutayotgan oddiy Fn DOWN'ni bekor qiladi
+                pendingFnToken += 1 // cancels the pending plain Fn DOWN
                 print("COMBO")
                 fflush(stdout)
             }
@@ -40,15 +38,14 @@ guard let eventTap = CGEvent.tapCreate(
                 comboFired = false
             }
 
-            // Oddiy Fn push-to-talk. Agar avval DOWN yuborilganidan keyin Shift
-            // bosilsa ham, Fn release paytida UP yo'qolib ketmasligi kerak.
+            // Plain Fn push-to-talk. Even if Shift is pressed after DOWN was sent, the UP
+            // must not be lost when Fn is released.
             if isFn != fnPressed {
                 fnPressed = isFn
                 if isFn && !isShift {
-                    // Fn+Shift odatda bir vaqtda emas, bir necha ms farq bilan
-                    // bosiladi. 140ms kutish oddiy Fn'ni sezilarli sekinlatmaydi,
-                    // lekin combo paytida tasodifiy voice sessiya ochilishini
-                    // oldini oladi.
+                    // Fn and Shift are usually pressed a few ms apart, not at the same
+                    // instant. Waiting 140 ms does not noticeably slow down plain Fn, but
+                    // prevents a stray voice session from opening during a combo.
                     pendingFnToken += 1
                     let token = pendingFnToken
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
@@ -64,11 +61,10 @@ guard let eventTap = CGEvent.tapCreate(
                     print("UP")
                     fflush(stdout)
                 } else if !isFn {
-                    // Fn 140ms dan tez qo'yib yuborilsa async DOWN hali
-                    // chiqmagan bo'ladi. Avval bu qisqa tap butunlay yo'qolar,
-                    // macOS esa Emoji panelini ochib yuborar edi. Combo bo'lmagan
-                    // tez tapni release paytida to'liq DOWN/UP juftligi sifatida
-                    // uzatamiz — daemon har qanday tabiiy Fn bosishni oladi.
+                    // If Fn is released faster than 140 ms the async DOWN has not been
+                    // sent yet. Such a quick tap used to be lost entirely while macOS opened
+                    // the Emoji panel. A quick non-combo tap is now delivered on release
+                    // as a full DOWN/UP pair, so the daemon receives every natural Fn press.
                     let wasPlainTap = !shiftPressed && !comboFired
                     pendingFnToken += 1
                     if wasPlainTap {
@@ -84,7 +80,7 @@ guard let eventTap = CGEvent.tapCreate(
     },
     userInfo: nil
 ) else {
-    print("ERROR: CGEventTap yaratib bo'lmadi — Input Monitoring ruxsati kerak")
+    print("ERROR: could not create the CGEventTap; Input Monitoring permission is required")
     fflush(stdout)
     exit(1)
 }

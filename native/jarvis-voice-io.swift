@@ -1,11 +1,11 @@
-// jarvis-voice-io — macOS Voice Processing (AEC + shovqin bostirish) orqali toza mikrofon oqimi.
+// jarvis-voice-io: a clean microphone stream through macOS Voice Processing (AEC + noise suppression).
 //
-// FaceTime ishlatadigan tizim darajasidagi exo bostirish: karnaydan (istalgan jarayon, jumladan sox)
-// chiqqan JARVIS ovozi mikrofondan OS darajasida ayirib tashlanadi. O'lchangan: tashqi tondan
-// aks-sado 0.46 -> 0.014 (~ -30 dB).
+// The same system-level echo cancellation FaceTime uses: JARVIS's voice from the speakers (any
+// process, including sox) is removed from the microphone at the OS level. Measured: echo of an
+// external tone 0.46 -> 0.014 (~ -30 dB).
 //
-// Chiqish: stdout — 16000 Hz, mono, PCM16 little-endian.
-// Holat: stderr — "READY" yoki "ERROR: ..." (chiqish kodi 2..4).
+// Output: stdout — 16000 Hz, mono, PCM16 little-endian.
+// Status: stderr — "READY" or "ERROR: ..." (exit codes 2..4).
 import AVFoundation
 import Foundation
 
@@ -23,21 +23,21 @@ let input = engine.inputNode
 do {
     try input.setVoiceProcessingEnabled(true)
 } catch {
-    fail("voice processing yoqilmadi: \(error)", 2)
+    fail("could not enable voice processing: \(error)", 2)
 }
 if #available(macOS 14.0, *) {
-    // Boshqa ilovalar ovozini (musiqa) keraksiz pasaytirmaymiz.
+    // Do not needlessly duck other apps' audio (music).
     input.voiceProcessingOtherAudioDuckingConfiguration =
         AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
 }
 
-// Voice Processing yoqilganda format ko'p kanalli bo'ladi; 0-kanal — qayta ishlangan (exosiz) ovoz.
+// With Voice Processing on, the format is multi-channel; channel 0 is the processed (echo-free) voice.
 let tapFormat = input.outputFormat(forBus: 0)
 guard tapFormat.sampleRate > 0,
       let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: tapFormat.sampleRate, channels: 1, interleaved: false),
       let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: micRate, channels: 1, interleaved: true),
       let micConverter = AVAudioConverter(from: monoFormat, to: outFormat) else {
-    fail("mikrofon formati yaroqsiz (ruxsat berilmagan bo'lishi mumkin)", 3)
+    fail("invalid microphone format (permission may not have been granted)", 3)
 }
 let stdout = FileHandle.standardOutput
 
@@ -65,10 +65,10 @@ do {
     engine.prepare()
     try engine.start()
 } catch {
-    fail("engine ishga tushmadi: \(error)", 4)
+    fail("engine did not start: \(error)", 4)
 }
 
-// Ota jarayon yopilsa (stdin EOF) yordamchi ham to'xtaydi.
+// When the parent process closes (stdin EOF) the helper stops too.
 DispatchQueue.global(qos: .utility).async {
     while true { if FileHandle.standardInput.availableData.isEmpty { exit(0) } }
 }
