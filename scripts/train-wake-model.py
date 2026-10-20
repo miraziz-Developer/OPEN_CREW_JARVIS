@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
 def read_wav(path: Path) -> np.ndarray:
     with wave.open(str(path), "rb") as wav_file:
         if (wav_file.getframerate(), wav_file.getnchannels(), wav_file.getsampwidth()) != (SAMPLE_RATE, 1, 2):
-            raise ValueError(f"{path} 16 kHz mono PCM16 emas")
+            raise ValueError(f"{path} is not 16 kHz mono PCM16")
         return np.frombuffer(wav_file.readframes(wav_file.getnframes()), dtype="<i2").copy()
 
 
@@ -139,7 +139,7 @@ def macos_english_voices() -> list[str]:
         if match and match.group(1).strip() not in excluded:
             voices.append(match.group(1).strip())
     if len(voices) < 6:
-        raise RuntimeError("Kamida 6 ta macOS English voice kerak")
+        raise RuntimeError("At least 6 macOS English voices are required")
     return voices
 
 
@@ -245,7 +245,7 @@ def display_path(path: Path) -> str:
 def main() -> None:
     args = parse_args()
     if args.epochs < 1 or args.negative_windows < 1000:
-        raise ValueError("--epochs >= 1 va --negative-windows >= 1000 bo‘lishi kerak")
+        raise ValueError("--epochs must be >= 1 and --negative-windows >= 1000")
     rng = np.random.default_rng(SEED)
     random.seed(SEED)
 
@@ -259,7 +259,7 @@ def main() -> None:
         else:
             accepted.append(Clip(item["file"], read_wav(args.recordings / item["file"])))
     if len(accepted) < 20:
-        raise RuntimeError(f"Sifatli personal sample yetarli emas: {len(accepted)}")
+        raise RuntimeError(f"Not enough good personal samples: {len(accepted)}")
     random.Random(SEED).shuffle(accepted)
     holdout_count = max(8, len(accepted) // 5)
     personal_val, personal_train = accepted[:holdout_count], accepted[holdout_count:]
@@ -289,7 +289,7 @@ def main() -> None:
     hard_train_audio = make_augmented(hard_train, args.hard_negative_augmentations, rng, 0.8) if hard_train else np.empty((0, CLIP_SAMPLES), np.int16)
     hard_val_audio = make_augmented(hard_val, 5, rng, 0.7) if hard_val else np.empty((0, CLIP_SAMPLES), np.int16)
 
-    print("Positive va hard-negative feature extraction...", flush=True)
+    print("Extracting positive and hard-negative features...", flush=True)
     x_pos = extract_features(train_positive_audio)
     x_val_pos = extract_features(val_positive_audio)
     x_hard = extract_sliding_features(hard_train_audio) if len(hard_train_audio) else np.empty((0, FEATURE_FRAMES, 96), np.float32)
@@ -485,5 +485,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"Training xatosi: {type(error).__name__}: {error}", file=sys.stderr)
+        print(f"Training error: {type(error).__name__}: {error}", file=sys.stderr)
         raise

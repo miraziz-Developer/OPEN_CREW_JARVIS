@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Web Specialist worker: Browser-use bilan haqiqiy brauzerda ko'p bosqichli veb vazifa.
+"""Web Specialist worker: multi-step web tasks in a real browser with Browser-use.
 
-Kirish (stdin JSON): {"task": "...", "max_steps": 25, "headless": true}
+Input (stdin JSON): {"task": "...", "max_steps": 25, "headless": true}
 Muhit: AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT (…/openai/v1), BROWSER_WORKER_MODEL
-Chiqish: oxirgi satr — JSON {"ok": bool, "output": str, "steps": int, "errors": [...]}
+Output: the last line is JSON {"ok": bool, "output": str, "steps": int, "errors": [...]}
 """
 import asyncio
 import json
@@ -15,7 +15,7 @@ async def main() -> None:
     request = json.loads(sys.stdin.read() or "{}")
     task = str(request.get("task", "")).strip()
     if not task:
-        print(json.dumps({"ok": False, "output": "", "error": "task kerak"}))
+        print(json.dumps({"ok": False, "output": "", "error": "task is required"}))
         return
 
     from browser_use import Agent, BrowserProfile
@@ -25,12 +25,12 @@ async def main() -> None:
     base = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
     model = os.environ.get("BROWSER_WORKER_MODEL", "gpt-5-mini")
     if not key or not base:
-        print(json.dumps({"ok": False, "output": "", "error": "Azure OpenAI sozlanmagan"}))
+        print(json.dumps({"ok": False, "output": "", "error": "Azure OpenAI is not configured"}))
         return
 
     llm = ChatOpenAI(model=model, api_key=key, base_url=base, temperature=1, add_schema_to_system_prompt=True, dont_force_structured_output=True)
-    # Standart: JARVIS Chrome profili (hozirgi Chrome akkauntingiz sessiyasi, scripts/chrome-profile-sync.py) va haqiqiy Chrome.
-    # Playwright'ning soxta keychain'i o'chiriladi, aks holda Chrome cookie'larni ocholmay yo'qotadi.
+    # Default: the JARVIS Chrome profile (your current Chrome account session, scripts/chrome-profile-sync.py) and real Chrome.
+    # Playwright's fake keychain is disabled; otherwise Chrome cannot decrypt and loses the cookies.
     profile_dir = os.path.expanduser(os.environ.get("JARVIS_CHROME_DIR", "~/Library/Application Support/JarvisChrome"))
     if request.get("use_profile", True) and os.path.isdir(profile_dir):
         profile = BrowserProfile(

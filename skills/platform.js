@@ -51,12 +51,10 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
   platform.register({
     id: 'fast-actions', version: '1.0.0', capabilities: ['automation'],
     actions: {
-      // fa.runFastAction() hech qachon reject qilmaydi, natija sifatida
-      // {status:'error'|'ok', ...} qaytaradi -- SkillPlatform.invoke buni
-      // avtomatik xatolik sifatida tan oladi. Osilib qolgan holat (masalan
-      // ruxsat dialogi kutayotgan osascript) esa platformaning o'z
-      // timeout()'i orqali ushlanadi -- fa.runFastAction'ning o'zi hech
-      // qachon tugamasa ham.
+      // fa.runFastAction() never rejects; it returns {status:'error'|'ok', ...}, which
+      // SkillPlatform.invoke treats as an error automatically. A hung action (e.g. an
+      // osascript waiting on a permission dialog) is caught by the platform's own
+      // timeout(), even if fa.runFastAction itself never finishes.
       runFastAction: { input: { required: ['id'] } },
       learnOpenAppAction: { input: { required: ['appName'] } },
       actionIds: {}
@@ -173,14 +171,14 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
         let out = '';
         proc.stdout.on('data', d => out += d);
         proc.stderr.on('data', () => {});
-        proc.on('error', () => reject(new Error('azure-tts spawn xatolik')));
+        proc.on('error', () => reject(new Error('azure-tts spawn error')));
         proc.on('close', (code) => {
           try { fs.unlinkSync(tmpIn); } catch (e) {}
           try {
             const audioFile = JSON.parse(out.trim()).audioFile;
             if (code === 0 && audioFile && fs.statSync(audioFile).size > 512) resolve(audioFile);
             else reject(new Error('audio fayl yaratilmadi (code=' + code + ')'));
-          } catch (e) { reject(new Error('azure-tts javobini o\'qib bo\'lmadi')); }
+          } catch (e) { reject(new Error('could not parse the azure-tts reply')); }
         });
         fs.createReadStream(tmpIn).pipe(proc.stdin);
       })

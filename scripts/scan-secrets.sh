@@ -13,7 +13,7 @@ const { spawnSync } = require('child_process');
 const script = process.argv[2];
 const timeout = Number(process.argv[3]);
 if (!Number.isSafeInteger(timeout) || timeout < 1000) {
-  console.error('❌ SECRET_SCAN_TIMEOUT_MS 1000 yoki undan katta butun son bo‘lishi kerak.');
+  console.error('❌ SECRET_SCAN_TIMEOUT_MS must be an integer of 1000 or more.');
   process.exit(2);
 }
 
@@ -29,7 +29,7 @@ if (result.error?.code === 'ETIMEDOUT') {
   process.exit(124);
 }
 if (result.error) {
-  console.error(`❌ Secret scan ishga tushmadi: ${result.error.message}`);
+  console.error(`❌ Secret scan did not run: ${result.error.message}`);
   process.exit(2);
 }
 process.exit(result.status ?? 1);
@@ -88,11 +88,11 @@ if ! scan_tree; then
   echo '❌ Tracked working tree ichida ehtimoliy plaintext secret topildi.' >&2
   exit 1
 fi
-echo '✅ Tracked working tree ichida plaintext secret topilmadi.'
+echo '✅ No plaintext secrets in the tracked working tree.'
 
-# Hatto qisman secret ham loglarda credential fingerprint qoldiradi. Bu qoida
-# joriy tracked source'ni tekshiradi; oldingi tarix alohida plaintext scan bilan
-# qamrab olinadi va ushbu guard yangi regressiyani commit qilishdan to'xtatadi.
+# Even a partial secret leaves a credential fingerprint in logs. This rule checks the
+# current tracked source; older history is covered by the separate plaintext scan, and
+# this guard stops a new regression from being committed.
 fragment_output="$(mktemp "${TMPDIR:-/tmp}/jarvis-secret-fragment-scan.XXXXXX")"
 fragment_status=0
 git grep -n -I -E "${SECRET_FRAGMENT_LOG_PATTERN}" "${PATHS[@]}" >"${fragment_output}" || fragment_status=$?
@@ -104,7 +104,7 @@ if [[ "${fragment_status}" -eq 0 ]]; then
 fi
 rm -f "${fragment_output}"
 if [[ "${fragment_status}" -ne 1 ]]; then
-  echo '❌ Secret fragment log scan bajarilmadi.' >&2
+  echo '❌ Secret fragment log scan failed.' >&2
   exit "${fragment_status}"
 fi
 echo '✅ Source kod secret fragmentlarini loglamaydi.'
@@ -115,4 +115,4 @@ while IFS= read -r commit; do
     exit 1
   fi
 done < <(git rev-list --all)
-echo '✅ Barcha reachable Git history ichida plaintext secret topilmadi.'
+echo '✅ No plaintext secrets in any reachable Git history.'

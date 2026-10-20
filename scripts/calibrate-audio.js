@@ -58,12 +58,12 @@ function play(file) {
 }
 
 async function main() {
-  console.log('JARVIS audio calibration — audio bulutga yuborilmaydi va raw yozuv saqlanmaydi.');
-  console.log('1/3: 4 soniya jim turing...');
+  console.log('JARVIS audio calibration: no audio is sent to the cloud and no raw recording is kept.');
+  console.log('1/3: stay silent for 4 seconds...');
   const silence = await recordWav(4);
-  console.log('2/3: 6 soniya odatiy masofadan tabiiy ovozda gapiring...');
+  console.log('2/3: speak naturally from your usual distance for 6 seconds...');
   const speech = await recordWav(6);
-  console.log('3/3: echo yo‘li o‘lchanmoqda; qisqa signal eshitiladi...');
+  console.log('3/3: measuring the echo path; you will hear a short signal...');
   const temp = path.join(os.tmpdir(), 'jarvis-calibration-probe-' + process.pid + '.wav');
   const probe = probeWav(); fs.writeFileSync(temp, probe, { mode: 0o600 });
   let echo = null;
@@ -73,9 +73,9 @@ async function main() {
   } finally { try { fs.unlinkSync(temp); } catch (_) {} }
   const profile = buildCalibration({ silence, speech, echo });
   saveCalibration(OUT, profile);
-  console.log('\n✅ Calibration saqlandi: ' + OUT);
+  console.log('\n✅ Calibration saved: ' + OUT);
   console.log(JSON.stringify({ measurements: profile.measurements, recommended: profile.recommended, privacy: profile.privacy }, null, 2));
-  console.log('Profil keyingi daemon restartida avtomatik ishlaydi; .env dagi explicit qiymatlar ustun.');
+  console.log('The profile applies automatically at the next daemon restart; explicit .env values take precedence.');
 }
 
 main().catch(error => { console.error('❌ Calibration: ' + error.message); process.exitCode = 1; });

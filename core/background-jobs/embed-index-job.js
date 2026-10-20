@@ -2,17 +2,16 @@
 
 const { inf, wrn } = require('../log');
 
-// XOTIRA INDEKSINI FONDA YANGILASH — semantik (ma'no bo'yicha) qidiruv
-// butun tarix bo'ylab ishlashi uchun har bir yangi xotira bloki
-// indekslanishi kerak. Avval bu indekslash QIDIRUV ichida bajarilardi —
-// real o'lchovda 125 SONIYA (qidiruvning o'zi esa atigi 611 ms). Endi u
-// shu yerda, fonda, muntazam bajariladi; qidiruv esa doim tayyor
-// indeksdan o'qib, bir zumda javob beradi.
+// BACKGROUND MEMORY INDEXING: for semantic (meaning-based) search to cover the whole
+// history, every new memory block must be indexed. Indexing used to run INSIDE the
+// search: 125 SECONDS in a real measurement (the search itself took only 611 ms). It
+// now runs regularly here, in the background, and searches read a ready index and
+// answer instantly.
 function createEmbedIndexJob() {
   let running = false;
 
   async function run() {
-    if (running) return; // oldingisi hali tugamagan bo'lsa, ustma-ust ishga tushmasin
+    if (running) return; // if the previous run is still going, do not start another on top
     running = true;
     try {
       const mem = require('../../skills/memory');
