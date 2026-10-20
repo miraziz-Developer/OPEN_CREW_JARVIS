@@ -35,7 +35,7 @@ const CONFIG_SCHEMA = Object.freeze({
   SELF_HEAL_ENABLED: { type: 'boolean', default: true },
   SELF_HEAL_MAX_ATTEMPTS: { type: 'integer', default: 2, min: 1, max: 3 },
   SELF_HEAL_TIMEOUT_MS: { type: 'integer', default: 180000, min: 30000, max: 900000 },
-  SELF_HEAL_INTERPRETER_PATH: { type: 'string', default: '' }, // bo'sh = avtomatik topiladi (.venv-interpreter, keyin PATH)
+  SELF_HEAL_INTERPRETER_PATH: { type: 'string', default: '' }, // empty = found automatically (.venv-interpreter, then PATH)
   GMAIL_TASK_NOTIFICATIONS_ENABLED: { type: 'boolean', default: false },
   GMAIL_OWNER_RECIPIENT: { type: 'string' },
   GMAIL_TASK_PROGRESS_MS: { type: 'integer', default: 21600000, min: 60000, max: 604800000 },
@@ -77,7 +77,7 @@ const CONFIG_SCHEMA = Object.freeze({
   REALTIME_TRANSCRIPTION_LANGUAGE: { type: 'string', default: '' },
   REALTIME_ENABLED: { type: 'boolean', default: true },
   REALTIME_IDLE_MS: { type: 'integer', default: 20000, min: 5000, max: 300000 },
-  REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 500, min: 64, max: 4096 }, // past: hisob juda uzun gapirardi; qisqalik ko'rsatmasini qattiqroq ushlab turish uchun pasaytirildi
+  REALTIME_MAX_RESPONSE_TOKENS: { type: 'integer', default: 500, min: 64, max: 4096 }, // lowered: replies ran too long; keeps the brevity instruction enforced
   REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS: { type: 'integer', default: 256, min: 64, max: 1024 },
   // Low-latency conversational profile. Keep enough margin for natural
   // intra-sentence pauses while releasing a completed turn promptly.
@@ -206,30 +206,30 @@ function convert(name, raw, rule) {
   if (rule.type === 'boolean') {
     if (/^(true|1|yes|on)$/i.test(raw)) return true;
     if (/^(false|0|no|off)$/i.test(raw)) return false;
-    throw new Error('boolean true/false bo‘lishi kerak');
+    throw new Error('must be boolean true/false');
   }
   if (rule.type === 'integer' || rule.type === 'number') {
     const value = rule.type === 'integer' ? Number.parseInt(raw, 10) : Number(raw);
-    if (!Number.isFinite(value) || (rule.type === 'integer' && !/^-?\d+$/.test(String(raw)))) throw new Error(`to‘g‘ri ${rule.type} emas`);
+    if (!Number.isFinite(value) || (rule.type === 'integer' && !/^-?\d+$/.test(String(raw)))) throw new Error(`not a valid ${rule.type}`);
     if (rule.min !== undefined && value < rule.min) throw new Error(`minimum ${rule.min}`);
     if (rule.max !== undefined && value > rule.max) throw new Error(`maximum ${rule.max}`);
     return value;
   }
   if (rule.type === 'url') {
     const value = new URL(String(raw));
-    if (!['http:', 'https:'].includes(value.protocol)) throw new Error('faqat http/https URL');
+    if (!['http:', 'https:'].includes(value.protocol)) throw new Error('only http/https URLs');
     return value.toString().replace(/\/$/, '');
   }
   if (rule.type === 'websocket-url') {
     const value = new URL(String(raw));
-    if (!['http:', 'https:', 'ws:', 'wss:'].includes(value.protocol)) throw new Error('faqat http/https/ws/wss URL');
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(value.protocol)) throw new Error('only http/https/ws/wss URLs');
     return value.toString().replace(/\/$/, '');
   }
   if (rule.type === 'enum') {
-    if (!rule.values.includes(raw)) throw new Error(`ruxsat etilgan qiymatlar: ${rule.values.join(', ')}`);
+    if (!rule.values.includes(raw)) throw new Error(`allowed values: ${rule.values.join(', ')}`);
     return raw;
   }
-  throw new Error(`${name} uchun noma’lum schema turi`);
+  throw new Error(`unknown schema type for ${name}`);
 }
 
 function validateConfig(input, options = {}) {
@@ -243,7 +243,7 @@ function validateConfig(input, options = {}) {
     const raw = source[name];
     const missing = raw === undefined || String(raw).trim() === '' || PLACEHOLDER.test(String(raw).trim());
     if (missing) {
-      if (rule.required) errors.push({ key: name, code: 'required', message: `${name} majburiy va haqiqiy qiymat bo‘lishi kerak` });
+      if (rule.required) errors.push({ key: name, code: 'required', message: `${name} is required and must be a real value` });
       else if (Object.prototype.hasOwnProperty.call(rule, 'default')) values[name] = rule.default;
       continue;
     }
@@ -252,24 +252,24 @@ function validateConfig(input, options = {}) {
   }
 
   for (const name of Object.keys(source)) {
-    if (!schema[name] && options.warnUnknown) warnings.push({ key: name, code: 'unknown', message: `${name} schema’da yo‘q` });
+    if (!schema[name] && options.warnUnknown) warnings.push({ key: name, code: 'unknown', message: `${name} is not in the schema` });
   }
   const voiceLivePartial = Boolean(values.AZURE_VOICELIVE_ENDPOINT) !== Boolean(values.AZURE_VOICELIVE_KEY);
   const realtimePartial = Boolean(values.AZURE_REALTIME_ENDPOINT) !== Boolean(values.AZURE_REALTIME_KEY);
   const terraPartial = Boolean(values.AZURE_TERRA_ENDPOINT) !== Boolean(values.AZURE_TERRA_KEY);
   const homeAssistantPartial = Boolean(values.HOME_ASSISTANT_URL) !== Boolean(values.HOME_ASSISTANT_TOKEN);
-  if (voiceLivePartial) errors.push({ key: 'AZURE_VOICELIVE_ENDPOINT', code: 'conditional', message: 'Voice Live endpoint va key birga berilishi kerak' });
-  if (realtimePartial) errors.push({ key: 'AZURE_REALTIME_ENDPOINT', code: 'conditional', message: 'Realtime endpoint va key birga berilishi kerak' });
-  if (terraPartial) errors.push({ key: 'AZURE_TERRA_ENDPOINT', code: 'conditional', message: 'Terra endpoint va key birga berilishi kerak' });
-  if (homeAssistantPartial) errors.push({ key: 'HOME_ASSISTANT_URL', code: 'conditional', message: 'Home Assistant URL va token birga berilishi kerak' });
+  if (voiceLivePartial) errors.push({ key: 'AZURE_VOICELIVE_ENDPOINT', code: 'conditional', message: 'Voice Live endpoint and key must be set together' });
+  if (realtimePartial) errors.push({ key: 'AZURE_REALTIME_ENDPOINT', code: 'conditional', message: 'Realtime endpoint and key must be set together' });
+  if (terraPartial) errors.push({ key: 'AZURE_TERRA_ENDPOINT', code: 'conditional', message: 'Terra endpoint and key must be set together' });
+  if (homeAssistantPartial) errors.push({ key: 'HOME_ASSISTANT_URL', code: 'conditional', message: 'Home Assistant URL and token must be set together' });
   if (values.WHISPER_WAKE_ENABLED && (!values.WHISPER_WAKE_BINARY || !values.WHISPER_WAKE_MODEL)) {
-    errors.push({ key: 'WHISPER_WAKE_BINARY', code: 'conditional', message: 'WHISPER_WAKE_ENABLED=true uchun binary va model path berilishi kerak' });
+    errors.push({ key: 'WHISPER_WAKE_BINARY', code: 'conditional', message: 'WHISPER_WAKE_ENABLED=true needs a binary and a model path' });
   }
   if (values.GMAIL_TASK_NOTIFICATIONS_ENABLED && !EMAIL.test(values.GMAIL_OWNER_RECIPIENT || '')) {
-    errors.push({ key: 'GMAIL_OWNER_RECIPIENT', code: 'conditional', message: 'GMAIL_TASK_NOTIFICATIONS_ENABLED=true uchun owner email berilishi kerak' });
+    errors.push({ key: 'GMAIL_OWNER_RECIPIENT', code: 'conditional', message: 'GMAIL_TASK_NOTIFICATIONS_ENABLED=true needs an owner email' });
   }
   if (values.REALTIME_ENABLED && !values.AZURE_VOICELIVE_ENDPOINT && !values.AZURE_REALTIME_ENDPOINT && !values.GEMINI_API_KEY) {
-    warnings.push({ key: 'REALTIME_ENABLED', code: 'fallback', message: 'Voice provider sozlanmagan; Speech TTS fallback ishlatiladi' });
+    warnings.push({ key: 'REALTIME_ENABLED', code: 'fallback', message: 'No realtime voice provider configured; the Speech TTS fallback is used' });
   }
   return { ok: errors.length === 0, values, errors, warnings };
 }

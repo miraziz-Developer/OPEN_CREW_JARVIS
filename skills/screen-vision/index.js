@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * SCREEN VISION Skill — Azure OpenAI (gpt-4.1) orqali ekranni haqiqiy ko'rish
- * Kirish (stdin JSON): { imagePath?: string, prompt?: string }
- *   imagePath berilmasa — o'zi yangi skrinshot oladi
- * Chiqish: { status: "ok", description: "...", imagePath: "..." } | { status: "error", message }
+ * SCREEN VISION skill: really sees the screen through Azure OpenAI (gpt-4.1) or Gemini
+ * Input (stdin JSON): { imagePath?: string, prompt?: string }
+ *   without imagePath a new screenshot is taken
+ * Output: { status: "ok", description: "...", imagePath: "..." } | { status: "error", message }
  */
 
 const fs = require('fs');
@@ -27,13 +27,13 @@ function env(k, def) {
 
 const KEY = env('AZURE_OPENAI_KEY');
 const ENDPOINT = (env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '');
-// 'gpt-4.1' standart qiymati resursda mavjud emas edi (DeploymentNotFound) — endi haqiqatan
-// ishlaydigan asosiy deploymentga tushadi, agar alohida vision deployment ko'rsatilmagan bo'lsa.
+// The 'gpt-4.1' default did not exist on the resource (DeploymentNotFound); without a separate vision
+// deployment it now falls back to the main deployment that really works.
 const VISION_DEPLOYMENT = env('AZURE_OPENAI_VISION_DEPLOYMENT') || env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini');
 const DEFAULT_PROMPT = "Analyze this screen screenshot in detail and answer in natural English. If multiple windows or apps are visible, describe each separately: identify the app or site and the concrete visible details, such as file names, project, topic, conversation, code, or text. Do not guess; report only what is visibly supported. Avoid a generic description and include concrete details.";
-const LOCATE_PROMPT = `Screenshotdagi so'ralgan interaktiv UI elementlarni top. FAQAT JSON qaytar, markdown yo'q:
-{"summary":"qisqa tavsif","elements":[{"name":"ko'rinadigan nom","role":"button|field|menu|other","confidence":0.0,"bounds":{"x":0,"y":0,"width":0,"height":0},"center":{"x":0,"y":0}}]}
-Koordinatalar screenshotning xom piksel koordinatasida bo'lsin. Faqat aniq ko'ringan elementlarni qo'sh; confidence 0..1. Topilmasa elements bo'sh bo'lsin.`;
+const LOCATE_PROMPT = `Find the requested interactive UI elements in the screenshot. Return ONLY JSON, no markdown:
+{"summary":"short description","elements":[{"name":"visible label","role":"button|field|menu|other","confidence":0.0,"bounds":{"x":0,"y":0,"width":0,"height":0},"center":{"x":0,"y":0}}]}
+Coordinates are in the screenshot's raw pixel space. Include only clearly visible elements; confidence is 0..1. If nothing is found, elements is empty.`;
 const worldModel = new WorldModel({ file: path.join(PROJECT_DIR, '.jarvis-world-model.json') });
 
 function buildGroundedPrompt(prompt, context) {
@@ -63,9 +63,9 @@ function buildVisionRequestBody(imageBase64, prompt, options = {}) {
         { type: 'image_url', image_url: { url: 'data:image/png;base64,' + imageBase64 } }
       ]
     }],
-    // gpt-5-mini reasoning modeli: 'max_tokens' rad etiladi, va yashirin fikrlash ham shu byudjetdan
-    // sarflanadi — kam bo'lsa javob bo'sh qaytadi (finish_reason "length", sinovda tasdiqlandi).
-    // 'low' effort tezlik uchun (bu tez-tez chaqiriladigan "bir qarashda ko'rish" vositasi).
+    // gpt-5-mini is a reasoning model: 'max_tokens' is rejected and hidden reasoning draws on the same
+    // budget, so a small budget returns an empty answer (finish_reason "length", confirmed in tests).
+    // 'low' effort for speed (this is a frequently called "quick look" tool).
     max_completion_tokens: options.structured ? 2000 : 800,
     ...(/(?:o1|o3|gpt-5)/i.test(VISION_DEPLOYMENT) ? { reasoning_effort: 'low' } : {}),
     ...(options.structured ? { response_format: { type: 'json_object' } } : {})
@@ -88,7 +88,7 @@ function describeImage(imagePath, prompt, options = {}) {
     });
   }
 
-  // Lokal rejim: Qwen 3.5 9B rasmni ham tushunadi — model almashtirilmaydi (Brain hakami orqali).
+  // Local mode: Qwen 3.5 9B understands images too; no model swap (via the brain arbiter).
   if (brainMode === 'local') {
     const img = fs.readFileSync(imagePath).toString('base64');
     return require('../../core/brain/client').think({
@@ -96,7 +96,7 @@ function describeImage(imagePath, prompt, options = {}) {
       format: options.structured ? 'json' : undefined
     }).then(r => r.text);
   }
-  if (!KEY || !ENDPOINT) throw new Error('AZURE_OPENAI_KEY yoki AZURE_OPENAI_ENDPOINT .env da yo\'q');
+  if (!KEY || !ENDPOINT) throw new Error('AZURE_OPENAI_KEY or AZURE_OPENAI_ENDPOINT is missing in .env');
   const img = fs.readFileSync(imagePath).toString('base64');
   const body = JSON.stringify(buildVisionRequestBody(img, prompt, options));
   const isAzure = ENDPOINT.includes('.azure.com');
@@ -122,7 +122,7 @@ function describeImage(imagePath, prompt, options = {}) {
           const parsed = JSON.parse(d);
           if (res.statusCode !== 200) return reject(new Error(parsed.error?.message || ('HTTP ' + res.statusCode)));
           const text = parsed.choices?.[0]?.message?.content;
-          if (!text) return reject(new Error('Model javob bermadi'));
+          if (!text) return reject(new Error('The model returned no answer'));
           resolve(text.trim());
         } catch (e) { reject(e); }
       });
@@ -171,10 +171,10 @@ async function main() {
     let context = null;
     try { context = collectMacOSContext(); } catch (e) {}
     if (!imagePath) { imagePath = takeScreenshot(); ownScreenshot = true; }
-    else if (!fs.existsSync(imagePath)) throw new Error('Fayl topilmadi: ' + imagePath);
+    else if (!fs.existsSync(imagePath)) throw new Error('File not found: ' + imagePath);
 
     const structured = input.action === 'locate_elements' || input.structured === true;
-    const prompt = structured ? LOCATE_PROMPT + '\nSo‘rov: ' + String(input.prompt || input.query || 'barcha muhim interaktiv elementlar') : input.prompt;
+    const prompt = structured ? LOCATE_PROMPT + '\nRequest: ' + String(input.prompt || input.query || 'all important interactive elements') : input.prompt;
     const description = await describeImage(imagePath, buildGroundedPrompt(prompt, context), { structured });
     const vision = structured ? normalizeVisionResult(extractJson(description)) : null;
     if (context) {

@@ -12,8 +12,8 @@ function saveProactiveState(stateFile, s) {
   try { fs.writeFileSync(stateFile, JSON.stringify(s)); } catch (e) {}
 }
 
-// "No action" xulosalari ichki natija bo'lib, foydalanuvchiga yuborilmaydi.
-// Faqat qat'iy kontraktga mos, dalilli takliflar notification bo'la oladi.
+// "No action" conclusions are internal results and are never sent to the user.
+// Only suggestions that match the strict contract and carry evidence become notifications.
 function extractSuggestion(reply) {
   const match = String(reply || '').trim().match(/^SUGGESTION:\s*(.+)$/s);
   if (!match) return null;
@@ -21,9 +21,9 @@ function extractSuggestion(reply) {
   return suggestion.length > 5 ? suggestion : null;
 }
 
-// PROAKTIV REJIM — davriy ravishda screen-monitor yozgan Obsidian
-// xotirasini ko'rib chiqadi; agent chindan foydali narsa topsa, faqat
-// KUZATIB (mustaqil harakat qilmasdan) taklif beradi.
+// PROACTIVE MODE: periodically reviews the Obsidian memory the screen monitor writes;
+// when the agent finds something genuinely useful it only SUGGESTS it (it never acts
+// on its own).
 function createProactiveCheckJob({ projectDir, intervalMin, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile }) {
   const stateFile = path.join(projectDir, '.proactive-state.json');
 
@@ -52,29 +52,29 @@ function createProactiveCheckJob({ projectDir, intervalMin, localDateStr, proact
     saveProactiveState(stateFile, state);
     if (!newBlocks.length) return;
 
-    // Ko'p kunlik o'rganilgan naqshlarni ham qo'shamiz — shunda taklif faqat
-    // "hozir shu ko'rinyapti" emas, balki "odatda shu vaqt/holatda siz shuni
-    // qilasiz" darajasida, haqiqiy odatlarga asoslangan bo'ladi.
+    // Patterns learned over many days are included too, so suggestions are based on
+    // real habits ("you usually do this at this time") rather than only on what is
+    // visible right now.
     let patternsBlock = '';
     try {
       const profile = mem.readProfile();
       if (profile.status === 'ok') {
-        const sections = profile.content.split(/^## /m).slice(1).filter(s => s.startsWith('O\'rganilgan naqshlar') || s.startsWith('Odatlar'));
-        if (sections.length) patternsBlock = '\n\n=== SIZNING ODDIY VAQTLARDA O\'RGANILGAN ODATLARINGIZ ===\n' + sections.slice(-5).map(s => '## ' + s).join('\n');
+        const sections = profile.content.split(/^## /m).slice(1).filter(s => /^(?:O'rganilgan naqshlar|Learned patterns|Odatlar|Habits)/.test(s));
+        if (sections.length) patternsBlock = '\n\n=== YOUR HABITS LEARNED OVER TIME ===\n' + sections.slice(-5).map(s => '## ' + s).join('\n');
       }
     } catch (e) {}
 
     const now2 = new Date();
-    const prompt = 'Hozirgi vaqt: ' + now2.toTimeString().slice(0, 5) + ' (' + ['Yakshanba','Dushanba','Seshanba','Chorshanba','Payshanba','Juma','Shanba'][now2.getDay()] + ').\n\n' +
-      'So\'nggi ' + intervalMin + ' daqiqada ekranda quyidagi o\'zgarishlar qayd etildi:\n\n' +
+    const prompt = 'Current time: ' + now2.toTimeString().slice(0, 5) + ' (' + ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][now2.getDay()] + ').\n\n' +
+      'In the last ' + intervalMin + ' minutes these screen changes were recorded:\n\n' +
       newBlocks.join('\n\n') +
       patternsBlock +
-      '\n\nYuqoridagi ODATLARGA qarab, hozirgi vaqt/holat bilan solishtiring: foydalanuvchi odatda shu payt/holatda ' +
-      'nima qilishi kerak edi, lekin qilmagandek ko\'rinsa (masalan unutgan, chalg\'igan) — yoki hozirgi ekrandan chindan ' +
-      'foydali/muhim bir taklif (xato, unutilgan vazifa, yordam kerak bo\'lgan holat) ko\'rsangiz, faqat ' +
-      '"SUGGESTION: <qisqa, aniq taklif va uning dalili>" formatida javob bering. Aniq taklif bo\'lmasa, faqat ' +
-      '"NO_ACTION" deb javob bering. Memory search yoki boshqa vosita mavjud emasligini, baholash jarayonini yoki ' +
-      'nega xabar yubormayotganingizni hech qachon izohlamang.';
+      '\n\nCompare the current time and situation with the HABITS above: if the user usually does something at this ' +
+      'time or in this situation but seems not to have done it (e.g. forgot, got distracted), or if you see a genuinely ' +
+      'useful or important suggestion on the current screen (an error, a forgotten task, a situation that needs help), reply ' +
+      'only in the form "SUGGESTION: <a short, concrete suggestion and its evidence>". If there is no concrete suggestion, reply ' +
+      'only "NO_ACTION". Never comment on missing memory search or other tools, on the evaluation process, or on why ' +
+      'you are not sending a message.';
     const reply = await askAgent(prompt, 'agent:main:jarvis-proactive');
     const suggestion = extractSuggestion(reply);
     if (!suggestion) return;
