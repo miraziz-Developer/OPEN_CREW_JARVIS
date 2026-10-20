@@ -2,15 +2,14 @@
 /**
  * REALTIME VOICE — multilingual low-latency voice pipeline.
  *
- * Foundry gpt-realtime-2.1 (primary) or Voice Live (fallback) handles
- * STT, VAD, conversation and speech directly.
+ * Gemini Live (primary, native audio) or Azure Voice Live / Realtime (fallback)
+ * handle STT, VAD, conversation and speech directly.
  * Complex/grounded questions use the tiered Grok/GPT-5.6 Sol reasoning path and are spoken by
  * the same Realtime session, avoiding a second STT/TTS provider round-trip.
  *
- * Murakkab, ko'p bosqichli vazifalar (brauzer, fayl, ekran) uchun
- * `run_task` funksiyasi orqali mavjud to'liq agentga (gpt-6-astra, barcha
- * skilllar bilan) topshiriladi — shu bilan hech qanday imkoniyat
- * yo'qolmaydi, faqat oddiy suhbat ancha tezlashadi.
+ * Complex multi-step tasks (browser, files, screen) are handed to the full
+ * agent (gpt-6-astra with every skill) through the `run_task` function, so no
+ * capability is lost while ordinary conversation becomes much faster.
  */
 
 const fs = require('fs');
@@ -60,19 +59,16 @@ const AGENT_LONG_TASK_NOTICE_MS = Math.min(
 const VOICE_AGENT_HANDOFF_MS = Math.max(30000, parseInt(env('VOICE_AGENT_HANDOFF_MS'), 10) || 60000);
 const VOICE_AGENT_BRIDGE = createAgentBridge({ projectDir: PROJECT_DIR, env, azureOpenAiKey: env('AZURE_OPENAI_KEY'), skillPlatform: createSkillPlatform({ projectDir: PROJECT_DIR, env }), runtime: {} });
 
-// Media (video/musiqa) "hali ijro etilyapti" holati — avval bu faqat
-// bitta RealtimeSession obyekti ichida (xotirada) saqlanardi. Muammo:
-// har bir Fn/hotword chaqiruvi YANGI RealtimeSession yaratadi (avvalgi
-// suhbat 20s jimlikdan keyin tugaydi) — shuning uchun video bir
-// suhbatda ishga tushirilib, keyingi (yangi) suhbat boshlanganda
-// _mediaModeActive qayta false'dan boshlanardi, video esa fonda hali
-// ham ijro etilayotgan bo'lardi. Natija: real logda tasdiqlandi — video
-// subtitr/outro matnlari (koreys/turk/yapon tillarida) "foydalanuvchi
-// gapirdi" deb qayta-qayta noto'g'ri transkript qilingan, chunki YANGI
-// suhbat past chegara (0.6) bilan boshlangan. Fayl orqali saqlash bu
-// holatni suhbatlar orasida ("session"lar orasida) saqlab qoladi.
+// Whether media (video/music) is still playing. This used to live only inside one
+// RealtimeSession object, but every Fn/hotword trigger creates a NEW session (the
+// previous one ends after 20 s of silence). A video started in one conversation was
+// therefore forgotten by the next: _mediaModeActive restarted at false while the
+// video kept playing. Confirmed in real logs: video subtitles and outros (Korean,
+// Turkish, Japanese) were repeatedly transcribed as "the user spoke" because the
+// new session started with the low threshold (0.6). Persisting the state in a file
+// carries it across sessions.
 const MEDIA_STATE_FILE = path.join(PROJECT_DIR, '.media-playing-state.json');
-const MEDIA_STATE_TTL_MS = 40 * 60 * 1000; // 40 daqiqadan keyin eskirgan deb hisoblanadi (video/qo'shiq odatda shuncha davom etmaydi)
+const MEDIA_STATE_TTL_MS = 40 * 60 * 1000; // considered stale after 40 minutes (videos/songs rarely run longer)
 function saveMediaState() {
   fs.promises.writeFile(MEDIA_STATE_FILE, JSON.stringify({ active: true, setAt: Date.now() })).catch(() => {});
 }
@@ -83,16 +79,14 @@ async function isMediaRecentlyLikelyPlaying() {
   } catch (e) { return false; }
 }
 
-// TIZIM DARAJASIDA media ijro etilayotganini aniqlash. Yuqoridagi fayl-holati
-// faqat JARVIS O'ZI video/musiqa ochganda ishlaydi — foydalanuvchi o'zi
-// YouTube ochsa, tizim bundan bexabar qolardi. Real logda oqibati ko'rindi:
-// mikrofon video ovozini olib, uni "foydalanuvchi gapirdi" deb transkript
-// qilgan (turkcha YouTube outro matni aynan shunday tushib qolgan).
+// SYSTEM-LEVEL detection of playing media. The file state above only works when
+// JARVIS itself opened the video or music; if the user opened YouTube, the system
+// had no idea. Real logs showed the consequence: the microphone picked up the
+// video and transcribed it as the user speaking (a Turkish YouTube outro got in).
 //
-// macOS bunga aniq signal beradi: media ijro etuvchi ilova (Chrome, Spotify
-// va h.k.) "Playing audio" nomli assertion qo'yadi. Sinab tasdiqlandi:
-// Jarvisning O'Z ovozi (afplay) bu assertion'ni QO'YMAYDI — ya'ni o'zimizning
-// ovozimizdan soxta ishga tushish bo'lmaydi.
+// macOS provides a precise signal: an app playing media (Chrome, Spotify, ...)
+// holds a "Playing audio" power assertion. Verified: JARVIS's OWN voice (afplay)
+// does NOT create that assertion, so our own speech cannot trigger it.
 function checkSystemAudioPlaying() {
   return new Promise((resolve) => {
     try {
@@ -105,18 +99,18 @@ function checkSystemAudioPlaying() {
     } catch (e) { resolve(null); }
   });
 }
-// OpenAI realtime ovozlari ichida `cedar` va `marin` eng sifatli tavsiya
-// etilgan avlodga kiradi. JARVIS uchun tiniqroq, vazmin erkak ohangli cedar
-// tanlandi. .env orqali xohlansa keyin A/B almashtirish mumkin.
+// Among the OpenAI realtime voices, `cedar` and `marin` are the recommended newest
+// generation. cedar was chosen for JARVIS as a clearer, calm male tone; switch it
+// in .env for A/B tests.
 const VOICE_STYLE = env('JARVIS_VOICE_STYLE', 'cinematic-robot');
 // Empty lets the Realtime provider detect the language for multilingual turns.
 const TRANSCRIPTION_LANGUAGE = env('REALTIME_TRANSCRIPTION_LANGUAGE', '');
 const TRANSCRIPTION_MODEL = env('REALTIME_TRANSCRIPTION_MODEL', 'gpt-4o-transcribe');
 const CONVERSATION_STYLE_INSTRUCTIONS = "Respond to the user's latest turn in natural English by default. Do not switch languages because of the user's language, accent, isolated foreign words, quoted text, transcription errors, or background audio. Translate into or speak in another language only when the user explicitly requested that named language; otherwise answer in English. Stay in character (composed, economical, dry wit only when it lands naturally) and sound unforced, with natural wording and varied sentence length. Use complete sentences, always finish the thought, and never cut a sentence short; be concise for simple turns, but include enough detail when the question needs it. If the user requested an action, use the appropriate available tool instead of only describing or promising the action, and never claim completion before a successful tool result. Never invent missing facts, and do not use markdown.";
-// Taxminiy javob: server ovoz tugashi bilanoq javob boshlaydi (Azure playground kabi), JARVIS esa
-// transkriptni tekshirib qabul qiladi yoki bekor qiladi. Ovoz va tool-chaqiruvlar qaror chiqquncha ushlab turiladi.
-// 'explicit' (standart): oddiy savollarga realtime model darhol o'zi javob beradi; sekin ask_expert faqat aniq
-// chuqur tahlil so'ralganda. 'always' — eski xulq (jiddiy savol har doim ask_expert'ga, ~10+ s).
+// Speculative response: the server starts answering as soon as speech ends (like the Azure
+// playground) while JARVIS checks the transcript and accepts or cancels it. Audio and tool calls are held until then.
+// 'explicit' (default): the realtime model answers ordinary questions itself; the slow ask_expert path is used
+// only when deep analysis is explicitly requested. 'always' = old behaviour (serious questions always go to ask_expert, ~10+ s).
 const EXPERT_ROUTING = env('JARVIS_EXPERT_ROUTING', 'explicit');
 const SESSION_PREFIX_PADDING_MS = parseInt(env('AZURE_VOICELIVE_SESSION_PREFIX_PADDING_MS') || env('AZURE_VOICELIVE_WAKE_PREFIX_PADDING_MS') || '80', 10);
 const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10) || 15000;
@@ -125,7 +119,7 @@ const NATIVE_MIC_MUTE_GRACE_MS = 150;
 const NATIVE_BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_NATIVE_BARGE_IN_CONFIRM_MS'), 10) || 250;
 const NATIVE_PREROLL_BYTES = 24000 * 2 * 1.2;
 const STOP_QUIET_MS = 6000;
-// Doim eshitib turish: bo'sh paytda mahalliy energiya darvozasi bulutga faqat nutq (+ oldingi 450 ms) yuboradi.
+// Always-listening: while idle, the local energy gate sends only speech (+ the preceding 450 ms) to the cloud.
 const IDLE_GATE_MIN_RMS = parseInt(env('ALWAYS_LISTEN_MIN_RMS'), 10) || 140;
 const IDLE_GATE_HANGOVER_MS = parseInt(env('ALWAYS_LISTEN_HANGOVER_MS'), 10) || 900;
 const IDLE_GATE_PREROLL_BYTES = 24000 * 2 * 0.45;
@@ -133,50 +127,49 @@ const BARGE_IN_VERIFY_TIMEOUT_MS = parseInt(env('REALTIME_BARGE_IN_VERIFY_MS'), 
 const TRAILING_SILENCE_MAX_MS = parseInt(env('REALTIME_TRAILING_SILENCE_MAX_MS'), 10) || 2500;
 const SPECULATIVE_RESPONSE = env('REALTIME_SPECULATIVE_RESPONSE', 'true') !== 'false';
 const SPECULATIVE_DECISION_TIMEOUT_MS = parseInt(env('REALTIME_SPECULATIVE_TIMEOUT_MS'), 10) || 4000;
-// Voice Live'da Azure Speech transkripsiyasi ~0.2 s (gpt-4o-transcribe ~1 s) — o'lchangan.
-// Zaxira azure-realtime faqat OpenAI modellarini qabul qiladi.
+// Azure Speech transcription inside Voice Live takes ~0.2 s (gpt-4o-transcribe ~1 s), measured.
+// The azure-realtime fallback accepts only OpenAI models.
 const VOICE_LIVE_TRANSCRIPTION_MODEL = env('REALTIME_VOICE_LIVE_TRANSCRIPTION_MODEL', 'azure-speech');
-// Jarvis gapirib bo'lgach, mikrofon yana necha ms kutib turadi (xona
-// akustikasi/karnay ovozi pasayishi uchun) — real foydalanishda 500ms
-// yetarli emasligi aniqlandi (Jarvis o'z ovozini qayta eshitib qolgan).
+// How long the microphone keeps waiting after JARVIS finishes speaking (room
+// acoustics / speaker tail). In real use 500 ms proved too short: JARVIS heard
+// its own voice again.
 const MIC_MUTE_GRACE_MS = parseInt(env('MIC_MUTE_GRACE_MS'), 10) || 650;
 const NORMAL_VAD_THRESHOLD = parseFloat(env('REALTIME_VAD_THRESHOLD')) || 0.55;
 const MEDIA_VAD_THRESHOLD = parseFloat(env('REALTIME_MEDIA_VAD_THRESHOLD')) || 0.72;
-// Fn/hotword orqali boshlangan oddiy suhbatda turn tez yopilishi kerak.
-// 180 ms odatiy gap ichidagi nafas pauzalarini kesmasdan birinchi javobni
-// avvalgi 220 ms profilga nisbatan tezroq boshlaydi; media alohida konservativ
-// profil bilan himoyalangan.
+// In an ordinary Fn/hotword conversation the turn should close quickly. 180 ms
+// does not cut normal breathing pauses inside a sentence and starts the first
+// answer sooner than the previous 220 ms profile; media is protected by its own
+// conservative profile.
 const NORMAL_VAD_SILENCE_MS = parseInt(env('REALTIME_VAD_SILENCE_MS'), 10) || 180;
 const MEDIA_VAD_SILENCE_MS = parseInt(env('REALTIME_MEDIA_VAD_SILENCE_MS'), 10) || 750;
-// Realtime'da output token budjeti matn va audioni birga qoplaydi. Live
-// telemetry 160 tokenli 7–13 so'z javoblarning ham `max_output_tokens` bilan
-// kesilganini ko'rsatdi. Lo'ndalik prompt/policy orqali boshqariladi; texnik
-// limit esa tayyor gapni o'rtasida uzmasligi kerak.
-// 1024 juda erkin edi — javoblar cho'zilib, keraksiz "yana savolingiz bo'lsa ayting" bilan tugardi.
+// In Realtime, the output token budget covers text and audio together. Live
+// telemetry showed even 7-13 word answers being cut by a 160-token
+// `max_output_tokens`. Brevity is enforced by the prompt/policy; the technical
+// limit must never cut a finished sentence in half.
+// 1024 was too loose: answers dragged on and ended with filler like "let me know if you have more questions".
 const REALTIME_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_MAX_RESPONSE_TOKENS'), 10) || 500;
-// Realtime audio tokenlari matn tokenlaridan ancha tez sarflanadi. 40 token
-// hatto "Hozir soat 20:20" kabi qisqa tasdiqni ham o'rtasida kesib qo'ydi.
-// Fast-action javobi qisqa bo'lsa-da, audio to'liq ijro etilishi uchun alohida
-// xavfsiz limit ishlatiladi.
+// Realtime audio tokens are consumed much faster than text tokens. 40 tokens
+// cut even a short confirmation like "It is 20:20 now" in half. Fast-action
+// replies are short, but use a separate safe limit so their audio plays in full.
 const REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS = parseInt(env('REALTIME_FAST_ACTION_MAX_RESPONSE_TOKENS'), 10) || 256;
-// Realtime audio chunklari tarmoqda notekis kelishi mumkin. Audio darhol
-// ijro qilinsa sox pipe vaqti-vaqti bilan och qolib, gap o'rtasida jimlik
-// paydo qiladi. Kichik boshlang'ich zaxira bu jitter'ni yutadi.
+// Realtime audio chunks can arrive unevenly over the network. Playing audio
+// immediately starves the sox pipe now and then, leaving silence mid-sentence.
+// A small initial buffer absorbs that jitter.
 const PLAYBACK_PREBUFFER_MS = Math.max(0, parseInt(env('REALTIME_PLAYBACK_PREBUFFER_MS', '40'), 10) || 0);
 const PLAYBACK_MAX_WAIT_MS = Math.max(0, parseInt(env('REALTIME_PLAYBACK_MAX_WAIT_MS', '80'), 10) || 0);
 const DUPLEX_ECHO_THRESHOLD = parseFloat(env('DUPLEX_ECHO_THRESHOLD')) || 0.72;
 const DUPLEX_BARGE_IN_RMS = resolveBargeInResidual(ENV_VALUES, AUDIO_CALIBRATION, 900);
 const DUPLEX_NOISE_FLOOR = resolveCalibratedNumber('DUPLEX_NOISE_FLOOR', ENV_VALUES, AUDIO_CALIBRATION, 80);
 const DUPLEX_NOISE_MULTIPLIER = resolveCalibratedNumber('DUPLEX_NOISE_MULTIPLIER', ENV_VALUES, AUDIO_CALIBRATION, 2.4);
-// Past Mac mikrofon signali uchun local duplex engine yuborayotgan nutqni
-// kuchaytiradi. Echo/noise qarori xom signalda qoladi, shuning uchun preamp
-// Jarvisning o'z ovozini barge-in deb noto'g'ri qabul qilishini oshirmaydi.
+// Boosts the speech the local duplex engine sends when the Mac microphone is
+// quiet. Echo/noise decisions stay on the raw signal, so the preamp does not make
+// JARVIS more likely to mistake its own voice for a barge-in.
 const REALTIME_INPUT_GAIN = Math.max(1, Math.min(8, resolveCalibratedNumber('REALTIME_INPUT_GAIN', ENV_VALUES, AUDIO_CALIBRATION, 3)));
-// Lokal gate server VAD so'ragan jimlikdan oldin audio yuborishni to'xtatsa,
-// provider speech_stopped chiqarmaydi va turn idle timeoutgacha ochiq qoladi.
-// Media VAD oynasi ustiga bitta daemon audio step (150 ms) qo'shamiz. Oddiy
-// dialog esa o'zining qisqaroq hangover'idan foydalanadi; aks holda 900 ms
-// local gate 300 ms server VAD optimizatsiyasini samarasiz qilib qo'yardi.
+// If the local gate stops sending audio before the silence the server VAD waits
+// for, the provider never emits speech_stopped and the turn stays open until the
+// idle timeout. Add one daemon audio step (150 ms) on top of the media VAD window.
+// Normal dialogue uses its own shorter hangover; otherwise a 900 ms local gate
+// would cancel out the 300 ms server VAD optimisation.
 const NORMAL_DUPLEX_HANGOVER_MS = Math.max(
   parseInt(env('REALTIME_NORMAL_DUPLEX_HANGOVER_MS'), 10) || 330,
   NORMAL_VAD_SILENCE_MS + 150
@@ -190,15 +183,15 @@ const DUPLEX_MAX_ECHO_LAG_MS = resolveCalibratedNumber('DUPLEX_MAX_ECHO_LAG_MS',
 // locally until near-end speech remains continuous for this long, then replay
 // the complete candidate to server VAD so the user's first syllable is kept.
 const BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_BARGE_IN_CONFIRM_MS'), 10) || 420;
-// Tabiiy nutq boshidagi undosh yoki juda qisqa pauza energiyani vaqtincha
-// pasaytirishi mumkin. Candidate'ni kichik oynada saqlaymiz; uzoq uzilish esa
-// alohida echo/shovqin bo'lishi mumkinligi uchun uni reset qiladi.
+// A consonant or a very short pause at the start of natural speech can briefly
+// lower the energy. Keep the candidate in a small window; a long gap resets it
+// because it is likely separate echo or noise.
 const BARGE_IN_MAX_GAP_MS = parseInt(env('REALTIME_BARGE_IN_MAX_GAP_MS'), 10) || 80;
 
-const IN_RATE = 16000;   // jarvis_daemon.js mikrofon oqimi shu tezlikda
-const OUT_RATE = 24000;  // Realtime API kutgan/qaytaradigan tezlik
+const IN_RATE = 16000;   // rate of the jarvis_daemon.js microphone stream
+const OUT_RATE = 24000;  // rate the Realtime API expects and returns
 
-// ── 16kHz → 24kHz oddiy chiziqli interpolyatsiya (real-vaqtli, sox spawn qilmasdan) ──
+// ── 16 kHz → 24 kHz linear interpolation (real time, without spawning sox) ──
 function resample16to24(pcm16) {
   const inSamples = pcm16.length / 2;
   const outSamples = Math.floor(inSamples * OUT_RATE / IN_RATE);
@@ -218,8 +211,8 @@ function resample16to24(pcm16) {
 
 function buildSessionUpdate(provider, options) {
   // Allow session-level tuning via env vars so behavior can match Playground
-  // Server o'zi javobni kesmasin: xona aks-sadosi server VAD'dan o'tsa javob o'rtada uzilardi (logda 20% turn_detected).
-  // Haqiqiy barge-in'ni mahalliy exo-filtr (duplex) tasdiqlaydi.
+  // Never let the server cut a reply itself: room echo passing server VAD used to cut answers mid-way (20% turn_detected in logs).
+  // Real barge-in is confirmed by the local echo filter (duplex).
   const SESSION_INTERRUPT = (env('AZURE_VOICELIVE_INTERRUPT_RESPONSE') || 'false') === 'true';
 
   const speculative = Boolean(options.speculative) && provider.id === 'voice-live' && !options.startMediaAware;
@@ -231,8 +224,8 @@ function buildSessionUpdate(provider, options) {
     ...(TRANSCRIPTION_LANGUAGE ? { language: TRANSCRIPTION_LANGUAGE } : {})
   };
   const common = {
-    // Uslub ko'rsatmasi sessiyaga doim qo'shiladi: response.create'dagi `instructions` sessiya ko'rsatmalarini
-    // (xarakter, imkoniyatlar, tool qoidalari) shu javob uchun ALMASHTIRIB yuboradi.
+    // Always append the style guide to the session: `instructions` in response.create REPLACES the session
+    // instructions (character, capabilities, tool rules) for that one response.
     instructions: options.instructions + '\n\n' + CONVERSATION_STYLE_INSTRUCTIONS,
     tools: options.tools,
     tool_choice: 'auto'
@@ -271,8 +264,8 @@ function buildSessionUpdate(provider, options) {
       max_response_output_tokens: REALTIME_MAX_RESPONSE_TOKENS,
       turn_detection: turnDetection,
       input_audio_transcription: transcription,
-      // Azure playgrounddagi kabi: server exo bostirish va chuqur shovqin filtri —
-      // JARVIS o'z ovozini eshitib o'zini bo'lib qo'ymasligi uchun.
+      // As in the Azure playground: server echo cancellation and deep noise suppression,
+      // so JARVIS does not hear its own voice and interrupt itself.
       ...(provider.id === 'voice-live' ? {
         input_audio_echo_cancellation: { type: 'server_echo_cancellation' },
         input_audio_noise_reduction: { type: 'azure_deep_noise_suppression' }
@@ -281,10 +274,10 @@ function buildSessionUpdate(provider, options) {
   };
 }
 
-// Suhbat BOSHLANISHIDAN oldin, foydalanuvchi so'nggi soatlarda nima qilgani
-// haqidagi qisqa xulosa. Avval har bir suhbat "bo'sh sahifadan" boshlanardi —
-// foydalanuvchi "o'sha ishni davom ettir" desa, Jarvis nima haqida ketayotganini
-// bilmasdan qayta so'rashi kerak edi. Endi u allaqachon xabardor holda ochiladi.
+// A short summary of what the user did in the last few hours, injected BEFORE the
+// conversation starts. Previously every conversation began from a blank page: when
+// the user said "continue that", JARVIS had to ask what they meant. Now it starts
+// already informed.
 const RECENT_CONTEXT_HOURS = parseFloat(env('RECENT_CONTEXT_HOURS')) || 2;
 const RECENT_CONTEXT_MAX_BLOCKS = 8;
 
@@ -293,8 +286,8 @@ function recentContextBlock() {
     const mem = require('../memory');
     const now = new Date();
     const items = [];
-    // Kun almashgan payt (masalan 00:15) kechagi faylda hali yangi yozuvlar
-    // bo'lishi mumkin — shuning uchun ikkala kun ham ko'riladi.
+    // Right after midnight (e.g. 00:15) yesterday's file may still hold recent
+    // entries, so both days are read.
     for (let dayBack = 0; dayBack <= 1; dayBack++) {
       const d = new Date(now); d.setDate(d.getDate() - dayBack);
       const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'), da = String(d.getDate()).padStart(2, '0');
@@ -313,21 +306,21 @@ function recentContextBlock() {
     }
     if (!items.length) return '';
     items.sort((a, b) => a.t - b.t);
-    return "\n\nSO'NGGI FAOLIYAT (foydalanuvchi shu yaqin soatlarda nima qilgani — siz buni ALLAQACHON " +
-      "bilasiz, qayta so'ramang; \"o'shani davom ettir\", \"o'sha ish\" desa, shu ro'yxatdan tushuning):\n" +
+    return "\n\nRECENT ACTIVITY (what the user did in the last few hours; you ALREADY " +
+      "know this, do not ask again; when they say \"continue that\" or \"that task\", resolve it from this list):\n" +
       items.slice(-RECENT_CONTEXT_MAX_BLOCKS).map(i => '- ' + i.line).join('\n') + '\n\n';
   } catch (e) { return ''; }
 }
 
-// FOYDALANUVCHI PROFILI (Jarvis/Profile/User.md) — daily-synthesis har kuni
-// yangi sana-bo'limi qo'shib boradi (birlashtirmaydi), shuning uchun fayl
-// vaqt o'tishi bilan cheksiz o'sadi. Avval bu profil jonli ovozli suhbatga
-// UMUMAN kirmasdi (haqiqiy topilma) — Jarvis foydalanuvchi haqida o'zi
-// o'rgangan hech narsani suhbatda ishlatmasdi. Endi qo'lda kiritilgan
-// "Odatlar" bo'limi (barqaror) + eng so'nggi bir nechta avtomatik
-// o'rganilgan-naqshlar bo'limi (chegaralangan hajmda) qo'shiladi.
-// Avvalgi (3 bo'lim / 2000 belgi) haqiqiy profilning katta qismini (masalan 14 KB) yashirardi —
-// shuning uchun model faqat recall_memory chaqirilganda "bilardi". Endi ancha ko'proq avtomatik ko'rinadi.
+// USER PROFILE (Jarvis/Profile/User.md). daily-synthesis appends a new dated
+// section every day (it does not merge), so the file grows without bound. This
+// profile used to be absent from live voice conversations entirely (a real
+// finding), so JARVIS never used anything it had learned about the user. Now the
+// hand-written "Habits" section (stable) plus the most recent automatically
+// learned-pattern sections (size-capped) are included. The previous cap
+// (3 sections / 2000 chars) hid most of a real profile (e.g. 14 KB), so the
+// model only "knew" it after calling recall_memory; now much more is visible
+// automatically.
 const PROFILE_SUMMARY_MAX_SECTIONS = parseInt(env('PROFILE_SUMMARY_MAX_SECTIONS'), 10) || 10;
 const PROFILE_SUMMARY_MAX_CHARS = parseInt(env('PROFILE_SUMMARY_MAX_CHARS'), 10) || 6000;
 
@@ -342,135 +335,14 @@ function profileSummaryBlock() {
     const recent = sections.filter(isDailyPattern).slice(-PROFILE_SUMMARY_MAX_SECTIONS);
     const combined = [...stable, ...recent].map(s => '## ' + s.trim()).join('\n\n').slice(0, PROFILE_SUMMARY_MAX_CHARS);
     if (!combined) return '';
-    return "\n\nFOYDALANUVCHI PROFILI (vaqt o'tishi bilan o'rganilgan odatlar/naqshlar — bu haqiqiy, " +
-      "tekshirilgan ma'lumot; foydalaning, lekin \"profilimda yozilishicha\" kabi meta-izoh bermang):\n" +
+    return "\n\nUSER PROFILE (habits and patterns learned over time; this is real, " +
+      "verified information; use it, but do not add meta-comments like \"according to my profile\"):\n" +
       combined + '\n\n';
   } catch (e) { return ''; }
 }
 
-// SOUL.md ning FAQAT ovozli suhbatga taalluqli bo'limlari. Qolganlari
-// (xotira yozish qoidalari, ekran kuzatuv, brauzer/skill ishlatish,
-// kunlik vazifalar) — `run_task` ichidagi TO'LIQ AGENTNING ishi, ovozli
-// model ularni umuman bajarmaydi. To'liq fayl ~2800 token bo'lib, butun
-// yo'riqnomaning 69% ini egallardi va har bir javobda qayta qayta ishlanardi.
-const SOUL_VOICE_SECTIONS = ['Klondek harakat qilish', 'Chegaralar', 'Uslub', 'Asl Maqsad'];
-const SOUL_FULL_FOR_VOICE = (env('SOUL_FULL_FOR_VOICE') || 'false') === 'true'; // A/B sinov uchun
-let SOUL_FOR_VOICE = '';
-
-function loadSoulForVoice() {
-  const raw = SOUL_FOR_VOICE;
-  if (!raw) return '';
-  if (SOUL_FULL_FOR_VOICE) return raw;
-  const out = [];
-  // Sarlavhagacha bo'lgan kirish qismi (Jarvis kimligi) — qisqa, saqlanadi
-  const firstHeading = raw.indexOf('\n## ');
-  if (firstHeading > 0) out.push(raw.slice(0, firstHeading).trim());
-  for (const part of raw.split(/^## /m).slice(1)) {
-    const title = part.split('\n', 1)[0].trim();
-    if (SOUL_VOICE_SECTIONS.some(s => title.startsWith(s))) out.push('## ' + part.trim());
-  }
-  return out.join('\n\n');
-}
-fs.promises.readFile(path.join(PROJECT_DIR, 'SOUL.md'), 'utf8').then(raw => { SOUL_FOR_VOICE = raw; }).catch(() => {});
-
-function loadLegacyInstructions() {
-  const soul = loadSoulForVoice();
-  const voiceStyle = '';
-  const pronunciationBlock = '';
-  return (
-      "You are Jarvis, the user's English-speaking realtime voice assistant. Interpret all incoming speech as English and always reply in English. " +
-      "Be natural, calm, precise, and conversational. Speak at a measured, slightly slower-than-default pace with varied cadence and natural pauses. Usually answer in one short sentence; use two short sentences only when needed. " +
-      "Never add greetings, preambles, status narration, markdown, or unsolicited suggestions. Do not say 'certainly', 'let me', or 'one moment' before acting. " +
-      "VOICE CHARACTER: use an original cinematic machine-intelligence persona: deep, controlled, resonant, subtly metallic, authoritative but warm. " +
-      "Keep the register low and full, with crisp consonants, measured rhythm, restrained emotion, and a subtle synthetic edge. Do not imitate any real actor or copyrighted character. " +
-      "NEVER PLAY DUMB: you have a rich remembered history and profile about this user (injected above, or reachable via recall_memory). Before saying 'I don't know', 'I don't have that information', or answering generically about something that touches the user's own life, work, projects, people or past — silently call recall_memory first and answer from what it returns. Only say you truly don't know after that search comes up empty. " +
-      "ACT, NEVER ADVISE: you control this computer directly through your tools. If the user asks you to do something you have a tool for (open/close an app, play something, search, move a file, run a task), DO IT immediately — never describe manual steps, never say you cannot do it on 'this device' or 'this OS', and never give generic instructions instead of acting. Only explain manual steps if no tool covers it after you actually tried. " +
-      "NEVER REPORT UNFINISHED WORK AS DONE: say a task is done, opened, sent or finished ONLY after its tool result confirms it. While a background task is still running, say it is still running. " +
-      "NEVER HAND WORK BACK: do not tell the user to press, open, click or type something themselves. If a task really failed, say in one short sentence what blocked it and retry or try another route. " +
-      "UNCLEAR SPEECH: if the words look garbled, half-heard or make no sense, say only 'Say again?' — never guess, never start a task or mission from it. " +
-      "TOOLS: use fast_action for a supported one-step computer action; use close_app to quit any named app; use web_open for playing/searching/opening a site; use file_op for file moves/writes/deletes; use run_task for browser interaction, coding, forms, or any multi-step task; " +
-      "use see_screen when the user asks about what is visible; use recall_memory whenever a question touches the user's own life, work, projects, people or past and you do not already have the answer above — never guess and never say you don't know without checking first; use ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). " +
-      "Call fast tools silently and speak only their result. A run_task may receive one brief acknowledgement, then report the actual result when available. " +
-      "MEMORY: treat the recent activity and user profile below as facts you already remember. Use them naturally without saying that you read a memory file. " +
-    "o'zing to'g'ridan-to'g'ri javob ber.\n\n" +
-    "MUHIM — ko'p vazifali (multi-tasking) ishlash: har bir `run_task` chaqiruvi MUSTAQIL, alohida ishchi sifatida " +
-    "fon rejimida ishlaydi va boshqa vazifalarga XALAQIT BERMAYDI. Shuning uchun: agar bitta vazifa (masalan brauzer/ekran " +
-    "bilan ishlash) davom etayotgan bo'lsa-yu, foydalanuvchi BOSHQA, mustaqil vazifa so'rasa — birinchisi tugashini KUTMASDAN " +
-    "darhol ikkinchi `run_task`'ni ham chaqir. Har biri qachon tugasa, o'sha payt natijasini alohida aytib ber. Faqat ikkinchi " +
-    "vazifa BIRINCHISIGA bevosita bog'liq bo'lsa (masalan 'o'sha oynada davom et') — o'shanda birinchisi tugashini kutish kerak. " +
-    "Agar foydalanuvchi BITTA GAPDA ikki yoki undan ko'p mustaqil ish aytsa (masalan 'emailni tekshir, kalendarni ko'r va " +
-    "hisobot tayyorla'), ularni bitta ulkan descriptionga birlashtirma: HAR MUSTAQIL ISH UCHUN alohida `run_task`ni " +
-    "darhol chaqir. Chaqiruvlarni ketma-ket kutma — tool calllarni bir javobning o'zida yubor, ishchilar parallel ishlasin.\n\n" +
-    "MUHIM — ORTIQCHA GAPIRMASLIK: siz juda ko'p, keraksiz, takrorlanuvchi gap aytib yuborishga moyilsiz — bu qat'iyan man etiladi. " +
-    "Qoidalar: (1) Bir xil fikrni (\"hammasi joyida\", \"davom eting\", \"yordam kerak bo'lsa ayting\") ketma-ket ikkinchi marta " +
-    "TAKRORLAMANG — buni faqat bir marta ayting, keyin jim turing. (2) Har javob oxirida \"agar boshqa narsa kerak bo'lsa ayting\" " +
-    "kabi odatiy jumla QO'SHMANG — foydalanuvchi buni allaqachon biladi. (3) Foydalanuvchi hech narsa demasa yoki noaniq/tushunarsiz " +
-    "tovush eshitilsa (masalan fon shovqini) — O'ZINGIZDAN gapirmang, hech qanday javob yaratmang, jim kuting. (4) Vazifa " +
-    "bajarilgach faqat NATIJANI 1 gapda ayting (masalan \"Chrome ochildi.\") — jarayon haqida hikoya qilmang, \"hozir " +
-    "tekshiryapman\", \"jarayon davom etyapti\" kabi status-yangilanishlarni faqat foydalanuvchi ANIQ so'rasa ayting. " +
-    "(5) ENG MUHIMI — foydalanuvchi sizga shunchaki qisqa tasdiq/aks-sado bersa (\"ha\", \"xo'p\", \"to'g'ri\", \"tushunarli\", " +
-    "\"a\", \"mm\", yoki hatto tovush aniq eshitilmasa) — SIZ ALLAQACHON AYTGAN gapni QAYTA AYTMANG. Bunday holatda faqat " +
-    "juda qisqa (1-2 so'z: \"xo'p\", \"ha\", yoki hech narsa) javob bering yoki umuman javob bermang — YANGI ma'lumot yo'q " +
-    "bo'lsa gapirishning hojati yo'q. NOTO'G'RI MISOL (buni HECH QACHON qilmang): foydalanuvchi \"soat nechchi\" deb so'raydi, " +
-    "siz \"Hozir soat 13:07\" deysiz, foydalanuvchi \"ha\" yoki aniqsiz tovush chiqaradi, va siz yana \"Ha, to'g'ri, hozir " +
-    "soat 13:07\" deb TAKRORLAYSIZ — bu 3-4 marta ketma-ket takrorlanib, judayam yomon eshitiladi. TO'G'RI: bunday holatda " +
-    "sukut saqlang yoki faqat \"xo'p\" deng, raqamni qayta aytmang. " +
-    "Maqsad: kino JARVIS kabi — lo'nda, aniq, keraksiz so'zsiz.\n\n" +
-    (EXPERT_ROUTING === 'always' ? (
-    "MUHIM — JIDDIY SAVOLGA O'ZINGIZ JAVOB BERMANG: siz ovoz uchun optimallashtirilgan modelsiz — qisqa " +
-    "suhbatda tez va tabiiysiz, lekin ko'p bosqichli FIKRLASHDA sekin va suvli bo'lib qolasiz (real o'lchov: " +
-    "bir xil rejalashtirish savoliga siz 15.7 soniya sarfladingiz, `ask_expert` esa 3.5 soniyada aniqroq javob " +
-    "berdi). Shuning uchun QUYIDAGI hollarda HAR DOIM `ask_expert` chaqiring, o'zingiz javob berishga URINMANG:\n" +
-    "  • tahlil, sabab-oqibat (\"nega bunday bo'lyapti\", \"sabab nima\")\n" +
-    "  • maslahat (\"nima qilsam\", \"qanday yaxshilayman\", \"nimani o'zgartiray\")\n" +
-    "  • taqqoslash (\"qaysi biri afzal\", \"farqi nima\")\n" +
-    "  • rejalashtirish, vaqt/tartib hisobi (\"ulguraman-mi\", \"qanday tartibda\")\n" +
-    "  • hisob-kitob, mantiqiy masala, ko'p shartli vaziyat\n" +
-    "  • biror mavzuni tushuntirish (\"bu nima\", \"qanday ishlaydi\")\n" +
-    "O'ZINGIZ javob beradigan holatlar FAQAT shular: salomlashish, qisqa suhbat, hazil, tasdiq (\"xo'p\", \"ha\"), " +
-    "va allaqachon bilgan qisqa fakt (soat nechchi — buni fast_action beradi). Ikkilansangiz — `ask_expert` " +
-    "chaqiring, bu deyarli har doim to'g'ri qaror. Javob qaytgach uni qayta yozmang, tabiiy ohangda o'qib bering.\n\n"
-    ) : (
-    "ANSWER DIRECTLY AND FAST: you are a realtime voice model — for conversation, explanations, opinions, comparisons, advice, \"why\"/\"how\" questions, and everyday reasoning, answer yourself immediately in a few natural sentences, exactly like a quick, knowledgeable person. Never make the user wait for a normal question. Call `ask_expert` ONLY when the user explicitly asks for deep, careful, or long analysis (for example \"think this through\", \"analyze in depth\", \"make a detailed plan\", \"do a full comparison\"); it takes many seconds, so never use it for ordinary questions.\n\n"
-    )) +
-    "MUHIM — FUNKSIYA CHAQIRISHDAN OLDIN JIM BO'LING: `see_screen`, `recall_memory`, `fast_action` kabi TEZ " +
-    "funksiyalarni chaqirayotganda, oldindan \"hozir qarayman\", \"bir oz eslab ko'ray\", \"hozir izlab ko'raman\", " +
-    "\"bir zum\" kabi HECH QANDAY oraliq gap AYTMANG. Bu funksiyalar bir-ikki soniyada tugaydi — oraliq gap esa " +
-    "butun boshqa javob navbatini band qilib, foydalanuvchini QO'SHIMCHA 4-5 soniya bekorga kutdiradi va " +
-    "sekinroq taassurot qoldiradi. To'g'ri yo'l: jim chaqiring, natija kelgach faqat ASL javobning o'zini " +
-    "ayting. Faqat `run_task` (uzoq, bir necha daqiqalik ish) chaqirilganda qisqa ogohlantirish o'rinli.\n\n" +
-    "MUHIM — TUSHUNISH ANIQLIGI: og'zaki o'zbek tilida rus va ingliz tillaridan olingan so'zlar juda ko'p " +
-    "ishlatiladi (masalan \"kompyuter\", \"telefon\", \"internet\", \"pochta\" yoki hatto alohida rus so'zlari) — " +
-    "bu tabiiy holat, XATOLIK EMAS. Bunday so'zlarni eshitganda chalkashib qolmang, gapni boshqa til deb " +
-    "hisoblamang va HECH QACHON shu sabab bilan javob tilini o'zgartirmang. Aksent yoki talaffuz sabab biror " +
-    "so'z noaniq eshitilsa, gapning umumiy MA'NOSI va KONTEKSTIDAN (oldingi suhbat, joriy vazifa) foydalanib " +
-    "eng ehtimoliy to'g'ri ma'noni tanlang — so'zma-so'z, harfma-harf tushunishga urinmang. Foydalanuvchi " +
-    "chindan gapirdi-yu, lekin nima deganini tushunolmasangiz (fon shovqini emas, balki tushunarsiz gap) — " +
-    "taxmin qilib noto'g'ri amal bajarishdan ko'ra, qisqa qilib qayta so'rang (masalan \"Kechirasiz, aniqroq " +
-    "ayting\").\n\n" +
-    "MUHIM — OVOZ OHANGINI SEZISH: siz foydalanuvchining xom ovozini (matn emas) eshitasiz — shundan uning kayfiyati, " +
-    "shoshilinchligi va charchoqligini his qiling va shunga moslashing: (1) Ovozi tez, keskin yoki xafa bo'lsa — darhol " +
-    "eng qisqa, aniq javob bering, hazil/ortiqcha so'z ishlatmang, tezda yordam bering. (2) Charchagan/xotirjam ovozda " +
-    "gapirsa — yumshoqroq, ammo baribir chaqqon ohangda javob bering. (3) Xursand/hazil ohangda gapirsa — siz ham biroz erkinroq, " +
-    "iliqroq javob berishingiz mumkin. (4) HECH QACHON \"ovozingiz charchagandek eshitilyapti\" kabi buni ochiqchasiga " +
-    "aytmang yoki sharh bermang — faqat o'z javobingiz ohangi va uslubi bilan moslashing, sezilmasdan.\n\n" +
-    (voiceStyle ? voiceStyle + '\n\n' : '') +
-    pronunciationBlock +
-    recentContextBlock() +
-    profileSummaryBlock() +
-    // Eslatma: avval bu yerda soul.slice(0, 1500) edi — SOUL.md 10.3KB,
-    // eng muhim XARAKTER/USLUB bo'limi esa faylning OXIRIDA (~10100-belgida)
-    // joylashgan bo'lib chiqdi. Natijada u HECH QACHON real ovozli suhbatga
-    // yetib bormagan (haqiqiy topilma, real belgi-hisobi bilan tasdiqlangan)
-    // — bu "kino JARVIS kabi hissiyot yo'q" shikoyatining asosiy sababi
-    // bo'lgan bo'lishi mumkin. To'liq fayl (~2500 token) bemalol context
-    // doirasiga sig'adi, shuning uchun kesish olib tashlandi.
-    "To'liq shaxsiyat qoidalari:\n" + soul
-  );
-}
-
-// Sessiya boshida ochiq missiyalar haqida qisqa xabardorlik ("ko'prik" ikki tomonni ham ko'rib turadi).
-// Jonli o'z-o'zini bilish: haqiqiy mavjud asboblar/ishchilardan yig'iladi (eskirmaydi).
+// Brief awareness of open missions at session start (the bridge sees both sides).
+// Live self-knowledge, built from the tools and workers that actually exist (never stale).
 function selfKnowledgeBlock() {
   try {
     const tools = buildTools().map(t => t.name);
@@ -560,10 +432,9 @@ function prepareSpokenAnswer(answer) {
   return String(answer || '').trim();
 }
 
-// Tools har bir ulanishda YANGIDAN quriladi (statik emas) — shunda
-// fast-actions ro'yxatiga yangi o'rganilgan yozuvlar qo'shilsa (qarang:
-// skills/fast-actions), keyingi suhbat ularni DARHOL ko'radi, daemon'ni
-// qayta ishga tushirish shart emas.
+// Tools are rebuilt on every connection (not static), so newly learned entries in
+// the fast-actions list (see skills/fast-actions) are visible to the very next
+// conversation without restarting the daemon.
 function buildTools() {
   let fastActionIds = [];
   let fastActionsDoc = '';
@@ -577,74 +448,73 @@ function buildTools() {
   const tools = [{
     type: 'function',
     name: 'run_task',
-    description: "Kompyuterda MURAKKAB, ko'p bosqichli amal bajarish kerak bo'lganda (brauzerda kezish/bosish/forma " +
-      "to'ldirish, ekranni ko'rib tahlil qilish, fayl/kod bilan ishlash, eslab qolish/eslab olish, vazifalar ro'yxati, " +
-      "internetdan qidirish, telefon bilan bog'liq amallar, va h.k.) shuni chaqir. Telefonda biror narsa qilish so'ralsa (WhatsApp'da xabar, Instagram, ilova ochish, telefon ekranidagi biror narsa) — bu ham `run_task` orqali, u bog'langan iPhone'ni haqiqatan boshqara oladi, hech qachon 'buni qila olmayman' demang. " +
-      "Oddiy, bir qadamlik amal (dastur ochish, sayt ochish, ovoz, " +
-      "skrinshot, vaqt/sana/batareya so'rash) uchun BUNI EMAS, `fast_action`ni ishlating — u ANCHA TEZROQ. " +
-      "To'liq imkoniyatli yordamchi vazifani MUSTAQIL, fon rejimida bajaradi (boshqa vazifalarni to'xtatmaydi) va tugagach " +
-      "natijani matn sifatida qaytaradi. Bir nechta mustaqil vazifa uchun bir nechta marta chaqirishingiz mumkin — ular " +
-      "parallel bajariladi.",
+    description: "Call this when the computer needs a COMPLEX, multi-step action (browsing, clicking, filling forms, " +
+      "analysing the screen, working with files or code, remembering/recalling, the task list, " +
+      "searching the web, phone-related actions, etc.). Phone requests (a WhatsApp message, Instagram, opening an app, something on the phone screen) also go through `run_task`: it really controls the paired iPhone, so never say you cannot do it. " +
+      "For a simple one-step action (open an app or a site, volume, " +
+      "screenshot, time/date/battery) use `fast_action` INSTEAD; it is MUCH FASTER. " +
+      "A fully capable assistant runs the task INDEPENDENTLY in the background (without blocking other tasks) and returns " +
+      "the result as text when done. Call it several times for several independent tasks; they " +
+      "run in parallel.",
     parameters: {
       type: 'object',
-      properties: { description: { type: 'string', description: "Bajarilishi kerak bo'lgan aniq vazifa, foydalanuvchi so'zlari bilan" } },
+      properties: { description: { type: 'string', description: "The exact task to perform, in the user's own words" } },
       required: ['description']
     }
   }, {
     type: 'function',
     name: 'note_pronunciation',
-    description: "Foydalanuvchi sizni noto'g'ri tushunganingiz uchun to'g'rilasa (masalan \"yo'q, men ... dedim\", " +
-      "\"men ... demadim, ... dedim\", yoki shunga o'xshash tuzatish) — DARHOL shuni chaqiring, hech narsa demasdan " +
-      "javob qaytarmang (bu foydalanuvchiga eshitilmaydi, faqat xotiraga yoziladi). Shu bilan xuddi shu so'z keyingi " +
-      "safar yana adashib eshitilmaydi.",
+    description: "When the user corrects a misunderstanding (e.g. \"no, I said ...\", " +
+      "\"I didn't say ..., I said ...\", or a similar correction), call this IMMEDIATELY without saying anything " +
+      "(the call is silent and only writes to memory). It keeps the same word from being " +
+      "misheard again next time.",
     parameters: {
       type: 'object',
       properties: {
-        misheard: { type: 'string', description: "Siz avval noto'g'ri tushungan/eshitgan so'z yoki ibora" },
-        actual: { type: 'string', description: "Foydalanuvchi aslida nima degani (to'g'rilagandan keyin)" }
+        misheard: { type: 'string', description: 'The word or phrase you misheard or misunderstood' },
+        actual: { type: 'string', description: 'What the user actually said (after the correction)' }
       },
       required: ['misheard', 'actual']
     }
   }];
 
-  // Jonli suhbatda EKRANNI KO'RISH — rasm to'g'ridan-to'g'ri shu suhbatga
-  // qo'shiladi (real endpoint sinovidan o'tkazilgan: gpt-realtime-2.1 rasmni
-  // qabul qiladi va aniq tasvirlaydi). Avval buning yagona yo'li `run_task`
-  // orqali alohida vision-modelga yuborish edi — 15-20 soniya; bu esa ~1
-  // soniya, va model javob berayotgan paytda ekranni "ko'rib turadi".
+  // SEEING THE SCREEN during a live conversation: the image is added straight to this
+  // conversation (tested against the real endpoint: gpt-realtime-2.1 accepts images and
+  // describes them accurately). Previously the only way was `run_task` and a separate
+  // vision model, 15-20 seconds; this takes ~1 second and the model "sees" the screen
+  // while it answers.
   tools.push({
     type: 'function',
     name: 'see_screen',
-    description: "Ekranda hozir nima borligini KO'RISH kerak bo'lganda shuni chaqiring — rasm to'g'ridan-to'g'ri " +
-      "sizga ko'rsatiladi va uni o'zingiz tahlil qilasiz. Qachon: foydalanuvchi \"bu nima\", \"shu xato nima\", " +
-      "\"what is that\", \"what's this\", \"ekranimda nima ko'rinyapti\", \"buni o'qib ber\", \"shu yerda nima yozilgan\" kabi KO'RISHGA oid narsa " +
-      "so'raganda, yoki uning gapini tushunish uchun ekran konteksti kerak bo'lganda. Bu `run_task`dan ANCHA " +
-      "TEZROQ — ekranni ko'rish uchun HECH QACHON run_task ishlatmang, doim shuni ishlating. Eslatma: bu faqat " +
-      "KO'RADI, hech narsani bosmaydi/o'zgartirmaydi — ekranda biror amal bajarish kerak bo'lsa `run_task` kerak. " +
-      "MUHIM: chaqirishdan oldin \"hozir qarayman\", \"bir zum ko'ray\" kabi HECH NARSA AYTMANG — jim chaqiring va " +
-      "rasmni ko'rgach TO'G'RIDAN-TO'G'RI javobning o'zini ayting. Rasm dalilisiz obyekt nomini taxmin qilmang; background audio yoki matn parchasidan xulosa chiqarmang. Bu oraliq gap ortiqcha bir necha soniya " +
-      "kechikish qo'shadi va foydalanuvchini bekorga kutdiradi.",
+    description: "Call this when you need to SEE what is on screen right now; the image is shown " +
+      "to you directly and you analyse it yourself. When: the user asks something visual such as \"bu nima\", \"shu xato nima\", " +
+      "\"what is that\", \"what's this\", \"what's on my screen\", \"read this to me\", \"what does it say here\", " +
+      "or when screen context is needed to understand them. This is MUCH FASTER than `run_task`; " +
+      "NEVER use run_task just to look at the screen. Note: this only " +
+      "LOOKS; it never clicks or changes anything. To act on the screen you need `run_task`. " +
+      "IMPORTANT: say NOTHING before calling it (no \"let me look\", \"one moment\"); call it silently and, " +
+      "once you have seen the image, give the answer DIRECTLY. Do not guess object names without image evidence; never infer from background audio or a text fragment. Such filler adds several seconds of " +
+      "delay and keeps the user waiting for nothing.",
     parameters: { type: 'object', properties: {}, required: [] }
   });
 
-  // BUTUN TARIX bo'yicha ma'no (semantik) izlash. Instructionsdagi
-  // "so'nggi faoliyat" bloki faqat oxirgi bir necha soatni qamraydi —
-  // u "hozir nima qilayotgan eding" uchun. Bu tool esa vaqt chegarasiz:
-  // kecha, bir hafta, bir yil oldin bo'lganini ham topa oladi, va so'zlar
-  // aynan mos kelmasa ham ma'noga qarab qidiradi.
+  // Semantic search over the ENTIRE history. The "recent activity" block in the
+  // instructions only covers the last few hours ("what were you just doing"). This
+  // tool has no time limit: it finds things from yesterday, last week or last year,
+  // and matches by meaning even when the words differ.
   tools.push({
     type: 'function',
     name: 'recall_memory',
     description: "Search the user's full remembered history and profile — call this WHENEVER a question is about the user's own life, work, projects, people, preferences, or past, and the answer is not already visible in the context above. " +
       "This covers explicit references (\"o'sha loyiha\", \"avval nima degandik\", \"eslaysanmi\") AND plain factual questions about the user (\"what am I working on\", \"what's my email\", \"do you know my resume\", \"who is X to me\") — do not wait for the user to say \"remember\" or \"search your memory\"; call it yourself. " +
       "Searches by MEANING across the entire history (yesterday or a year ago), matches even when wording differs. Fast (~1s) — call it without hesitating rather than guessing or saying you don't know. " +
-      "Not needed for the last few hours of activity — that is already in the \"so'nggi faoliyat\" list above. " +
-      "MUHIM: chaqirishdan oldin \"hozir eslab ko'ray\", \"bir oz o'ylab ko'ray\" kabi HECH NARSA AYTMANG — " +
-      "jim chaqiring va natijani ko'rgach TO'G'RIDAN-TO'G'RI javobning o'zini ayting. Eslab aytganda, qachon " +
-      "bo'lganini ham qisqa qo'shing (masalan \"o'tgan seshanba\", \"13-avgustda\") — bu ishonchni oshiradi.",
+      "Not needed for the last few hours of activity — that is already in the \"RECENT ACTIVITY\" list above. " +
+      "IMPORTANT: say NOTHING before calling it (no \"let me remember\", \"let me think\"); " +
+      "call it silently and, once you see the result, give the answer DIRECTLY. When recalling something, " +
+      "briefly mention when it happened (e.g. \"last Tuesday\", \"on August 13\"); it builds trust.",
     parameters: {
       type: 'object',
-      properties: { query: { type: 'string', description: "Nimani eslash kerakligi — mavzu/nom/savol, foydalanuvchi so'zlari bilan" } },
+      properties: { query: { type: 'string', description: "What to recall: a topic, name or question, in the user's own words" } },
       required: ['query']
     }
   });
@@ -665,49 +535,48 @@ function buildTools() {
     }
   });
 
-  // Kunlik vazifalar (Obsidian DailyTasks.md) bilan tez ishlash
+  // Fast access to the daily task list (Obsidian DailyTasks.md)
   tools.push({
     type: 'function',
     name: 'manage_tasks',
-    description: "Foydalanuvchining Obsidian Vault'dagi kunlik vazifalar ro'yxati (DailyTasks.md) bilan tez ishlash (<50ms). " +
-      "Qachon: foydalanuvchi bugungi vazifalarni so'raganda (action: 'list'), yangi vazifa qo'shishni so'raganda (action: 'add', text: '...'), " +
-      "vazifani bajarildi deb belgilaganda (action: 'complete', text: '...'), yoki o'chirganda (action: 'remove', text: '...'). " +
-      "Vazifalar uchun HECH QACHON run_task ishlatmang — to'g'ridan-to'g'ri manage_tasks chaqiring.",
+    description: "Fast access (<50 ms) to the user's daily task list in the Obsidian vault (DailyTasks.md). " +
+      "When: the user asks for today's tasks (action: 'list'), wants to add a task (action: 'add', text: '...'), " +
+      "marks a task done (action: 'complete', text: '...'), or removes one (action: 'remove', text: '...'). " +
+      "NEVER use run_task for tasks; call manage_tasks directly.",
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'add', 'complete', 'remove'], description: 'Amal turi' },
-        text: { type: 'string', description: 'Vazifa matni (add, complete, remove uchun)' }
+        text: { type: 'string', description: 'Task text (for add, complete, remove)' }
       },
       required: ['action']
     }
   });
 
-  // JIDDIY SAVOLLARNI KUCHLI MODELGA yo'naltirish. Siz (realtime model)
-  // ovoz uchun optimallashtirilgansiz — qisqa suhbatda tez va tabiiysiz,
-  // lekin ko'p bosqichli fikrlashda sekin va suvli bo'lib qolasiz.
-  // Murakkab reasoning savolini realtime audio modelida qoldirmaymiz: primary
-  // Responses API modeli bu turdagi vazifalar uchun aniqroq optimallashtirilgan.
+  // Route SERIOUS QUESTIONS TO A STRONGER MODEL. The realtime model is optimised for
+  // voice: fast and natural in short conversation, but slow and wordy in multi-step
+  // reasoning. Complex reasoning therefore does not stay in the realtime audio model;
+  // the primary Responses API model is better optimised for it.
   tools.push({
     type: 'function',
     name: 'ask_expert',
     description: EXPERT_ROUTING === 'always'
-      ? "Foydalanuvchi CHINDAN FIKRLASH talab qiladigan savol bersa — tahlil, maslahat, taqqoslash, " +
-        "rejalashtirish, sabab-oqibat, hisob-kitob — shuni chaqiring. Savolni TO'LIQ, kerakli kontekst bilan bering. " +
-        "Javob qaytgach, uni deyarli o'zgartirmasdan, tabiiy ohangda o'qib bering. Oddiy suhbat uchun kerak emas. " +
-        "Chaqirishdan oldin hech narsa demang."
+      ? "Call this when the user asks something that GENUINELY needs thinking: analysis, advice, comparison, " +
+        "planning, cause and effect, calculation. Pass the FULL question with the needed context. " +
+        "When the answer returns, read it back almost unchanged, in a natural tone. Not needed for ordinary conversation. " +
+        "Say nothing before calling it."
       : "SLOW (many seconds). Call ONLY when the user explicitly asks for deep, careful or long analysis, a detailed plan, " +
         "or a full comparison. NEVER call it for ordinary conversation, explanations, opinions, advice, or quick reasoning — " +
         "answer those yourself right away. Give the FULL question with all needed context (the expert cannot see the conversation). " +
         "Read the result back naturally without rewriting it.",
     parameters: {
       type: 'object',
-      properties: { question: { type: 'string', description: "To'liq savol + barcha kerakli kontekst (ekspert suhbatni ko'rmaydi)" } },
+      properties: { question: { type: 'string', description: 'The full question plus all needed context (the expert cannot see the conversation)' } },
       required: ['question']
     }
   });
 
-  // Uzoq muddatli, maqsadga yo'naltirilgan avtonom missiyalar (soatlab/kunlab): ovozli suhbatni bloklamaydi.
+  // Long-running, goal-driven autonomous missions (hours or days); they never block the voice conversation.
   tools.push({
     type: 'function',
     name: 'start_mission',
@@ -772,9 +641,9 @@ function buildTools() {
     type: 'function',
     name: 'cancel_task',
     description: "ONLY for quick run_task jobs running right now (\"stop that task\"). If the user means a background mission or long goal, call mission_control instead. " +
-      "Foydalanuvchi bajarilayotgan vazifani TO'XTATISHNI so'rasa (\"to'xtat\", \"bekor qil\", \"kerak emas\", " +
-      "\"qo'y\", \"shart emas endi\") — darhol shuni chaqiring. Hozir ishlayotgan barcha `run_task` vazifalari to'xtatiladi. " +
-      "Hech qanday vazifa ishlamayotgan bo'lsa ham chaqirsa bo'ladi — shunchaki to'xtatadigan narsa yo'qligini qaytaradi.",
+      "When the user asks to STOP the task in progress (\"stop\", \"cancel\", \"never mind\", \"to'xtat\", \"bekor qil\", " +
+      "\"kerak emas\"), call this immediately. Every running `run_task` task is stopped. " +
+      "It is fine to call it when nothing is running; it just reports that there was nothing to stop.",
     parameters: { type: 'object', properties: {}, required: [] }
   });
 
@@ -826,20 +695,19 @@ function buildTools() {
     tools.push({
       type: 'function',
       name: 'fast_action',
-      // Eslatma: avval bu yerda barcha 115 ta action "id — izoh" ko'rinishida
-      // sanab chiqilardi, ustiga yana AYNAN o'sha id'lar quyidagi enum'da
-      // takrorlanardi — ya'ni ro'yxat ikki marta yuborilib, har javobda
-      // bekorga ~1500 token qayta ishlanardi. id'larning o'zi tushunarli
-      // ("open:chrome", "volume:up", "info:battery"), shuning uchun enum
-      // yetarli; bu yerda faqat qanday turlari borligi qisqa aytiladi.
-      description: "TEZ, ODDIY, bir qadamlik amallar uchun — dastur ochish (open:*), sayt ochish (web:*), " +
-        "ovoz balandligi (volume:*), tizim amallari (system:*), ekran surati (screenshot:*), " +
-        "Music/Spotify boshqarish (media:*), ma'lumot so'rash — vaqt/sana/batareya/Wi-Fi/disk (info:*). " +
-        "`run_task`dan ANCHA TEZROQ ishlaydi (to'liq agent ishga tushirilmaydi) — mos action topilsa, " +
-        "har doim buni run_task'dan USTUN qo'ying. Aniq ro'yxat quyidagi `id` maydonining enum'ida.",
+      // The full list of all 115 actions used to be spelled out here as "id — note",
+      // and the very same ids were repeated in the enum below, so the list was sent
+      // twice and ~1500 tokens were reprocessed on every answer. The ids are
+      // self-explanatory ("open:chrome", "volume:up", "info:battery"), so the enum is
+      // enough; this description only names the kinds of actions.
+      description: "For FAST, SIMPLE one-step actions: opening apps (open:*), opening sites (web:*), " +
+        "volume (volume:*), system actions (system:*), screenshots (screenshot:*), " +
+        "Music/Spotify control (media:*), and info queries: time/date/battery/Wi-Fi/disk (info:*). " +
+        "Much FASTER than `run_task` (no full agent is started); whenever a matching action exists, " +
+        "ALWAYS prefer it over run_task. The exact list is in the enum of the `id` field below.",
       parameters: {
         type: 'object',
-        properties: { id: { type: 'string', ...(fastActionIds.length ? { enum: fastActionIds } : {}), description: "Bajarilishi kerak bo'lgan action id'si (ro'yxatdan)" } },
+        properties: { id: { type: 'string', ...(fastActionIds.length ? { enum: fastActionIds } : {}), description: 'Action id to run (from the list)' } },
         required: ['id']
       }
     });
@@ -850,22 +718,19 @@ function buildTools() {
 
 const RUN_TASK_TIMEOUT_MS = OPENCLAW_AGENT_TIMEOUT_MS;
 
-// Har bir chaqiruv o'ziga xos, izolyatsiyalangan session'da ishlaydi — shu
-// bilan bir nechta vazifa CHINDAN parallel, bir-birining kontekstini
-// buzmasdan bajarilishi mumkin (bitta umumiy session'ni ishlatishsa,
-// bir vaqtda ikkita jarayon uni yozsa, bir-birining natijasini
-// buzib qo'yishi mumkin edi).
-// onProc — ishga tushgan jarayonni chaqiruvchiga qaytaradi, shunda uni
-// keyinroq to'xtatish (foydalanuvchi "to'xtat" desa) yoki suhbat tugaganda
-// tozalash mumkin bo'ladi.
+// Each call runs in its own isolated session, so several tasks can truly run in
+// parallel without corrupting each other's context (with one shared session,
+// two processes writing at once could clobber each other's results).
+// onProc hands the started process back to the caller so it can be stopped
+// later (when the user says "stop") or cleaned up when the conversation ends.
 function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onProgress, bridge = VOICE_AGENT_BRIDGE) {
   if (bridge !== VOICE_AGENT_BRIDGE || spawnAgent !== spawn) {
     return new Promise((resolve) => {
       const proc = spawnAgent('openclaw', ['agent', '--session-key', sessionKey, '--message', '[Language policy: Reply only in natural English. Never answer in Uzbek or imitate an Uzbek accent.]\n' + agentPolicyPreamble() + '\n\n' + description, '--agent', 'main', ...fastThinkingArgs(description)], { cwd: PROJECT_DIR, env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY'), JARVIS_PROJECT_DIR: PROJECT_DIR }, timeout: RUN_TASK_TIMEOUT_MS });
       if (typeof onProc === 'function') onProc(proc);
       let out = ''; proc.stdout.on('data', d => out += d);
-      proc.on('close', () => resolve(out.trim() || 'Kechirasiz, bajara olmadim.'));
-      proc.on('error', () => resolve('Xatolik yuz berdi.'));
+      proc.on('close', () => resolve(out.trim() || "Sorry, I couldn't do that."));
+      proc.on('error', () => resolve('An error occurred.'));
     });
   }
   return bridge.askAgent(description, sessionKey, { source: 'voice-run-task', persistent: needsPersistentExecution(description), onProgress, onLongRunning: onProgress });
@@ -898,39 +763,39 @@ function runFullAgent(description, sessionKey, onProc, spawnAgent = spawn, onPro
     proc.on('close', (code, signal) => {
       clearTimeout(noticeTimer);
       const clean = out.split('\n').filter(l => !l.includes('Waiting') && !l.includes('◒') && l.trim()).join('\n').trim();
-      // Foydalanuvchi o'zi to'xtatgan bo'lsa — bu xato emas, ataylab qilingan.
+      // The user stopped it on purpose; that is not an error.
       if (proc._jarvisCancelled) {
         task.status = 'cancelled'; task.finishedAt = new Date().toISOString(); TASK_CHECKPOINTS.save(task);
-        resolve('Vazifa to\'xtatildi.'); return;
+        resolve('Task stopped.'); return;
       }
-      // Vaqt chegarasi: jarayon SIGTERM bilan o'ldirilgan. Bu holda yig'ilgan
-      // matn CHALA — avval u to'liq natija sifatida qaytarilardi, ya'ni
-      // yarim bajarilgan ish "bajarildi" deb ko'rsatilardi.
+      // Timeout: the process was killed with SIGTERM, so the collected text is
+      // PARTIAL. It used to be returned as the full result, which reported
+      // half-finished work as "done".
       if (signal === 'SIGTERM' && proc.killed) {
         task.status = 'partial'; task.finishedAt = new Date().toISOString(); task.result = clean.slice(0, 12000); TASK_CHECKPOINTS.save(task);
         const mins = Math.round(RUN_TASK_TIMEOUT_MS / 60000);
         resolve(clean
-          ? 'Vazifa ' + mins + ' daqiqada tugamadi, to\'xtatildi. Shu yergacha bajarildi: ' + clean
-          : 'Vazifa ' + mins + ' daqiqada tugamadi va to\'xtatildi — natija olinmadi.');
+          ? 'The task did not finish within ' + mins + ' minutes and was stopped. Completed so far: ' + clean
+          : 'The task did not finish within ' + mins + ' minutes and was stopped; no result was produced.');
         return;
       }
       task.status = code === 0 && clean ? 'completed' : 'failed';
       task.finishedAt = new Date().toISOString();
       task.result = clean.slice(0, 12000);
       TASK_CHECKPOINTS.save(task);
-      resolve(clean || "Kechirasiz, bajara olmadim.");
+      resolve(clean || "Sorry, I couldn't do that.");
     });
     proc.on('error', () => {
       clearTimeout(noticeTimer);
       task.status = 'failed'; task.finishedAt = new Date().toISOString(); task.error = 'OpenClaw spawn failed'; TASK_CHECKPOINTS.save(task);
-      resolve("Xatolik yuz berdi.");
+      resolve('An error occurred.');
     });
   });
   /* c8 ignore stop */
 }
 
-// Faqat fikrlash/tahlil uchun kuchli agent. Kompyuterda amal bajarmaydi;
-// alohida session ishlatgani uchun jonli suhbat kontekstini ifloslantirmaydi.
+// Strong agent used only for thinking/analysis. It takes no action on the computer
+// and uses its own session, so it never pollutes the live conversation context.
 function askExpert(question, callId, grounding = '') {
   return new Promise((resolve) => {
     const prompt = "Answer the following question in concise, natural spoken English. Avoid preambles, summaries, and repetition. " +
@@ -955,10 +820,10 @@ function askExpert(question, callId, grounding = '') {
   });
 }
 
-// Oddiy salomlashish, vaqt yoki bir qadamlik desktop amali Realtime'da tez
-// qoladi. O'tmish, loyiha, ekran, sabab/reja/tahlil talab qiladigan savollar
-// esa deterministik RAG yo'liga o'tadi — model tool chaqirishni "xohlashi"ga
-// bog'liq emas.
+// Greetings, the time or a one-step desktop action stay on the fast Realtime path.
+// Questions about the past, projects, the screen, or that need reasons/plans/analysis
+// take the deterministic RAG path instead, independent of whether the model "feels like"
+// calling a tool.
 function needsContextGrounding(text) {
   const value = String(text || '').toLowerCase();
   const action = /\b(open|close|click|type|write|send|launch|search|play|stop|pause|resume|och|yop|bos|yoz|yubor|o'chir|ochir|ishga tushir|qidir|qo'y|qo‘y|to'xtat|toxtat)\b/i.test(value);
@@ -975,10 +840,10 @@ function needsGroundedAnswer(text) {
   return needsContextGrounding(text) || needsExpertAnswer(text);
 }
 
-// Mulohaza, taxmin yoki maslahat so'rash ("I think I should...", "maybe", "what if") buyruq emas — vazifa ishga tushmasin.
+// Musing, guessing or asking for advice ("I think I should...", "maybe", "what if") is not a command; do not start a task.
 const HEDGED_UTTERANCE = /^(?:(?:well|so|hmm+|um+|uh+|okay|ok)[,.]?\s+)*(?:i\s+(?:think|guess|suppose|wonder|feel like|might|may|could|should|would|was thinking|am thinking|'m thinking|'m not sure|don'?t know)|i'm\s+(?:thinking|not sure|wondering)|maybe|perhaps|what if|should i|do you think|would it be|it might be|it would be|just thinking)\b/i;
 
-// Tasdiq so'rovi NIMA tasdiqlanayotganini aytadi (foydalanuvchi aynan shuni tasdiqlaydi).
+// The confirmation prompt states WHAT is being confirmed (the user confirms exactly that).
 function confirmationPrompt(description, assessment = {}) {
   const what = String(description || '').replace(/\s+/g, ' ').trim().slice(0, 110).replace(/[.!?\s]+$/, '');
   const lead = assessment.destructive ? 'That is destructive or hard to undo'
@@ -987,7 +852,7 @@ function confirmationPrompt(description, assessment = {}) {
   return `${lead}: ${what}. Say confirm to proceed, or cancel.`;
 }
 
-// Uzoq muddatli maqsadlar ("...tugaguncha", "hours", "end to end") tez fon-agent yo'liga emas, modelga (start_mission) boradi.
+// Long-horizon goals ("...until it's done", "hours", "end to end") go to the model (start_mission), not the quick background-agent path.
 const LONG_HORIZON = /\b(?:until (?:it(?:'s| is)?|you|the)|keep (?:working|going|trying|at it)|don'?t stop|for (?:hours|days)|overnight|all day|as long as it takes|end[- ]to[- ]end|from scratch|whole (?:project|system|thing)|tugaguncha|to['‘’]?xtamasdan|soatlab|kunlab|maqsadga yetguncha|butun loyiha)\b/i;
 
 function needsBackgroundAgentTask(text) {
@@ -1008,9 +873,9 @@ function needsBackgroundAgentTask(text) {
   return action && work;
 }
 
-// Action agentining capability rad javobi bajarilgan/tekshirilgan natija emas.
-// Bunday matnni Realtime'ga qayta o'qitish aynan foydalanuvchi eshitmasligi
-// kerak bo'lgan "I can't; do it manually" javobini yana ovozga chiqaradi.
+// A capability refusal from the action agent is not a completed or verified result.
+// Reading it back through Realtime would speak exactly the "I can't; do it manually"
+// answer the user must never hear.
 function isUnverifiedAgentResult(text) {
   const value = String(text || '').trim();
   if (!value) return true;
@@ -1019,10 +884,10 @@ function isUnverifiedAgentResult(text) {
     || /^(?:error|failed)\b/i.test(value);
 }
 
-// Eng ko'p ishlatiladigan, xavfsiz va bitta ma'noli desktop buyruqlarni
-// Realtime model tool tanlashini kutmasdan bajarish uchun konservativ router.
-// Ataylab "yop", "o'chir", fayl yuborish/yozish kabi kontekst yoki zararli
-// ta'sir ehtimoli bor amallar bu yerga kiritilmaydi — ular agentda qoladi.
+// Conservative router that runs the most common safe, unambiguous desktop commands
+// without waiting for the Realtime model to pick a tool. Commands with context or
+// potential for harm ("close", "delete", sending or writing files) are deliberately
+// excluded and stay with the agent.
 const DIRECT_APP_ALIASES = {
   safari: 'open:safari', chrome: 'open:chrome', xrom: 'open:chrome', telegram: 'open:telegram',
   spotify: 'open:spotify', vscode: 'open:vscode', 'vs code': 'open:vscode', cursor: 'open:cursor',
@@ -1135,7 +1000,7 @@ async function collectGrounding(query, options = {}) {
     const screen = require('../screen-monitor').loadState();
     if (screen.lastSummary) {
       const ageMinutes = screen.lastTrigger ? Math.max(0, Math.round((Date.now() - screen.lastTrigger) / 60000)) : null;
-      blocks.push('ENG SO\'NGGI EKRAN KUZATUVI' + (ageMinutes === null ? '' : ' (' + ageMinutes + ' daqiqa oldin)') + ':\n' +
+      blocks.push('LATEST SCREEN OBSERVATION' + (ageMinutes === null ? '' : ' (' + ageMinutes + ' minutes ago)') + ':\n' +
         String(screen.lastSummary).replace(/\s+/g, ' ').slice(0, 2400));
     }
   } catch (e) {}
@@ -1150,7 +1015,7 @@ async function collectGrounding(query, options = {}) {
   if (profileIntent) {
     try {
       const profile = String(memory.readProfile() || '').trim();
-      if (profile) memoryBlocks.push('FOYDALANUVCHI PROFILI:\n' + profile.replace(/\s+/g, ' ').slice(0, 2400));
+      if (profile) memoryBlocks.push('USER PROFILE:\n' + profile.replace(/\s+/g, ' ').slice(0, 2400));
     } catch (e) {}
   }
   try {
@@ -1178,15 +1043,15 @@ async function collectGrounding(query, options = {}) {
         }
         if (found.length >= 6) break;
       }
-      if (found.length) memoryBlocks.push('LOKAL QIDIRUVDAN MOS YOZUVLAR:\n' + found.map(item => {
+      if (found.length) memoryBlocks.push('MATCHING ENTRIES FROM LOCAL SEARCH:\n' + found.map(item => {
         if (item.matches) return '[' + (item.date || item.file) + '] ' + item.matches.map(match => match.text).join(' | ');
         return '[' + (item.layer || 'xotira') + '] ' + (item.title || '') + ': ' + String(item.content || '').slice(0, 650);
       }).join('\n---\n'));
     } catch (e) {}
   }
-  blocks.push('OBSIDIAN XOTIRASI HOLATI:\n' + (memoryBlocks.length
-    ? 'Qidiruv muvaffaqiyatli bajarildi. Quyidagi yozuvlardan foydalaning:\n' + memoryBlocks.join('\n\n')
-    : 'Qidiruv bajarildi, lekin savolga mos yozuv topilmadi. Xotira ishlamadi demang; mos yozuv topilmaganini ayting.'));
+  blocks.push('OBSIDIAN MEMORY STATUS:\n' + (memoryBlocks.length
+    ? 'Search completed successfully. Use the entries below:\n' + memoryBlocks.join('\n\n')
+    : 'Search completed, but no entry matches the question. Do not say memory is unavailable; say no matching entry was found.'));
   return blocks.join('\n\n').slice(0, 7500);
 }
 
@@ -1242,11 +1107,10 @@ class RealtimeSession extends EventEmitter {
     this._providerIndex = -1;
     this._connecting = false;
     this._mediaModeActive = false;
-    // Fn hands-free suhbatining o'zi foydalanuvchining aynan Jarvisga
-    // murojaatini butun sessiya uchun tasdiqlaydi. Media ijro etilayotgan
-    // bo'lsa ham follow-up turnlarga til-marker talab qilmaymiz; echo/noise/ack
-    // filtrlari esa hamon qo'llanadi. Wake-word trigger esa avvalgidek faqat
-    // birinchi mazmunli turn uchun bir martalik bypass oladi.
+    // An Fn hands-free conversation by itself confirms the user is addressing
+    // JARVIS for the whole session. Follow-up turns need no language marker even
+    // while media is playing; echo/noise/ack filters still apply. A wake-word
+    // trigger, as before, only grants a one-time bypass for the first meaningful turn.
     this._explicitUserSession = Boolean(options.explicitUserSession);
     this._explicitUserTurnPending = Boolean(options.explicitUserTrigger);
     this._addressedWakePending = Boolean(options.addressedWakeTrigger);
@@ -1304,10 +1168,10 @@ class RealtimeSession extends EventEmitter {
     });
     this._realtimeResponseActive = false;
     this._recentConversation = [];
-    // Hozir ishlayotgan run_task jarayonlari (call_id -> {proc, description}).
-    // Ikki narsa uchun kerak: (1) foydalanuvchi "to'xtat" desa o'chirish,
-    // (2) suhbat tugaganda qolib ketgan jarayonlarni tozalash — avval ular
-    // suhbat yopilgandan keyin ham fonda ishlashda davom etardi.
+    // run_task processes currently running (call_id -> {proc, description}).
+    // Needed for two things: (1) stopping them when the user says "stop", and
+    // (2) cleaning up leftovers when the conversation ends; they used to keep
+    // running in the background after the conversation closed.
     this._runningTasks = new Map();
     this.duplex = new DuplexVoiceEngine({
       sampleRate: OUT_RATE, echoThreshold: DUPLEX_ECHO_THRESHOLD,
@@ -1318,7 +1182,7 @@ class RealtimeSession extends EventEmitter {
     });
   }
 
-  // Ishlayotgan vazifalarni to'xtatadi. Nechtasi to'xtatilganini qaytaradi.
+  // Stops running tasks and returns how many were stopped.
   cancelRunningTasks() {
     let n = 0;
     for (const [, t] of this._runningTasks) {
@@ -1331,7 +1195,7 @@ class RealtimeSession extends EventEmitter {
 
   connect() {
     if (!VOICE_PROVIDERS.length) {
-      this.emit('error', new Error('AZURE_VOICELIVE_* yoki AZURE_REALTIME_* provider sozlanmagan'));
+      this.emit('error', new Error('No realtime voice provider configured (GEMINI_API_KEY, AZURE_VOICELIVE_* or AZURE_REALTIME_*)'));
       return;
     }
     this._startPlayback();
@@ -1342,7 +1206,7 @@ class RealtimeSession extends EventEmitter {
     const provider = VOICE_PROVIDERS[index];
     if (!provider || this.closed) {
       this._connecting = false;
-      this.emit('error', new Error('Barcha realtime voice providerlari ishlamadi'));
+      this.emit('error', new Error('All realtime voice providers failed'));
       return;
     }
     this._providerIndex = index;
@@ -1353,15 +1217,15 @@ class RealtimeSession extends EventEmitter {
       : new WebSocketClient(provider.url, { headers: provider.headers, handshakeTimeout: 10000 });
     this.ws = socket;
 
-    // Oldingi (endi tugagan) suhbatda video/musiqa ishga tushirilgan bo'lsa
-    // va hali eskirmagan bo'lsa, YANGI suhbat ham boshidanoq yuqori
-    // chegara bilan boshlanadi — pastki izohga qarang (MEDIA_STATE_FILE).
+    // If the previous (now finished) conversation started video or music that is
+    // not stale yet, the NEW conversation also starts with the higher threshold;
+    // see the note on MEDIA_STATE_FILE.
     const startMediaAware = this._mediaModeActive;
     isMediaRecentlyLikelyPlaying().then(playing => {
       if (playing === true && !this.closed) this._setMediaLikelyPlaying();
     }).catch(() => {});
-    // Fayl holati eskirishi yoki foydalanuvchi videoni o'zi ochishi mumkin.
-    // Tizim signalini parallel tekshiramiz; ulanishni kutdirib qo'ymaymiz.
+    // The file state can be stale, or the user may have opened a video themselves.
+    // Check the system signal in parallel without delaying the connection.
     checkSystemAudioPlaying().then(playing => {
       if (playing === true && !this.closed) this._setMediaLikelyPlaying();
     }).catch(() => {});
@@ -1379,18 +1243,17 @@ class RealtimeSession extends EventEmitter {
     this.ws.addEventListener('message', (ev) => this._onMessage(ev));
     this.ws.addEventListener('error', (ev) => {
       if (this.ws !== socket) return;
-      // Node'ning ErrorEvent'ida .message/.error xususiyatlari ko'pincha
-      // enumerable emas — JSON.stringify(ev) shunchaki "{}" berardi, hech
-      // narsa ko'rsatmasdan. Xususiyatlarga to'g'ridan-to'g'ri murojaat
-      // qilamiz.
-      const reason = ev?.error?.message || ev?.message || ev?.error?.code || ev?.type || 'noma\'lum (ws close race bo\'lishi mumkin)';
+      // Node's ErrorEvent .message/.error properties are often non-enumerable, so
+      // JSON.stringify(ev) just produced "{}" and showed nothing. Read the
+      // properties directly.
+      const reason = ev?.error?.message || ev?.message || ev?.error?.code || ev?.type || 'unknown (possibly a ws close race)';
       if (!this.ready && index + 1 < VOICE_PROVIDERS.length) {
         this.emit('telemetry', 'provider.fallback', { from: provider.id, to: VOICE_PROVIDERS[index + 1].id, reason });
         try { this.ws.close(); } catch (_) {}
         this._connectProvider(index + 1);
         return;
       }
-      this.emit('error', new Error(provider.id + ' WebSocket xatolik: ' + reason));
+      this.emit('error', new Error(provider.id + ' WebSocket error: ' + reason));
     });
     this.ws.addEventListener('close', () => {
       if (this.ws !== socket) return;
@@ -1420,19 +1283,19 @@ class RealtimeSession extends EventEmitter {
         }
         break;
       case 'input_audio_buffer.speech_started':
-        // Serverga avtomatik interrupt qilishga ruxsat berilmaydi: xona aks-
-        // sadosi server VAD'dan o'tib qolsa, tayyor javob o'rtasida kesilmasin.
-        // Faqat lokal duplex gate yaqinda yetarlicha kuchli, echo'dan qolgan
-        // residual emas deb tasdiqlagan audio bo'lsa qo'lda barge-in qilamiz.
+        // The server is never allowed to interrupt on its own: if room echo passes
+        // server VAD, a finished answer must not be cut mid-way. Barge in manually
+        // only when the local duplex gate recently confirmed audio strong enough
+        // not to be echo residue.
         const confirmedBargeIn = this.assistantSpeaking &&
           Date.now() - this._bargeInEvidenceAt <= 1200;
         if (confirmedBargeIn && !this._responseInterrupted && !this._duck) {
           this._beginDuck();
           this.emit('telemetry', 'barge_in.confirmed', {});
         } else if (confirmedBargeIn) {
-          // Lokal duplex gate playback'ni allaqachon kesgan. Provider VAD
-          // lifecycle eventini qabul qilamiz, ammo response.cancel/flush'ni
-          // takrorlab yangi playback jarayoni bilan poyga yaratmaymiz.
+          // The local duplex gate already cut playback. Accept the provider VAD
+          // lifecycle event, but do not repeat response.cancel/flush and race a
+          // new playback process.
           this.emit('telemetry', 'barge_in.provider_acknowledged', {});
         } else if (this.assistantSpeaking) {
           this.emit('telemetry', 'barge_in.ignored', { reason: 'no-local-speech-evidence' });
@@ -1463,12 +1326,11 @@ class RealtimeSession extends EventEmitter {
             text: msg.transcript || '',
             itemId: msg.item_id || msg.item?.id || ''
           };
-          // Native transkript o'zi YETARLICHA aniq bo'lsa yoki konservativ
-          // local fast-action matcher uni bitta ma'noli buyruq deb topsa,
-          // authoritative Azure STT tugashini kutmasdan darhol boshlaymiz.
-          // Ikkinchi shart "Safari och"/"soat nechchi" kabi tabiiy 2-token
-          // o'zbekcha buyruqlarga mo'ljallangan: erkin qisqa gaplar undan
-          // o'tmaydi va avvalgidek uz-UZ STT'ni kutadi.
+          // Start immediately, without waiting for the authoritative Azure STT, when the
+          // native transcript is accurate ENOUGH or the conservative local fast-action
+          // matcher finds one unambiguous command.
+          // The second condition targets natural two-token Uzbek commands such as "Safari och" or
+          // "soat nechchi"; free-form short phrases do not pass it and still wait for uz-UZ STT.
           const nativeFastAction = matchDirectFastAction(pending.native.text);
           if (!pending.settled && !pending.requireAuthoritative && (nativeIsConfident(pending.native.text) || nativeFastAction)) {
             pending.settled = true;
@@ -1514,7 +1376,7 @@ class RealtimeSession extends EventEmitter {
       case 'response.audio.delta':
       case 'response.output_audio.delta':
         if (this._suppressCurrentResponse) break;
-        // Barge-in bilan bekor qilingan javobning kechikib kelgan audio bo'laklari gapirish holatini qayta yoqmasin.
+        // Late audio chunks of a reply cancelled by barge-in must not re-enable the speaking state.
         if (this._dropStaleAudio) break;
         if (this._spec?.state === 'held') { this._spec.held.push(msg.delta); break; }
         if (!this._firstAudioObserved) {
@@ -1529,9 +1391,9 @@ class RealtimeSession extends EventEmitter {
         this._pendingFnArgs[msg.call_id] = (this._pendingFnArgs[msg.call_id] || '') + (msg.delta || '');
         break;
       case 'response.function_call_arguments.done':
-        // Ayrim Realtime versiyalarida `done` eventida to'liq arguments
-        // kelmaydi, faqat oldingi delta'lar keladi. Yig'ilgan nusxani
-        // fallback sifatida biriktirmasak tool bo'sh parametr bilan ishlaydi.
+        // Some Realtime versions send no full `arguments` in the `done` event, only
+        // the earlier deltas. Without attaching the accumulated copy as a fallback,
+        // the tool would run with empty parameters.
         if (!msg.arguments && this._pendingFnArgs[msg.call_id]) {
           msg.arguments = this._pendingFnArgs[msg.call_id];
         }
@@ -1544,19 +1406,18 @@ class RealtimeSession extends EventEmitter {
         const responseStatus = msg.response?.status || 'unknown';
         const responseReason = msg.response?.status_details?.reason || '';
         const interrupted = this._responseInterrupted === true;
-        // Qisqa javob prebuffer chegarasiga yetmagan bo'lsa, server oqimni
-        // tugatishi bilan qolgan PCM'ni darhol karnayga chiqaramiz.
+        // If a short reply never reached the prebuffer threshold, flush the remaining
+        // PCM to the speaker as soon as the server ends the stream.
         this.playbackBuffer?.finish();
-        // Keyingi response ham o'zining jitter zaxirasini yangidan yig'ishi
-        // kerak. Bu sox ichiga allaqachon yozilgan joriy audioga tegmaydi.
+        // The next response must build its own jitter buffer again. This does not
+        // touch audio already written into sox.
         this.playbackBuffer?.reset();
         this.assistantSpeaking = false;
         this._syncAutoResponse();
         this._resetBargeInCandidate();
-        // response.done server yuborishni tugatganini anglatadi, karnay esa
-        // navbatdagi PCM'ni hali ijro etayotgan bo'lishi mumkin. feedAudio()
-        // _playbackUntil'ni ham tekshiradi; shu sabab Jarvis o'z ovozining
-        // qolgan qismini foydalanuvchi deb qayta eshitmaydi.
+        // response.done means the server finished sending; the speaker may still be
+        // playing queued PCM. feedAudio() also checks _playbackUntil, so JARVIS does
+        // not hear the rest of its own voice as the user.
         this._speakEndedAt = Math.max(Date.now(), this._playbackUntil);
         this.emit('telemetry', 'response.done', {
           status: responseStatus,
@@ -1583,9 +1444,9 @@ class RealtimeSession extends EventEmitter {
         this._suppressCurrentResponse = false;
         this._realtimeResponseActive = false;
         this._onSpeculativeResponseDone();
-        // Barge-in paytida cancelled response.done yangi speech turni ochib
-        // bo'lgandan keyin kelishi mumkin. Statussiz event daemon'da o'sha
-        // yangi turnni yolg'on completed qilib qo'yar edi.
+        // During barge-in, a cancelled response.done can arrive after the new speech
+        // turn has opened. A status-less event would falsely mark that new turn
+        // completed in the daemon.
         this.emit('turn_done', { status: responseStatus, reason: responseReason, interrupted });
         this._deliverReadyBackgroundResearch();
         this._deliverReadyBackgroundWork();
@@ -1605,10 +1466,9 @@ class RealtimeSession extends EventEmitter {
           try { failedSocket.close(); } catch (_) {}
           break;
         }
-        // Bular haqiqiy xatolik emas — javob aynan tugab qolgan payt bekor
-        // qilishga urinish yoki ikkita response bir vaqtda so'ralishi kabi
-        // tabiiy poyga holatlari (Realtime API'ning o'zi shunday ishlaydi).
-        // Konsolni chalg'itmasdan jim o'tkazib yuboriladi.
+        // These are not real errors: cancelling exactly as a reply finishes, or two
+        // responses requested at once, are natural races in the Realtime API.
+        // They are skipped silently to keep the console clean.
         const benign = /no active response|already has an active response|already active|already cancelled|cannot cancel/i.test(errMsg);
         if (!benign) this.emit('error', new Error(errMsg));
         break;
@@ -1648,8 +1508,8 @@ class RealtimeSession extends EventEmitter {
         return false;
       }
     }
-    // Doim eshitib turish: suhbat oynasidan tashqarida faqat "Jarvis" deb boshlangan/tugagan gap qabul qilinadi.
-    // Qolgan xona gaplari jimgina tashlanadi va serverdagi suhbat kontekstidan ham o'chiriladi (maxfiylik).
+    // Always-listening: outside the conversation window only speech that starts or ends with "Jarvis" is accepted.
+    // Other room talk is silently dropped and also deleted from the server-side conversation context (privacy).
     if (this._wakeRequired && !this._explicitUserSession && !this._conversationContext.isActive()) {
       const addressed = require('../../core/wake-word-policy').extractAddressedCommand(this.userTranscript);
       if (!addressed) {
@@ -1683,7 +1543,7 @@ class RealtimeSession extends EventEmitter {
       else this._deliverSpokenAnswer('Cancelled.');
       return true;
     }
-    // "Boldi", "kerak emas", "aha okay okay", "stop": JARVIS gapirayotgan bo'lsa — to'xtab, yana tinglaydi (javob yo'q).
+    // "Boldi", "kerak emas", "aha okay okay", "stop": if JARVIS is speaking, stop and listen again (no reply).
     if (this._isSpeakingNow() && isStopIntent(this.userTranscript)) {
       this._stopSpeakingByUser('stop-command');
       this.emit('turn_suppressed', 'stop-command', this.userTranscript);
@@ -1698,12 +1558,12 @@ class RealtimeSession extends EventEmitter {
     });
     if (!policy.accept) {
       this.emit('turn_suppressed', policy.reason, this.userTranscript);
-      // Aks-sado yoki mazmunsiz gap sabab to'xtatilgan bo'lsa — JARVIS javobini davom ettiradi.
+      // If it was paused by echo or a meaningless utterance, JARVIS resumes its reply.
       if (this._duck) this._resumeBargeIn(policy.reason);
       const speculativeInFlight = Boolean(this._spec && ['expected', 'held'].includes(this._spec.state));
       this._discardSpeculative();
-      // Rad etilgan turn (aks-sado/shovqin) JARVISning hozir aytayotgan haqiqiy javobini bekor qilmasin
-      // va playbackni uzmasin — aynan shu titrash va gap o'rtasida uzilishni keltirib chiqargan.
+      // A rejected turn (echo/noise) must not cancel the real answer JARVIS is speaking
+      // or cut playback; exactly that caused stuttering and mid-sentence cuts.
       if (!speculativeInFlight && !this.assistantSpeaking) {
         try { this.ws.send(JSON.stringify({ type: 'response.cancel' })); } catch (e) {}
         this._flushPlayback();
@@ -1712,7 +1572,7 @@ class RealtimeSession extends EventEmitter {
       return false;
     }
 
-    // Haqiqiy foydalanuvchi gapi — to'xtatilgan javobni endi to'liq bekor qilamiz.
+    // Genuine user speech: now cancel the paused reply completely.
     if (this._duck) this._commitBargeIn('accepted');
     this._explicitUserTurnPending = false;
     this._firstTextObserved = false;
@@ -1743,9 +1603,9 @@ class RealtimeSession extends EventEmitter {
 
     this.emit('user_transcript', this.userTranscript);
     this._rememberConversationTurn('User', this.userTranscript);
-    // Har qanday yangi qabul qilingan turn avvalgi, hali fonda tayyorlanayotgan
-    // grounded javobni eskirtiradi. Aks holda foydalanuvchi boshqa buyruqqa
-    // o'tib bo'lgach eski savol javobi kutilmaganda gapirib yuborishi mumkin.
+    // Any newly accepted turn makes the previous grounded answer still being
+    // prepared in the background stale. Otherwise, after the user moved on, the
+    // old answer could suddenly be spoken.
     const turnSerial = ++this._groundedTurnSerial;
     const communicationIntent = require('../communications').parseCommunicationIntent(this.userTranscript);
     if (communicationIntent?.kind === 'youtube-search') {
@@ -1853,7 +1713,7 @@ class RealtimeSession extends EventEmitter {
       if (this.closed || serial !== this._groundedTurnSerial) return;
       answer = prepareSpokenAnswer(answer);
       if (!answer) return;
-      // Kech kelgan fon javobi (o'lchangan: 48 s) suhbat allaqachon ketgach kutilmaganda gap boshlab yubormasin.
+      // A late background answer (measured: 48 s) must not start speaking after the conversation has moved on.
       if (Date.now() - startedAt > GROUNDING_FOLLOWUP_MAX_MS) {
         this.emit('telemetry', 'grounding.follow_up.dropped', { durationMs: Date.now() - startedAt });
         return;
@@ -1882,14 +1742,14 @@ class RealtimeSession extends EventEmitter {
     this._deliverReadyBackgroundWork();
   }
 
-  // Gapirish vaqtida server avtomatik javob yaratmasin (xona aks-sadosi "yangi gap" bo'lib qolmasin);
-  // jim paytda esa yoqiq — taxminiy tez javob uchun.
+  // While speaking, the server must not create responses (room echo must not become a "new turn");
+  // while silent it is on, for fast speculative replies.
   _deleteItem(itemId) {
     if (!itemId) return;
     try { this.ws.send(JSON.stringify({ type: 'conversation.item.delete', item_id: itemId })); } catch (e) {}
   }
 
-  // Suhbat oynasi tashqarisida bo'sh paytda serverga faqat nutq yuboriladi (energiya + oldingi 450 ms + hangover).
+  // Outside the conversation window, idle time sends only speech to the server (energy + preceding 450 ms + hangover).
   _idleGateActive() {
     return this._wakeRequired && !this._explicitUserSession && !this.assistantSpeaking && !this._duck
       && !this._serverSpeechOpen && !this._conversationContext.isActive();
@@ -1930,7 +1790,7 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
-  // Missiya tool'lari: fayl yozish/o'qish, millisekundlarda qaytadi.
+  // Mission tools: file write/read, returning within milliseconds.
   _handleMissionTool(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -1949,7 +1809,7 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
-  // Doimiy ruxsat: ro'yxat/bekor qilish darhol; BERISH esa faqat foydalanuvchi ovozda "confirm" deganidan keyin (kod majburlaydi).
+  // Standing approvals: listing and revoking are immediate; GRANTING happens only after the user says "confirm" aloud (enforced in code).
   _standingApproval(args) {
     if (args.action === 'list') return this._missions.listStanding();
     if (args.action === 'revoke') return this._missions.revokeStanding(args.id);
@@ -1965,11 +1825,11 @@ class RealtimeSession extends EventEmitter {
     return 'Waiting for the user to say confirm; nothing is granted until then.';
   }
 
-  // Fon missiyasi natijasini (tugadi/to'siq/tasdiq kerak) gapirish navbatiga qo'yadi; JARVIS gapirmayotgan paytda aytiladi.
+  // Queues a background mission result (done / blocked / needs approval) to be spoken when JARVIS is not talking.
   announce(text) {
     const clean = String(text || '').trim();
     if (!clean || this.closed) return false;
-    this._backgroundTaskResults.push({ answer: clean.slice(0, 220) }); // ovozda o'qiladi — texnik uzun matn emas, qisqa xabar
+    this._backgroundTaskResults.push({ answer: clean.slice(0, 220) }); // spoken aloud: a short message, not long technical text
     this._deliverReadyBackgroundWork();
     return true;
   }
@@ -1982,14 +1842,14 @@ class RealtimeSession extends EventEmitter {
   }
 
   _beginSpeculative() {
-    // Gapirish paytida kelgan speech_stopped (aks-sado) yangi taxminiy javobni ochmasin.
-    // Server avtomatik javobi o'chiq bo'lsa (doim eshitish rejimida suhbat oynasidan tashqarida) taxminiy javob kutilmaydi.
+    // A speech_stopped that arrives while speaking (echo) must not open a new speculative reply.
+    // When server auto-response is off (always-listening, outside the conversation window), no speculative reply is expected.
     const autoResponseExpected = this._autoResponseOn || this.provider?.autoResponds;
     if (!this._speculativeEnabled() || !autoResponseExpected || this.assistantSpeaking || this._realtimeResponseActive) return;
     clearTimeout(this._specTimer);
     this._spec = { state: 'expected', held: [], calls: [], doneInfo: null, created: false };
     const spec = this._spec;
-    // Transkript umuman kelmasa ovoz abadiy ushlanib qolmasin: eski xulq (javobsiz) bilan bir xil.
+    // If no transcript ever arrives, do not hold the audio forever: same as the old behaviour (no reply).
     this._specTimer = setTimeout(() => { if (this._spec === spec && ['expected', 'held'].includes(spec.state)) this._discardSpeculative(); }, SPECULATIVE_DECISION_TIMEOUT_MS);
     if (this._specTimer.unref) this._specTimer.unref();
   }
@@ -2027,7 +1887,7 @@ class RealtimeSession extends EventEmitter {
     for (const [response] of queued) this._sendResponseCreate(response);
   }
 
-  // Taxminiy javobni bekor qiladi: ushlangan ovoz/tool-chaqiruvlar tashlanadi.
+  // Cancels the speculative reply: held audio and tool calls are dropped.
   _discardSpeculative() {
     const spec = this._spec;
     if (!spec) return;
@@ -2050,7 +1910,7 @@ class RealtimeSession extends EventEmitter {
     }
   }
 
-  // true qaytarsa taxminiy javob qabul qilindi va alohida response.create kerak emas.
+  // Returns true when the speculative reply was adopted and no separate response.create is needed.
   _adoptSpeculative(options = {}) {
     const spec = this._spec;
     if (!spec || !['expected', 'held'].includes(spec.state)) return false;
@@ -2079,7 +1939,7 @@ class RealtimeSession extends EventEmitter {
       for (const call of spec.calls.splice(0)) this._handleFunctionCall(call);
       if (!this._realtimeResponseActive) this._spec = null;
     } else {
-      // Javob hali yaratilmagan: kelmasa, xavfsizlik uchun odatiy yo'l bilan so'raymiz.
+      // The reply does not exist yet: if it never arrives, request one the normal way to be safe.
       const timer = setTimeout(() => {
         if (this._spec === spec && !spec.created && !this._realtimeResponseActive && !this.closed) {
           this._spec = null;
@@ -2210,8 +2070,8 @@ class RealtimeSession extends EventEmitter {
         this.emit('telemetry', 'tts.fallback', { provider: 'realtime', reason: error?.message || 'tts-error' });
       }
     }
-    // TTS ishlamasa tayyor matnni Realtime'ga faqat o'qitish uchun beramiz;
-    // u savolga javob bermaydi va mazmunni qayta ishlab chiqmaydi.
+    // If TTS fails, hand the prepared text to Realtime only to be read aloud;
+    // it does not answer the question or rework the content.
     return this._sendResponseCreate({
       max_output_tokens: options.maxOutputTokens || REALTIME_MAX_RESPONSE_TOKENS,
       tool_choice: 'none',
@@ -2220,8 +2080,8 @@ class RealtimeSession extends EventEmitter {
   }
 
   _beginAuthoritativeTranscription(turn) {
-    // Oldingi turn favqulodda holatda tugamay qolgan bo'lsa, yangi turn uni
-    // almashtiradi; timeout stale callback'ni javob yaratishdan saqlaydi.
+    // If the previous turn was left unfinished, the new turn replaces it; the
+    // timeout keeps a stale callback from creating a reply.
     const pending = {
       id: Symbol('voice-turn'), native: null, result: null, settled: false,
       timer: null, startedAt: Date.now(), requireAuthoritative: this._requireAuthoritativeFirstTurn
@@ -2244,12 +2104,11 @@ class RealtimeSession extends EventEmitter {
     }, authoritativeTimeoutMs(pcm.length));
 
     Promise.resolve(this._authoritativeTranscribe(pcm)).then(result => {
-      // Agar native-fast-path bu turnni allaqachon yakunlagan bo'lsa
-      // (pending.settled=true), javobga endi ta'sir qilmaymiz -- lekin
-      // authoritative natijani baribir telemetriyaga yozamiz (kelajakda
-      // fast-path qarorini tekshirish/tuzatish uchun foydali material).
-      // Butunlay BOSHQA (keyingi) turn boshlangan bo'lsa (na settled, na
-      // hozirgi pending) -- bu haqiqiy eskirgan chaqiruv, e'tibor bermaymiz.
+      // If the native fast path already settled this turn (pending.settled), the
+      // reply is no longer affected, but the authoritative result is still logged
+      // to telemetry (useful for auditing fast-path decisions later). If a
+      // DIFFERENT, later turn has started (neither settled nor current), this is a
+      // genuinely stale callback and is ignored.
       if (this._pendingAuthoritativeTurn !== pending && !pending.settled) return;
       pending.result = result && typeof result === 'object' ? result : { text: String(result || '') };
       this.emit('telemetry', 'stt.authoritative.completed', {
@@ -2291,11 +2150,10 @@ class RealtimeSession extends EventEmitter {
     });
   }
 
-  // Bu funksiya har bir chaqiruv uchun MUSTAQIL ravishda (kutmasdan) chaqiriladi
-  // (qarang: _onMessage'dagi 'response.function_call_arguments.done' — await
-  // qilinmaydi), shuning uchun bir nechta task chindan parallel ishlaydi.
-  // Har biriga o'ziga xos session_key berilishi — ular bir-birining
-  // kontekstini buzmasligini kafolatlaydi.
+  // Called INDEPENDENTLY (not awaited) for every call (see
+  // 'response.function_call_arguments.done' in _onMessage), so several tasks
+  // truly run in parallel. Each gets its own session_key, which guarantees they
+  // never corrupt each other's context.
   async _handleFunctionCall(msg) {
     if (msg.name === 'note_pronunciation') { this._handleNotePronunciation(msg); return; }
     if (msg.name === 'manage_tasks') { this._handleManageTasks(msg); return; }
@@ -2323,12 +2181,11 @@ class RealtimeSession extends EventEmitter {
     const taskSessionKey = 'agent:main:jarvis-task-' + msg.call_id;
     this.emit('tool_call', description, msg.call_id);
 
-    // MUHIM: media-tekshiruvi vazifa TUGAGANDAN keyin emas, DARHOL (hali
-    // bajarilayotganda) qo'llaniladi — chunki video ko'pincha vazifaning
-    // o'zi tugashidan OLDIN, uning ICHIDA (masalan play tugmasi bosilgan
-    // zahoti) ijro bo'la boshlaydi. Kech qo'llansa, video allaqachon bir
-    // necha soniya ijro bo'lib, noto'g'ri "gapirish" sifatida qabul
-    // qilinib ulgurgan bo'lardi (real holatlarda kuzatildi).
+    // IMPORTANT: the media check is applied IMMEDIATELY (while the task is still
+    // running), not after it finishes, because a video often starts playing INSIDE
+    // the task, before it completes (e.g. right after play is clicked). Applied
+    // late, the video would already have played for seconds and been mistaken
+    // for the user speaking (observed in real use).
     if (/video|musiqa|youtube|ijro|play|pauz|davom ettir|qo'shiq|klip/i.test(description)) {
       this._setMediaLikelyPlaying();
     }
@@ -2379,7 +2236,7 @@ class RealtimeSession extends EventEmitter {
     }
     const output = question
       ? await this._expertAnswer(question, msg.call_id, grounding)
-      : "Savol matni kelmadi.";
+      : "No question text was provided.";
     this.emit('tool_result', output.slice(0, 300), msg.call_id);
     try {
       this.ws.send(JSON.stringify({
@@ -2390,9 +2247,9 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
-  // Butun xotira tarixi bo'ylab ma'no qidiruvi. Indeks fonda (daemon
-  // tomonidan) yangilab turilgani uchun bu yerda faqat o'qish bo'ladi —
-  // ~1 soniya. run_task orqali qilinsa 15-25 soniya ketardi.
+  // Semantic search across the whole memory history. The daemon keeps the index
+  // fresh in the background, so this is a read only (~1 s); via run_task it
+  // would take 15-25 s.
   async _handleRecallMemory(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -2406,7 +2263,7 @@ class RealtimeSession extends EventEmitter {
           .map(x => '[' + (x.date || x.layer || x.source || 'memory') + '] ' + (x.title || x.topic || '') + ': ' + String(x.content || x.snippet || '').replace(/\s+/g, ' ').slice(0, 500))
           .join('\n---\n');
       } else {
-        output = 'Bu haqda xotirada hech narsa topilmadi.';
+        output = 'Nothing about this was found in memory.';
       }
     } catch (e) {
       output = 'Xotirani qidirib bo\'lmadi: ' + (e.message || '').slice(0, 150);
@@ -2460,25 +2317,25 @@ class RealtimeSession extends EventEmitter {
       if (action === 'list') {
         const list = tasks.listTasks().tasks;
         if (!list.length) {
-          output = "Bugun uchun vazifalar ro'yxati bo'sh.";
+          output = 'The task list for today is empty.';
         } else {
           const pending = list.filter(t => !t.done);
           const done = list.filter(t => t.done);
-          output = `Jami ${list.length} ta vazifa (${pending.length} ta kutilmoqda, ${done.length} ta bajarilgan):\n` +
+          output = `${list.length} tasks in total (${pending.length} pending, ${done.length} done):\n` +
             list.map(t => (t.done ? '✓ ' : '• ') + t.text).join('\n');
         }
       } else if (action === 'add') {
         const r = tasks.addTask(args.text);
-        output = r.status === 'ok' ? `Vazifa muvaffaqiyatli qo'shildi: "${args.text}"` : (r.message || 'Xatolik yuz berdi');
+        output = r.status === 'ok' ? `Task added: "${args.text}"` : (r.message || 'An error occurred');
       } else if (action === 'complete') {
         const r = tasks.completeTask(args.text);
-        output = r.status === 'ok' ? `Vazifa bajarildi deb belgilandi: "${r.completed}"` : (r.message || 'Bajarilmagan vazifa topilmadi');
+        output = r.status === 'ok' ? `Task marked as done: "${r.completed}"` : (r.message || 'No pending task found');
       } else if (action === 'remove') {
         const r = tasks.removeTask(args.text);
-        output = r.status === 'ok' ? `Vazifa o'chirildi: "${args.text}"` : (r.message || 'Topilmadi');
+        output = r.status === 'ok' ? `Task removed: "${args.text}"` : (r.message || 'Not found');
       }
     } catch (e) {
-      output = 'Vazifalar bilan ishlashda xatolik: ' + e.message;
+      output = 'Task list error: ' + e.message;
     }
     this.emit('tool_result', output.slice(0, 300), msg.call_id);
     try {
@@ -2490,13 +2347,13 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
-  // Foydalanuvchi "to'xtat" deganda — ishlayotgan run_task jarayonlarini
-  // darhol o'ldiradi. Avval boshlangan vazifani to'xtatishning umuman
-  // iloji yo'q edi: u tugaguncha (3 daqiqagacha) kutish kerak edi.
+  // Kills running run_task processes as soon as the user says "stop". Before this,
+  // a started task could not be stopped at all; you had to wait for it to finish
+  // (up to 3 minutes).
   _handleCancelTask(msg) {
     this.emit('tool_call', 'cancel_task: running tasks', msg.call_id);
     const n = this.cancelRunningTasks();
-    const output = n > 0 ? ('To\'xtatildi (' + n + ' ta vazifa).') : 'Hozir bajarilayotgan vazifa yo\'q edi.';
+    const output = n > 0 ? `Stopped ${n} task${n === 1 ? '' : 's'}.` : 'No task was running.';
     this.emit('tool_result', output, msg.call_id);
     try {
       this.ws.send(JSON.stringify({
@@ -2507,9 +2364,8 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
-  // run_task'dan farqli — bu og'ir sub-agent'ni ishga tushirmaydi, faqat
-  // faylga tez yozadi (xotira, LLM chaqiruvi shart emas), shuning uchun
-  // to'g'ridan-to'g'ri (await'siz) va sinxron tarzda bajariladi.
+  // Unlike run_task this starts no heavy sub-agent; it only writes quickly to a
+  // file (memory, no LLM call needed), so it runs directly and synchronously.
   _handleNotePronunciation(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -2521,19 +2377,16 @@ class RealtimeSession extends EventEmitter {
         type: 'conversation.item.create',
         item: { type: 'function_call_output', call_id: msg.call_id, output: result }
       }));
-      // response.create atayin CHAQIRILMAYDI — bu foydalanuvchiga aytiladigan
-      // gap emas, faqat ichki xotira yozuvi (tool description'da ham shu
-      // aniq aytilgan: "hech narsa demasdan javob qaytarmang").
+      // response.create is deliberately NOT called: this is not something to say to
+      // the user, only an internal memory write (the tool description says so too).
     } catch (e) {}
   }
 
-  // run_task'ga qaraganda ANCHA tez — to'liq agent (LLM fikrlash zanjiri)
-  // ishga tushirilmaydi, to'g'ridan-to'g'ri tizim buyrug'i bajariladi
-  // (qarang: skills/fast-actions). "tool_call"/"tool_result" hodisalari
-  // atayin run_task bilan BIR XIL nomda emitted qilinadi — shu bilan
-  // jarvis_daemon.js'dagi mavjud rtTaskStarted/rtTaskCompleted kuzatuvi
-  // (dashboard "JONLI VAZIFALAR" paneli) buni ham avtomatik ko'rsatadi,
-  // qo'shimcha ulash shart emas.
+  // MUCH faster than run_task: no full agent (LLM reasoning chain) is started, a
+  // system command runs directly (see skills/fast-actions). The "tool_call" and
+  // "tool_result" events deliberately use the SAME names as run_task, so the
+  // existing rtTaskStarted/rtTaskCompleted tracking in jarvis_daemon.js (the
+  // dashboard's live-tasks panel) shows these too without extra wiring.
   async _handleCloseApp(msg) {
     let args = {};
     try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
@@ -2597,18 +2450,17 @@ class RealtimeSession extends EventEmitter {
       return;
     }
     this.emit('tool_call', 'fast_action: ' + id, msg.call_id);
-    // Musiqa/video ijro qiluvchi action'lar ham mikrofonga "sizib kirish"
-    // xavfini tug'diradi — run_task'dagi bilan bir xil himoya.
+    // Actions that play music or video also risk leaking into the microphone;
+    // same protection as in run_task.
     if (/^media:/.test(id)) this._setMediaLikelyPlaying();
     await captureSetting(id, { stack: this._undoStack });
     let result;
-    // Ilgari bu yer to'g'ridan-to'g'ri modulni chaqirardi, deterministik
-    // router (_runDirectFastAction) ishlatadigan inject qilinadigan
-    // this._fastActionRunner seamini chetlab o'tib -- ikkala yo'l endi bir
-    // xil (himoyalangan) seamdan o'tadi.
+    // This used to call the module directly, bypassing the injectable
+    // this._fastActionRunner seam the deterministic router (_runDirectFastAction)
+    // uses; both paths now go through the same guarded seam.
     try { result = await this._fastActionRunner(id); }
     catch (e) { result = { status: 'error', message: e.message }; }
-    const output = (result.status === 'ok' ? result.message : ('Xatolik: ' + result.message)) || 'Bajarildi.';
+    const output = (result.status === 'ok' ? result.message : ('Error: ' + result.message)) || 'Done.';
     this.emit('tool_result', output, msg.call_id);
     try {
       this.ws.send(JSON.stringify({
@@ -2647,10 +2499,9 @@ class RealtimeSession extends EventEmitter {
     await this._deliverSpokenAnswer(result.slice(0, 4000));
   }
 
-  // Ekranni suratga olib, rasmni SHU suhbatga qo'shadi — model uni
-  // o'zi ko'radi (alohida vision-model chaqiruvi ham, run_task ham
-  // kerak emas). Rasm 900px gacha kichraytiriladi: token narxi va
-  // yuborish vaqti ancha kamayadi, matn esa hali o'qish uchun yetarli.
+  // Captures the screen and adds the image to THIS conversation, so the model sees
+  // it itself (no separate vision call, no run_task). The image is scaled down to
+  // 900 px: far fewer tokens and less upload time, while text stays readable.
   async _handleSeeScreen(msg) {
     this.emit('tool_call', 'see_screen: ekranga qaraldi', msg.call_id);
     let visionDescription = '';
@@ -2676,17 +2527,17 @@ class RealtimeSession extends EventEmitter {
   }
 
   _setMediaLikelyPlaying() {
-    saveMediaState(); // keyingi (yangi) suhbatlar ham buni bilishi uchun — connect() dagi izohga qarang
+    saveMediaState(); // so later (new) conversations know too; see the note in connect()
     if (this._mediaModeActive) return;
     this._mediaModeActive = true;
-    // Media fonida local gate ham server VAD bilan bir xil konservativ
-    // trailing-silence oynaga o'tishi shart; aks holda video shovqini turnni
-    // noto'g'ri yopishi yoki keyingi audio lifecycle'ni buzishi mumkin.
+    // With media in the background the local gate must switch to the same
+    // conservative trailing-silence window as server VAD; otherwise video noise
+    // can close the turn wrongly or break the next audio lifecycle.
     this.duplex.hangoverMs = MEDIA_DUPLEX_HANGOVER_MS;
     try {
-      // 0.92 real mikrofon darajasida foydalanuvchini ham deyarli kar qilib
-      // qo'ydi. Media paytida uzunroq tasdiq oynasi va echo-mute bilan birga
-      // o'rtacha threshold ishlatiladi; qiymat .env orqali sozlanadi.
+      // 0.92 made JARVIS nearly deaf to the user at real microphone levels. During
+      // media a moderate threshold is used together with a longer confirmation
+      // window and echo mute; the value is configurable in .env.
       this.ws.send(JSON.stringify({
         type: 'session.update',
         session: { turn_detection: { type: 'server_vad', threshold: MEDIA_VAD_THRESHOLD, silence_duration_ms: MEDIA_VAD_SILENCE_MS, prefix_padding_ms: 300, create_response: false, interrupt_response: false } }
@@ -2694,19 +2545,18 @@ class RealtimeSession extends EventEmitter {
     } catch (e) {}
   }
 
-  // Suhbat davomida foydalanuvchi haqiqatan gapirganda (transkript kelganda)
-  // — bu media rejimi kerak bo'lmasligi mumkinligini bildiradi, lekin xato
-  // bilan qayta pasaytirib false-negative qilib qo'ymaslik uchun shu
-  // holatni qayta oddiy sezgirlikka QAYTARMAYMIZ (mediyaning o'zi
-  // to'xtatilmagan bo'lishi mumkin) — session tugaguncha shu darajada qoladi.
+  // When the user genuinely speaks during the conversation (a transcript arrives)
+  // media mode may no longer be needed, but sensitivity is deliberately NOT
+  // restored (the media itself may still be playing, and lowering it by mistake
+  // causes false negatives); it stays at this level until the session ends.
 
-  // Mikrofondan kelgan xom 16kHz PCM chunk'ni oqimga qo'shadi. Realtime va
-  // Azure TTS playback'ining ikkalasi ham karnayga yuborilgan 24kHz PCM'ni
-  // duplex engine'ga reference sifatida beradi; shu sabab playback vaqtida
-  // mikrofonni qattiq mute qilmay, haqiqiy barge-in'ni saqlaymiz.
-  // Playback tugagach qisqa grace qoladi: xona reverberatsiyasi reference
-  // tugaganidan keyin ham mikrofonda eshitilishi mumkin. Playback davomida esa
-  // AEC echo'ni kesadi va yetarli residual bo'lsa barge-in'ni o'tkazadi.
+  // Feeds a raw 16 kHz PCM chunk from the microphone into the stream. Both
+  // Realtime and Azure TTS playback hand the 24 kHz PCM sent to the speaker to the
+  // duplex engine as a reference, so the microphone is not hard-muted during
+  // playback and real barge-in is preserved. A short grace period follows
+  // playback, because room reverberation can still reach the microphone after the
+  // reference ends. During playback, AEC removes the echo and lets barge-in
+  // through when enough residual remains.
   feedAudio(pcm16_16k) {
     if (!this.ready || this.closed) return;
     const now = Date.now();
@@ -2714,7 +2564,7 @@ class RealtimeSession extends EventEmitter {
     const resampled = resample16to24(pcm16_16k);
     const userTakingTurn = this._nativeAec && (this._serverSpeechOpen || this._bargeInConfirmed || this._duck);
     const inAcousticGrace = !this.assistantSpeaking && now < muteUntil && !userTakingTurn;
-    // Himoya: audio kelmayapti va karnay jim bo'lsa ham "gapiryapti" holati qolib ketsa (darvoza kar bo'lib qoladi),
+    // Safeguard: if the "speaking" state is stuck while no audio arrives and the speaker is silent (the gate goes deaf),
     // uni qayta tiklaymiz.
     if (this.assistantSpeaking && this._lastAudioQueuedAt && now > this._playbackUntil + 1500 && now - this._lastAudioQueuedAt > 2500) {
       this.assistantSpeaking = false;
@@ -2726,9 +2576,9 @@ class RealtimeSession extends EventEmitter {
       ? this._nativeGate(resampled)
       : this.duplex.process(resampled, { assistantSpeaking: this.assistantSpeaking });
     this._recordGateStats(processed, now);
-    // Gapirish vaqtida moslashtirilgan AEC barge-in'ni saqlaydi. Gap tugagach
-    // grace oynasida esa reference tugab qolgan bo'lishi mumkin; shu davrda
-    // qolgan xona aks-sadosini serverga umuman yubormaymiz.
+    // While speaking, the adaptive AEC preserves barge-in. In the grace window
+    // after speech the reference may already have ended, so remaining room echo
+    // is not sent to the server at all.
     if (inAcousticGrace) return;
     // The optional recovery recorder must see the original 16 kHz turn even
     // while candidate barge-in audio is held back from server VAD.
@@ -2747,8 +2597,8 @@ class RealtimeSession extends EventEmitter {
       }
     }
     if (this._nativeAec) {
-      // JARVIS gapirayotganda barcha kadrlarni qisqa muddat saqlaymiz: barge-in tasdiqlanganda gapingizning
-      // boshi (past ovozli bo'g'inlar bilan) to'liq serverga ketadi.
+      // While JARVIS speaks, keep all frames briefly: once barge-in is confirmed, the start of the
+      // user's speech (including quiet syllables) reaches the server intact.
       if (this.assistantSpeaking && !this._bargeInConfirmed) {
         this._nativePreRoll.push(Buffer.from(resampled));
         this._nativePreRollBytes += resampled.length;
@@ -2785,10 +2635,10 @@ class RealtimeSession extends EventEmitter {
         this._nativePreRollBytes = 0;
         this._bargeInCandidate = [];
         this._bargeInCandidateMs = 0;
-        // Provider VAD'ni kutish sezilarli kechikish beradi. Mahalliy AEC gate
-        // nutqni tasdiqlashi bilan karnayni to'xtatamiz; server event keyinroq
-        // faqat turn lifecycle'ni davom ettiradi. _flushPlayback candidate
-        // state'ni reset qilgani uchun confirmed/evidence undan KEYIN yoziladi.
+        // Waiting for provider VAD adds noticeable delay. Stop the speaker as soon
+        // as the local AEC gate confirms speech; the later server event only
+        // continues the turn lifecycle. _flushPlayback resets the candidate state,
+        // so confirmed/evidence are written AFTER it.
         this._beginDuck();
         this._bargeInConfirmed = true;
         this._bargeInEvidenceAt = now;
@@ -2803,8 +2653,8 @@ class RealtimeSession extends EventEmitter {
     }
     if (!processed.send) { this._feedTrailingSilence(resampled.length); return; }
     this._trailingSilenceMs = 0;
-    // Server transkripti kechiksa ham daemon sessiyani tirik tutishi uchun
-    // faqat echo/noise filtridan o'tgan haqiqiy audio activity yuboriladi.
+    // Only real audio activity that passed the echo/noise filter is reported, so the
+    // daemon keeps the session alive even when the server transcript is late.
     this.emit('audio_activity', {
       reason: processed.reason,
       residualRms: processed.residualRms,
@@ -2815,14 +2665,14 @@ class RealtimeSession extends EventEmitter {
     this._sendInputAudio(processed.audio);
   }
 
-  // Mahalliy shovqin darvozasi gap tugagach audio yuborishni to'xtatadi, server VAD esa jimlikni faqat
-  // kelayotgan audiodan biladi (server shovqin filtri kechikishi bilan 330 ms yetmaydi) — shuning uchun
-  // gap tugamaganini ko'rsa, speech_stopped kelguncha jimlik yuboramiz.
+  // The local noise gate stops sending audio when speech ends, but server VAD only detects silence
+  // from incoming audio (330 ms is not enough given the server noise-filter delay), so while the
+  // server still thinks the user is speaking, send silence until speech_stopped arrives.
   _isSpeakingNow() {
     return this.assistantSpeaking || Boolean(this._duck) || this._realtimeResponseActive || Date.now() < this._playbackUntil;
   }
 
-  // Foydalanuvchi "to'xta/boldi" dedi: gapni darhol to'xtatamiz va fon xabarlari qisqa muddat jim turadi.
+  // The user said "stop" ("to'xta"/"boldi"): stop speaking at once and keep background messages quiet briefly.
   _stopSpeakingByUser(reason) {
     this._discardSpeculative();
     if (this._duck) {
@@ -2845,7 +2695,7 @@ class RealtimeSession extends EventEmitter {
     this.emit('telemetry', 'stop_command', { reason });
   }
 
-  // Barge-in: karnayni darhol PAUZA qilamiz (SIGSTOP), javobni esa transkript tekshirilguncha bekor qilmaymiz.
+  // Barge-in: PAUSE the speaker immediately (SIGSTOP), but do not cancel the reply until the transcript is checked.
   _beginDuck() {
     if (this._duck) return;
     const duck = { at: Date.now(), timer: null };
@@ -2856,7 +2706,7 @@ class RealtimeSession extends EventEmitter {
     this.emit('telemetry', 'barge_in.paused', {});
   }
 
-  // Tekshiruv vaqti tugadi: server hali ham nutq eshitayotgan bo'lsa haqiqiy to'xtatish, bo'lmasa — aks-sado: davom.
+  // Verification window over: if the server still hears speech it is a real interruption; otherwise it was echo, so resume.
   _onDuckTimeout() {
     if (this._serverSpeechOpen) this._commitBargeIn('timeout-speaking');
     else this._resumeBargeIn('timeout-no-speech');
@@ -2892,14 +2742,14 @@ class RealtimeSession extends EventEmitter {
     if (this._playbackUntil > duck.at) this._playbackUntil += pausedMs;
     try { this.playProc?.kill('SIGCONT'); } catch (e) {}
     this._resetBargeInCandidate();
-    // Pauza paytida AEC namunasi mikrofon bilan sinxronligini yo'qotgan: qisqa muddat yangi barge-in qabul qilinmasin.
+    // The AEC reference lost sync with the microphone during the pause: ignore new barge-ins briefly.
     this._noBargeInUntil = Date.now() + (this._nativeAec ? 300 : 1500);
     this.emit('telemetry', 'barge_in.resumed', { reason, pausedMs });
   }
 
-  // macOS Voice Processing mikrofoni: exo OS darajasida allaqachon ayirilgan, shuning uchun mahalliy AEC/gate kerak emas.
-  // Jim paytda hamma audio serverga (server VAD + shovqin filtri hal qiladi), JARVIS gapirayotganda esa
-  // faqat aniq baland ovoz barge-in nomzodi bo'ladi (keyin pauza+transkript tekshiruvi ishlaydi).
+  // macOS Voice Processing microphone: echo is already removed at the OS level, so no local AEC/gate is needed.
+  // While silent, all audio goes to the server (server VAD + noise filter decide); while JARVIS speaks,
+  // only clearly loud speech becomes a barge-in candidate (then the pause + transcript check runs).
   enableNativeAec() {
     if (this._nativeAec) return;
     this._nativeAec = true;
@@ -2918,7 +2768,7 @@ class RealtimeSession extends EventEmitter {
     const level = rms(audio);
     if (this.assistantSpeaking) {
       if (this._duck || this._bargeInConfirmed || this._serverSpeechOpen) {
-        // Foydalanuvchi navbatni oldi: past ovozli bo'g'inlar tashlanmasin.
+        // The user took the turn: do not drop quiet syllables.
         return { send: true, audio, reason: 'barge-in', residualRms: level, correlation: 0, speechThresholdRms: NATIVE_BARGE_IN_RMS };
       }
       const send = level >= NATIVE_BARGE_IN_RMS;
@@ -2930,7 +2780,7 @@ class RealtimeSession extends EventEmitter {
   _recordGateStats(processed, now) {
     const stats = this._gateStats;
     if (this._usageBytes >= 24000 * 2 * 20) {
-      // Serverga yuborilgan ovoz sekundlari (Azure xarajati uchun) — taxminan har 20 s da yoziladi.
+      // Seconds of audio sent to the server (for cost tracking), recorded roughly every 20 s.
       try { require('../../core/usage-meter').sharedMeter().add('voice_seconds', this._usageBytes / 48000); } catch (_) {}
       this._usageBytes = 0;
     }
@@ -2982,8 +2832,8 @@ class RealtimeSession extends EventEmitter {
       onData: audio => this._writePlayback(audio)
     });
     this.playProc.on('error', () => {});
-    // stdin EPIPE (masalan pleer jarayoni kutilmaganda o'lsa) qo'lga
-    // olinmasa butun daemon'ni yiqitadi — shu yerda "yutib" qo'yiladi.
+    // An unhandled stdin EPIPE (e.g. the player process dies unexpectedly) would
+    // crash the whole daemon, so it is swallowed here.
     this.playProc.stdin.on('error', () => {});
   }
 
@@ -2995,8 +2845,8 @@ class RealtimeSession extends EventEmitter {
 
   _writePlayback(buf) {
     if (!buf?.length || !this.playProc?.stdin?.writable) return false;
-    // Deadline audio real ravishda sox'ga berilgan paytdan hisoblanadi;
-    // prebufferda kutgan vaqtni playback davomiyligi deb xato sanamaymiz.
+    // The deadline counts from when audio is actually handed to sox; time spent
+    // waiting in the prebuffer is not mistaken for playback duration.
     const now = Date.now();
     const durationMs = Math.ceil((buf.length / (OUT_RATE * 2)) * 1000);
     this._playbackUntil = Math.max(now, this._playbackUntil) + durationMs;

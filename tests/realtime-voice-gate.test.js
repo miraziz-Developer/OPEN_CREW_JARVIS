@@ -834,7 +834,7 @@ test('grounding falls back to local Obsidian search when semantic search fails',
     }
   });
 
-  assert.match(grounding, /Qidiruv muvaffaqiyatli bajarildi/);
+  assert.match(grounding, /Search completed successfully/);
   assert.match(grounding, /Topdim loyihasi deploy qilindi/);
 });
 
@@ -847,9 +847,9 @@ test('profile memory is included for questions about what Jarvis remembers', asy
     }
   });
 
-  assert.match(grounding, /FOYDALANUVCHI PROFILI/);
+  assert.match(grounding, /USER PROFILE/);
   assert.match(grounding, /o‘zbek tilida qisqa javoblarni yoqtiradi/);
-  assert.doesNotMatch(grounding, /mos yozuv topilmadi/);
+  assert.doesNotMatch(grounding, /no entry matches the question/);
 });
 
 test('fast desktop actions do not enter the slower grounding path', () => {
