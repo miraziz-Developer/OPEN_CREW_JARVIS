@@ -96,6 +96,23 @@ function buildVoiceProviders(env) {
     });
   }
 
+  // Gemini Live: native audio-to-audio, measured ~2.4x faster to first audio than the
+  // cascaded Voice Live setup. REALTIME_VOICE_PROVIDER=gemini makes it primary;
+  // otherwise it is the last-resort fallback.
+  const geminiKey = env('GEMINI_API_KEY') || env('GOOGLE_API_KEY');
+  if (configured(geminiKey)) {
+    const model = env('GEMINI_LIVE_MODEL', 'gemini-3.1-flash-live-preview');
+    const voice = env('GEMINI_LIVE_VOICE', 'Charon');
+    const gemini = {
+      id: 'gemini-live',
+      autoResponds: true,
+      voice,
+      createSocket: () => new (require('./gemini-live-adapter').GeminiLiveSocket)({ apiKey: geminiKey, model, voice })
+    };
+    if (String(env('REALTIME_VOICE_PROVIDER', '')).trim().toLowerCase() === 'gemini') providers.unshift(gemini);
+    else providers.push(gemini);
+  }
+
   return providers;
 }
 

@@ -1348,7 +1348,9 @@ class RealtimeSession extends EventEmitter {
     this._providerIndex = index;
     this.provider = provider;
     this._connecting = true;
-    const socket = new WebSocketClient(provider.url, { headers: provider.headers, handshakeTimeout: 10000 });
+    const socket = typeof provider.createSocket === 'function'
+      ? provider.createSocket()
+      : new WebSocketClient(provider.url, { headers: provider.headers, handshakeTimeout: 10000 });
     this.ws = socket;
 
     // Oldingi (endi tugagan) suhbatda video/musiqa ishga tushirilgan bo'lsa
@@ -1973,13 +1975,17 @@ class RealtimeSession extends EventEmitter {
   }
 
   _speculativeEnabled() {
+    // Providers that answer on their own (Gemini Live) must always go through the
+    // speculative hold, otherwise unvetted audio would play before the transcript filters run.
+    if (this.provider?.autoResponds) return !this._authoritativeTranscribe;
     return SPECULATIVE_RESPONSE && this.provider?.id === 'voice-live' && !this._mediaModeActive && !this._authoritativeTranscribe;
   }
 
   _beginSpeculative() {
     // Gapirish paytida kelgan speech_stopped (aks-sado) yangi taxminiy javobni ochmasin.
     // Server avtomatik javobi o'chiq bo'lsa (doim eshitish rejimida suhbat oynasidan tashqarida) taxminiy javob kutilmaydi.
-    if (!this._speculativeEnabled() || !this._autoResponseOn || this.assistantSpeaking || this._realtimeResponseActive) return;
+    const autoResponseExpected = this._autoResponseOn || this.provider?.autoResponds;
+    if (!this._speculativeEnabled() || !autoResponseExpected || this.assistantSpeaking || this._realtimeResponseActive) return;
     clearTimeout(this._specTimer);
     this._spec = { state: 'expected', held: [], calls: [], doneInfo: null, created: false };
     const spec = this._spec;
