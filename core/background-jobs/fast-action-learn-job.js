@@ -11,13 +11,30 @@ function saveFastActionLearnState(stateFile, s) {
   try { fs.writeFileSync(stateFile, JSON.stringify(s)); } catch (e) {}
 }
 
-// TEZ AMALLARNI O'RGANISH (fast-actions) — vaqti-vaqti bilan Obsidian
-// xotirasidagi so'nggi kunlar vazifalarini ("Vazifa boshlandi"/"Vazifa
-// yakunlandi" sifatida yozilgan) ko'rib, "shunchaki biror dastur ochish"
-// turidagi, hali fast-actions ro'yxatida yo'q so'rovlarni topadi va
-// avtomatik qo'shadi (faqat "ilova ochish" turi — xavfsiz, chunki
-// noto'g'ri/mavjud bo'lmagan nom shunchaki xato qaytaradi, boshqa hech
-// qanday amal bajarilmaydi).
+/**
+ * Pulls the user's spoken requests out of one day's memory markdown.
+ * Voice turns are written as "## HH:MM — Voice turn" blocks with a "User: ..." line
+ * (older notes: "Ovozli turn" / "Foydalanuvchi: ..."); the oldest format used
+ * "## HH:MM — Vazifa boshlandi|yakunlandi" blocks.
+ */
+function extractRequestDescriptions(markdown) {
+  const descriptions = [];
+  for (const block of String(markdown || '').split(/^---$/m)) {
+    if (/^## \d{2}:\d{2} — (?:Voice turn|Ovozli turn)\s*$/m.test(block)) {
+      const user = block.match(/^(?:User|Foydalanuvchi): (.+)$/m);
+      if (user && !/^\((?:awaiting reply|javob kutilmoqda)\)$/.test(user[1].trim())) descriptions.push(user[1].trim().slice(0, 300));
+      continue;
+    }
+    const legacy = block.match(/^## \d{2}:\d{2} — Vazifa (?:boshlandi|yakunlandi)\n([\s\S]{0,300})/m);
+    if (legacy) descriptions.push(legacy[1].trim());
+  }
+  return descriptions;
+}
+
+// FAST-ACTION LEARNING: periodically reviews the user's recent spoken requests in Obsidian
+// memory, finds "just open some app" requests that are not yet in the fast-actions list,
+// and adds them automatically. Only the "open app" type is learned: it is safe, because a
+// wrong or unknown name simply returns an error and nothing else happens.
 function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTelegram, writeMemory, skillPlatform }) {
   const stateFile = path.join(projectDir, '.fast-action-learn-state.json');
 
@@ -26,33 +43,28 @@ function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTele
     try { mem = require('../../skills/memory'); } catch (e) { return; }
     const state = loadFastActionLearnState(stateFile);
 
-    // So'nggi 3 kunlik xotiradan vazifa tavsiflarini yig'amiz.
+    // Collect request descriptions from the last 3 days of memory.
     const descriptions = [];
     for (let i = 0; i < 3; i++) {
       const d = new Date(); d.setDate(d.getDate() - i);
       const fp = path.join(mem.MEMORY_DIR, localDateStr(d) + '.md');
       if (!fs.existsSync(fp)) continue;
-      const content = fs.readFileSync(fp, 'utf8');
-      const blocks = content.split(/^---$/m);
-      for (const b of blocks) {
-        const m = b.match(/^## \d{2}:\d{2} — Vazifa (boshlandi|yakunlandi)\n([\s\S]{0,300})/m);
-        if (m) descriptions.push(m[2].trim());
-      }
+      descriptions.push(...extractRequestDescriptions(fs.readFileSync(fp, 'utf8')));
     }
     state.lastCheck = Date.now();
     saveFastActionLearnState(stateFile, state);
-    if (descriptions.length < 3) return; // yetarli tarix yo'q, keyingi safar qayta ko'radi
+    if (descriptions.length < 3) return; // not enough history yet; try again next time
 
     let existingIds;
     try { existingIds = (await skillPlatform.invoke('fast-actions', 'actionIds', {})).join(', '); } catch (e) { return; }
 
-    const prompt = 'Quyidagi ro\'yxat — foydalanuvchi so\'nggi kunlarda ovozli buyruq bilan so\'ragan vazifalar tavsifi:\n\n' +
+    const prompt = 'Below are requests the user made by voice in the last few days:\n\n' +
       descriptions.slice(-60).map(d => '- ' + d).join('\n') +
-      '\n\nHozir tizimda quyidagi TEZ AMALLAR (fast actions) allaqachon mavjud (id ro\'yxati): ' + existingIds +
-      '\n\nYuqoridagi vazifalar orasidan, FAQAT "biror kompyuter dasturi/ilovasini shunchaki OCHISH" turidagi ' +
-      '(boshqa hech narsa qilmasdan, murakkab bo\'lmagan) so\'rovlarni top, va ular orasida HALI fast actions ' +
-      'ro\'yxatida YO\'Q bo\'lgan, ANIQ ilova nomlarini JSON massiv sifatida qaytar (masalan ["Figma","Discord"]). ' +
-      'Agar mos keluvchi yangi ilova topilmasa, bo\'sh massiv qaytar: []. Faqat JSON massiv yoz, boshqa hech narsa qo\'shma.';
+      '\n\nThese FAST ACTIONS already exist (ids): ' + existingIds +
+      '\n\nFrom the requests above, find ONLY those that simply OPEN a computer program or app (nothing else, ' +
+      'nothing complex), and return the EXACT app names that are NOT yet in the fast-actions list as a JSON array ' +
+      '(e.g. ["Figma","Discord"]). If there is no new matching app, return an empty array: []. ' +
+      'Reply with the JSON array only, nothing else.';
 
     const reply = await askAgent(prompt, 'agent:main:jarvis-fast-action-learn');
     if (!reply) return;
@@ -64,7 +76,7 @@ function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTele
     if (!Array.isArray(apps) || !apps.length) return;
 
     const added = [];
-    for (const app of apps.slice(0, 5)) { // bir safarda ko'pi bilan 5 ta — sekin-asta, nazorat ostida o'sish
+    for (const app of apps.slice(0, 5)) { // at most 5 per run: slow, controlled growth
       if (typeof app !== 'string' || !app.trim()) continue;
       try {
         const r = await skillPlatform.invoke('fast-actions', 'learnOpenAppAction', { appName: app.trim() });
@@ -72,13 +84,13 @@ function createFastActionLearnJob({ projectDir, localDateStr, askAgent, sendTele
       } catch (e) {}
     }
     if (added.length) {
-      ok('⚡ Yangi tez amallar o\'rganildi: ' + added.join(', '));
+      ok('⚡ Learned new fast actions: ' + added.join(', '));
       sendTelegram('⚡ I added new fast actions based on your requests: ' + added.join(', ') + '. These will now run faster.');
-      try { writeMemory('Tez amal o\'rganildi', 'Avtomatik qo\'shilgan yangi fast-action(lar): ' + added.join(', '), ['fast-action', 'autonomous']); } catch (e) {}
+      try { writeMemory('Fast action learned', 'Automatically added fast action(s): ' + added.join(', '), ['fast-action', 'autonomous']); } catch (e) {}
     }
   }
 
   return { run };
 }
 
-module.exports = { createFastActionLearnJob };
+module.exports = { createFastActionLearnJob, extractRequestDescriptions };
