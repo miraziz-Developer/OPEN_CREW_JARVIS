@@ -7,8 +7,9 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)
 ![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-475%20passing-brightgreen)
-![Azure](https://img.shields.io/badge/Azure-OpenAI%20%C2%B7%20Voice%20Live%20%C2%B7%20Speech-0078D4?logo=microsoftazure&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-500%20passing-brightgreen)
+![Gemini](https://img.shields.io/badge/Gemini-Live%20voice-4285F4?logo=googlegemini&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure-OpenAI%20%C2%B7%20Speech-0078D4?logo=microsoftazure&logoColor=white)
 
 </div>
 
@@ -30,13 +31,24 @@ The assistant is built for a bilingual owner, so speech recognition and replies 
 
 | Area | What's inside |
 |---|---|
-| 🎙️ **Real-time voice** | Azure Voice Live full-duplex sessions, barge-in detection, echo cancellation via a native Swift audio helper, and a layered wake-word stack (openWakeWord, Whisper and a personal model you train) |
+| 🎙️ **Real-time voice** | Gemini Live native audio (first audio in ~0.9 s) with Azure Voice Live as fallback, full-duplex sessions, barge-in detection, echo cancellation via a native Swift audio helper, and a layered wake-word stack (openWakeWord, Whisper and a personal model you train) |
 | 🧠 **Model routing** | Fast and strong deployments with automatic fallback, a deep-think mode, and a local brain service that keeps exactly one large model in RAM at a time |
 | 🛠️ **Autonomous missions** | Planner → executor → verifier loop over pluggable workers: `agent`, `interpreter`, `browser`, `gui`, `phone`, `babyagi`, `autogpt`, `think` |
 | 👁️ **Visual action loop** | Screenshot → plan → act → verify, with macOS Accessibility grounding and a deterministic action benchmark |
 | 🔐 **Safety** | A configurable confirmation policy, an action safety classifier, allowlisted smart-home scopes, owner-only Telegram access, undo, and a secret scanner |
 | 📱 **Integrations** | Telegram, Gmail, Google Calendar, Home Assistant, iPhone Mirroring, Obsidian, Open Interpreter, browser-use |
 | 🩺 **Operability** | A `doctor` health check, a self-healing watchdog, a voice flight recorder, runtime telemetry, a local web dashboard, launchd autostart and daily backups |
+
+## Performance
+
+Measured on the author's Mac with the same request, the real JARVIS instructions and all 17 voice tools (three runs each):
+
+| Realtime provider | Time to first audio |
+|---|---|
+| Azure Voice Live (`gpt-4.1-mini` + neural TTS) | 1996 / 2182 / 2288 ms |
+| **Gemini Live** (`gemini-3.1-flash-live-preview`) | **777 / 911 / 1194 ms** |
+
+Set `REALTIME_VOICE_PROVIDER=gemini` (the default in `.env.example`) to use Gemini Live; Azure stays as an automatic fallback. Wake-word detection is fully local (openWakeWord + whisper.cpp), so background noise never reaches a paid API.
 
 ## Architecture
 
@@ -50,7 +62,7 @@ flowchart LR
 
     subgraph Voice["Voice daemon (jarvis_daemon.js)"]
         WAKE[Wake-word stack]
-        RT[Realtime voice<br/>Azure Voice Live]
+        RT[Realtime voice<br/>Gemini Live · Azure fallback]
         FAST[Fast actions]
     end
 
@@ -89,7 +101,8 @@ flowchart LR
 | Service | Purpose | Where to get it |
 |---|---|---|
 | **Azure OpenAI** (endpoint, key, deployments) | The agent's brain: a fast model for simple requests and a strong model for tool use and complex tasks | [Azure AI Foundry](https://ai.azure.com) → project → *Endpoints and keys* → *Deploy model* |
-| **Azure Voice Live** (`gpt-realtime`) | Real-time voice conversation | Deploy `gpt-realtime` in the same Foundry project |
+| **Google Gemini** *(recommended)* | Fastest real-time voice (Gemini Live), vision and speech-to-text; free tier | [Google AI Studio](https://aistudio.google.com/apikey) → *Create API key* |
+| **Azure Voice Live** (`gpt-realtime`) *(optional)* | Real-time voice fallback | Deploy `gpt-realtime` in the same Foundry project |
 | **Azure Speech** (key and region) | Speech-to-text and text-to-speech | Azure portal → *Speech service* → *Keys and Endpoint* |
 | **Telegram bot** *(optional)* | Remote control and notifications | [@BotFather](https://t.me/BotFather) → `/newbot` |
 | **Google OAuth** *(optional)* | Gmail and Calendar | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → OAuth client (Desktop) → download the JSON |
@@ -132,7 +145,7 @@ Only you can grant these. Open **System Settings → Privacy & Security** and en
 
 1. Run `./jarvis status`. It should report `running` and show the dashboard URL. For a full check, run `npm run doctor`. All green means you're ready.
 2. Say **"Jarvis"** and it should answer. In always-listening mode it only responds when it hears its name.
-3. If you connected Telegram, send `/start` to your bot. If `TELEGRAM_OWNER_IDS` is empty, the first person to message the bot becomes the owner.
+3. If you connected Telegram and left `TELEGRAM_OWNER_IDS` empty, pair your account: the bot writes a one-time code to `.run/telegram-pair-code.json`; send `/pair <code>` to the bot from your private chat. Only paired owners can control JARVIS.
 4. *(Optional, ~5 minutes)* Train the wake word on your own voice for better recognition: run `npm run voice:wake-collect`, then `npm run voice:wake-train`.
 
 ## Usage
@@ -237,6 +250,7 @@ Logs are written to `logs/daemon-YYYYMMDD.log` and `logs/mission-runner.stdout.l
 | `AZURE_OPENAI_*` | Agent and mission model |
 | `AGENT_FAST_MODEL` | Deployment for simple, latency-sensitive requests |
 | `AGENT_STRONG_MODEL`, `AGENT_STRONG_FALLBACK_MODELS` | Primary and fallback deployments for coding, tool use and complex tasks |
+| `GEMINI_API_KEY`, `REALTIME_VOICE_PROVIDER`, `GEMINI_LIVE_VOICE` | Gemini Live realtime voice (default provider), vision and STT |
 | `AZURE_VOICELIVE_*`, `AZURE_SPEECH_*` | Voice |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_IDS` | Telegram bot and the owners allowed to control it |
 | `JARVIS_CONFIRM_MODE` | Confirmation policy (see [Safety modes](#safety-modes)) |
