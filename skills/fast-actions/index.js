@@ -70,13 +70,281 @@ function loadActions() {
 }
 preloadActions();
 
+function setProtocolState(mode, name, color) {
+  try {
+    fs.writeFileSync(path.join(PROJECT_DIR, '.jarvis-protocol.json'), JSON.stringify({
+      mode,
+      name,
+      color,
+      at: Date.now()
+    }, null, 2));
+  } catch (_) {}
+}
+
+function findProject(name) {
+  const os = require('os');
+  const home = os.homedir();
+  const searchDirs = [path.join(home, 'projects'), home];
+  
+  if (!name || name === 'latest' || name === 'recent') {
+    let best = null;
+    let bestTime = 0;
+    for (const dir of searchDirs) {
+      if (!fs.existsSync(dir)) continue;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const ent of entries) {
+          if (!ent.isDirectory() || ent.name.startsWith('.')) continue;
+          const full = path.join(dir, ent.name);
+          try {
+            const stat = fs.statSync(full);
+            if (stat.mtimeMs > bestTime) {
+              if (fs.existsSync(path.join(full, '.git')) || fs.existsSync(path.join(full, 'package.json')) || fs.existsSync(path.join(full, 'requirements.txt'))) {
+                bestTime = stat.mtimeMs;
+                best = { path: full, name: ent.name };
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return best || { path: path.join(home, 'OPEN_CREW_JARVIS'), name: 'OPEN_CREW_JARVIS' };
+  }
+
+  const clean = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const dir of searchDirs) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        const entClean = ent.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (entClean.includes(clean) || clean.includes(entClean)) {
+          return { path: path.join(dir, ent.name), name: ent.name };
+        }
+      }
+    } catch (_) {}
+  }
+  const words = String(name).toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/).filter(w => w.length > 3);
+  for (const dir of searchDirs) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        const entLower = ent.name.toLowerCase();
+        if (words.some(w => entLower.includes(w) || entLower.includes(w.slice(0, 5)))) {
+          return { path: path.join(dir, ent.name), name: ent.name };
+        }
+      }
+    } catch (_) {}
+  }
+  return { path: path.join(home, 'OPEN_CREW_JARVIS'), name: 'OPEN_CREW_JARVIS' };
+}
+
 function findAction(id) {
+  const dynamicVol = String(id || '').match(/^volume:(\d+)$/);
+  if (dynamicVol) {
+    const level = Math.min(100, Math.max(0, parseInt(dynamicVol[1], 10)));
+    return {
+      id: `volume:${level}`,
+      en: `Volume set to ${level}%.`,
+      uz: `Ovoz ${level}% ga sozlandi`,
+      type: 'applescript',
+      target: `set volume output volume ${level}`
+    };
+  }
+  if (id === 'protocol:combat') {
+    return {
+      id: 'protocol:combat',
+      en: 'Combat mode engaged, sir. All defense protocols active and systems online.',
+      uz: 'Jang rejimi faollashtirildi, ser. Barcha himoya protokollari shay holatda.',
+      type: 'protocol',
+      mode: 'combat',
+      name: 'Combat Protocol 07',
+      color: '#ff3b30',
+      sound: '/System/Library/Sounds/Hero.aiff',
+      script: 'tell application "System Events" to tell appearance preferences to set dark mode to true\nset volume output volume 85'
+    };
+  }
+  if (id === 'protocol:standby') {
+    return {
+      id: 'protocol:standby',
+      en: 'Standing down. Systems back to nominal standby.',
+      uz: 'Standart rejimga qaytildi. Tizimlar barqaror holatda.',
+      type: 'protocol',
+      mode: 'standby',
+      name: 'Nominal Standby',
+      color: '#00e5ff',
+      sound: '/System/Library/Sounds/Ping.aiff',
+      script: 'set volume output volume 50'
+    };
+  }
+  if (id === 'protocol:lockdown') {
+    return {
+      id: 'protocol:lockdown',
+      en: 'Lockdown protocol executed. Standing by for biometric authorization.',
+      uz: 'Tizim to\'liq qulflandi. Biometrik tasdiq kutilmoqda.',
+      type: 'protocol',
+      mode: 'lockdown',
+      name: 'Emergency Lockdown',
+      color: '#ff2a2a',
+      sound: '/System/Library/Sounds/Sosumi.aiff',
+      shell: 'sleep 1 && pmset displaysleepnow'
+    };
+  }
+  if (id === 'protocol:focus') {
+    return {
+      id: 'protocol:focus',
+      en: 'Focus mode engaged. Minimizing background distractions.',
+      uz: 'Fokus rejimi yoqildi. Chalg\'ituvchi omillar cheklandi.',
+      type: 'protocol',
+      mode: 'focus',
+      name: 'Deep Focus',
+      color: '#a855f7',
+      sound: '/System/Library/Sounds/Purr.aiff',
+      script: 'set volume output volume 35'
+    };
+  }
+  if (id === 'tasks:list') {
+    return {
+      id: 'tasks:list',
+      uz: "Bugungi vazifalar ro'yxati",
+      en: 'Daily tasks list',
+      type: 'custom',
+      handler: async () => {
+        const tasks = require('../tasks');
+        const list = tasks.listTasks().tasks;
+        const pending = list.filter(t => !t.done);
+        if (!pending.length) {
+          return { status: 'ok', uz: 'Bugungi barcha vazifalar bajarilgan, ser.', en: 'All daily tasks are completed, sir.' };
+        }
+        const formatTask = (txt) => {
+          const parts = txt.split(/—|\./);
+          if (parts.length > 1 && parts[0].length < 60) {
+            return (parts[0].trim() + ' — ' + (parts[1] || '').trim()).slice(0, 100);
+          }
+          return txt.length > 90 ? (txt.slice(0, 87) + '...') : txt;
+        };
+        const summary = pending.map((t, idx) => `${idx + 1}-vazifa: ${formatTask(t.text)}`).join('. ');
+        return {
+          status: 'ok',
+          uz: `Bugungi kutilayotgan ${pending.length} ta vazifangiz bor: ${summary}.`,
+          en: `You have ${pending.length} pending tasks: ${summary}.`
+        };
+      }
+    };
+  }
+  if (id === 'dev:git_status') {
+    return {
+      id: 'dev:git_status',
+      uz: 'Git status tekshirish',
+      en: 'Git status check',
+      type: 'custom',
+      handler: async () => {
+        const { exec } = require('child_process');
+        return new Promise((resolve) => {
+          exec('cd /Users/mirazizerkinaliyev_dev/OPEN_CREW_JARVIS && git status --short', (err, stdout) => {
+            if (err) {
+              resolve({ status: 'error', uz: 'Git tekshirishda xatolik: ' + err.message, en: 'Git error: ' + err.message });
+              return;
+            }
+            const lines = (stdout || '').trim().split('\n').filter(Boolean);
+            if (!lines.length) {
+              resolve({ status: 'ok', uz: 'Git toza, kiritilmagan o\'zgarishlar yo\'q.', en: 'Git working tree is clean, no uncommitted changes.' });
+            } else {
+              resolve({ status: 'ok', uz: `Gitda ${lines.length} ta o'zgargan fayl bor.`, en: `Git working tree has ${lines.length} modified files.` });
+            }
+          });
+        });
+      }
+    };
+  }
+  const workMatch = String(id || '').match(/^workspace:start_work(?::(.+))?$/);
+  if (workMatch) {
+    const projQuery = workMatch[1] || 'latest';
+    const proj = findProject(projQuery);
+    return {
+      id: `workspace:start_work`,
+      uz: `Ish rejimini faollashtirish (${proj.name})`,
+      en: `Work mode engaged (${proj.name})`,
+      type: 'custom',
+      handler: async () => {
+        setProtocolState('focus', 'Deep Focus', '#a855f7');
+        const { exec } = require('child_process');
+        exec('open "http://localhost:7890"');
+        exec(`open -a "Visual Studio Code" "${proj.path}"`);
+        exec('open -a "Claude"');
+        exec('open -a "Antigravity"');
+        exec('osascript -e "set volume output volume 45"');
+        exec('open "https://www.youtube.com/watch?v=Zi_XLOBDo_Y"');
+        return {
+          status: 'ok',
+          uz: `Ish rejimi faollashtirildi, ser. Dashboard tayyor, ${proj.name} loyihasi VS Code'da ochildi, Claude va Antigravity ishga tushirildi, hamda Billie Jean ijro etilmoqda.`,
+          en: `Work mode engaged, sir. Dashboard online, project ${proj.name} loaded in Visual Studio Code, Claude and Antigravity launched, and Billie Jean is playing. Ready for work.`
+        };
+      }
+    };
+  }
+
+  const openProjMatch = String(id || '').match(/^workspace:open_project(?::(.+))?$/);
+  if (openProjMatch) {
+    const projQuery = openProjMatch[1] || 'latest';
+    const proj = findProject(projQuery);
+    return {
+      id: `workspace:open_project`,
+      uz: `${proj.name} loyihasini ochish`,
+      en: `Opening project ${proj.name}`,
+      type: 'custom',
+      handler: async () => {
+        const { exec } = require('child_process');
+        exec(`open -a "Visual Studio Code" "${proj.path}"`);
+        return {
+          status: 'ok',
+          uz: `${proj.name} loyihasi Visual Studio Code'da ochildi.`,
+          en: `Project ${proj.name} opened in Visual Studio Code, sir.`
+        };
+      }
+    };
+  }
+
+  if (id === 'workspace:coding') {
+    return {
+      id: 'workspace:coding',
+      uz: 'Dasturlash muhitini ishga tushirish',
+      en: 'Preparing developer workspace',
+      type: 'custom',
+      handler: async () => {
+        setProtocolState('focus', 'Deep Focus', '#a855f7');
+        const { exec } = require('child_process');
+        exec('open -a "Visual Studio Code" /Users/mirazizerkinaliyev_dev/OPEN_CREW_JARVIS && osascript -e "set volume output volume 40"');
+        return { status: 'ok', uz: 'Dasturlash muhiti tayyorlandi, VS Code ochildi va fokus rejimi yoqildi.', en: 'Developer workspace ready. Visual Studio Code opened and focus mode engaged.' };
+      }
+    };
+  }
+  if (id === 'info:diagnostics') {
+    return {
+      id: 'info:diagnostics',
+      uz: 'Tizim diagnostikasi',
+      en: 'System diagnostics',
+      type: 'custom',
+      handler: async () => {
+        const { exec } = require('child_process');
+        return new Promise((resolve) => {
+          exec("BATT=$(pmset -g batt | grep -Eo '[0-9]+%' | head -1); DISK=$(df -h / | tail -1 | awk '{print $4}'); UPTIME=$(uptime | sed 's/.*up //;s/,.*load.*//'); echo \"Batareya: $BATT, Bo'sh disk: $DISK, Ish vaqti: $UPTIME\"", (err, stdout) => {
+            const out = (stdout || '').trim();
+            resolve({ status: 'ok', uz: `Tizim holati: ${out}`, en: `System diagnostics: ${out}` });
+          });
+        });
+      }
+    };
+  }
   return loadActions().find(a => a.id === id);
 }
 
 function runFastAction(id) {
   return new Promise((resolve) => {
-    preloadActions().then(() => {
+    preloadActions().then(async () => {
       const a = findAction(id);
       if (!a) { resolve({ status: 'error', message: "Noma'lum action: " + id }); return; }
 
@@ -84,6 +352,15 @@ function runFastAction(id) {
 
       try {
       switch (a.type) {
+        case 'custom': {
+          if (typeof a.handler === 'function') {
+            const res = await a.handler();
+            done(res.status || 'ok', res.uz || res.en || res.message || 'Bajarildi');
+          } else {
+            done('error', 'Handler topilmadi');
+          }
+          break;
+        }
         case 'open_app':
           execFile('open', ['-a', a.target], (err) => {
             if (err) done('error', a.target + " topilmadi yoki ochilmadi");
@@ -99,7 +376,7 @@ function runFastAction(id) {
         case 'applescript':
           execFile('osascript', ['-e', a.target], (err) => {
             if (err) done('error', 'AppleScript xatolik: ' + (err.message || '').slice(0, 200));
-            else done('ok', a.uz + ' — bajarildi');
+            else done('ok', a.en || (a.uz + ' — bajarildi'));
           });
           break;
         case 'shell':
@@ -114,6 +391,24 @@ function runFastAction(id) {
             if (err) done('error', 'Skrinshot olinmadi: ' + err.message);
             else done('ok', a.target === 'clipboard' ? 'Skrinshot olindi, clipboard\'da' : 'Skrinshot olindi, Desktop\'ga saqlandi');
           });
+          break;
+        }
+        case 'protocol': {
+          setProtocolState(a.mode, a.name, a.color);
+          if (a.sound) {
+            execFile('afplay', [a.sound], () => {});
+          }
+          if (a.script) {
+            execFile('osascript', ['-e', a.script], () => {
+              if (a.shell) execFile('/bin/bash', ['-c', a.shell], () => {});
+              done('ok', a.en);
+            });
+          } else if (a.shell) {
+            execFile('/bin/bash', ['-c', a.shell], () => {});
+            done('ok', a.en);
+          } else {
+            done('ok', a.en);
+          }
           break;
         }
         default:

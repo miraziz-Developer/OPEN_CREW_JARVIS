@@ -67,7 +67,7 @@ function buildVisionRequestBody(imageBase64, prompt, options = {}) {
     // sarflanadi — kam bo'lsa javob bo'sh qaytadi (finish_reason "length", sinovda tasdiqlandi).
     // 'low' effort tezlik uchun (bu tez-tez chaqiriladigan "bir qarashda ko'rish" vositasi).
     max_completion_tokens: options.structured ? 2000 : 800,
-    reasoning_effort: 'low',
+    ...(/(?:o1|o3|gpt-5)/i.test(VISION_DEPLOYMENT) ? { reasoning_effort: 'low' } : {}),
     ...(options.structured ? { response_format: { type: 'json_object' } } : {})
   };
 }
@@ -99,11 +99,20 @@ function describeImage(imagePath, prompt, options = {}) {
   if (!KEY || !ENDPOINT) throw new Error('AZURE_OPENAI_KEY yoki AZURE_OPENAI_ENDPOINT .env da yo\'q');
   const img = fs.readFileSync(imagePath).toString('base64');
   const body = JSON.stringify(buildVisionRequestBody(img, prompt, options));
-  const url = new URL(ENDPOINT + '/chat/completions');
+  const isAzure = ENDPOINT.includes('.azure.com');
+  const deployment = VISION_DEPLOYMENT || 'gpt-4.1-mini';
+  const url = isAzure
+    ? new URL(`${ENDPOINT}/openai/deployments/${deployment}/chat/completions?api-version=2024-10-21`)
+    : new URL(ENDPOINT + '/chat/completions');
+  const headers = {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+    ...(isAzure ? { 'api-key': KEY } : { 'Authorization': 'Bearer ' + KEY })
+  };
   return new Promise((resolve, reject) => {
     const req = https.request(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + KEY, 'Content-Length': Buffer.byteLength(body) },
+      headers,
       timeout: 30000
     }, (res) => {
       let d = '';
@@ -180,6 +189,21 @@ async function main() {
   }
 }
 
+async function inspectScreen(prompt = "What is open on the screen right now? Describe the app, window, and active content in 1-2 concise, clear sentences.") {
+  let imagePath = null;
+  try {
+    let context = null;
+    try { context = collectMacOSContext(); } catch (e) {}
+    imagePath = takeScreenshot();
+    const description = await describeImage(imagePath, buildGroundedPrompt(prompt, context));
+    return { status: 'ok', description, context };
+  } catch (err) {
+    return { status: 'error', message: err.message || String(err) };
+  } finally {
+    if (imagePath) { try { fs.unlinkSync(imagePath); } catch (e) {} }
+  }
+}
+
 if (require.main === module) main();
 
-module.exports = { describeImage, takeScreenshot, buildGroundedPrompt, buildVisionRequestBody, extractJson, normalizeVisionResult, LOCATE_PROMPT };
+module.exports = { inspectScreen, describeImage, takeScreenshot, buildGroundedPrompt, buildVisionRequestBody, extractJson, normalizeVisionResult, LOCATE_PROMPT };

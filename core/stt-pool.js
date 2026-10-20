@@ -1,6 +1,41 @@
 'use strict';
 
-const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, execFileSync } = require('child_process');
+
+function transcribeWithWhisper(audioWavBuffer, projectDir, locale = 'auto') {
+  const model = path.join(projectDir, 'models', 'whisper', 'ggml-base.bin');
+  if (!fs.existsSync(model)) return null;
+  const whisperBin = fs.existsSync('/opt/homebrew/bin/whisper-cli') ? '/opt/homebrew/bin/whisper-cli' : 'whisper-cli';
+  const tmpWav = path.join(os.tmpdir(), `whisper_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+  try {
+    fs.writeFileSync(tmpWav, audioWavBuffer);
+    const rawLang = String(locale || 'auto').trim().toLowerCase().split(/[-_]/)[0];
+    const lang = (rawLang && rawLang !== 'auto') ? rawLang : 'auto';
+    const out = execFileSync(whisperBin, ['-m', model, '-f', tmpWav, '-nt', '-ng', '-l', lang], {
+      encoding: 'utf8',
+      timeout: 10000,
+      env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}` },
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    let text = out
+      .replace(/\[\d+:\d+:\d+\.\d+ --> \d+:\d+:\d+\.\d+\]/g, '')
+      .replace(/\[(?:BLANK_AUDIO|no speech detected)\]/gi, '')
+      .trim();
+
+    // Shovqin, xo'rsinish yoki fon musiqasi (sighs, upbeat music, crickets chirping) ni haqiqiy nutq deb olmaslik
+    if (!text || /^\([^)]+\)$/.test(text) || /^[[({<].*?[\])}>]$/.test(text) || /^[*_~.?!,\s]+$/.test(text)) {
+      return null;
+    }
+    return text;
+  } catch (_) {
+    return null;
+  } finally {
+    try { fs.unlinkSync(tmpWav); } catch (_) {}
+  }
+}
 
 // ════════════════════════════════════════════
 // STT PROMISE POOL (pre-spawned children)
@@ -47,7 +82,14 @@ class STTPool {
     this._spawn(idx);
   }
 
-  async recognize(audioWavBuffer, locale = 'en-US') {
+  async recognize(audioWavBuffer, locale = 'auto') {
+    // 1. Local Whisper.cpp (0 API quota, Apple Silicon Metal accelerated, ~200ms)
+    const whisperText = transcribeWithWhisper(audioWavBuffer, this.projectDir, locale);
+    if (whisperText && whisperText.length > 0) {
+      return { status: 'ok', text: whisperText, confidence: 0.96, provider: 'whisper-metal' };
+    }
+
+    // 2. Direct Gemini Multimodal STT (if available)
     if (gemini && gemini.hasGemini()) {
       try {
         const text = await gemini.transcribeAudio({ audioBuffer: audioWavBuffer, locale });

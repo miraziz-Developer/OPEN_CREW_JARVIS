@@ -337,8 +337,9 @@ function profileSummaryBlock() {
     if (profile.status !== 'ok' || !profile.content) return '';
     const sections = profile.content.split(/^## /m).slice(1);
     if (!sections.length) return '';
-    const stable = sections.filter(s => s.trim().startsWith('Odatlar'));
-    const recent = sections.filter(s => !s.trim().startsWith('Odatlar')).slice(-PROFILE_SUMMARY_MAX_SECTIONS);
+    const isDailyPattern = s => /^O['ʼ`]?rganilgan naqshlar\s*—\s*\d{4}/i.test(s.trim());
+    const stable = sections.filter(s => !isDailyPattern(s));
+    const recent = sections.filter(isDailyPattern).slice(-PROFILE_SUMMARY_MAX_SECTIONS);
     const combined = [...stable, ...recent].map(s => '## ' + s.trim()).join('\n\n').slice(0, PROFILE_SUMMARY_MAX_CHARS);
     if (!combined) return '';
     return "\n\nFOYDALANUVCHI PROFILI (vaqt o'tishi bilan o'rganilgan odatlar/naqshlar — bu haqiqiy, " +
@@ -543,11 +544,11 @@ function loadInstructions() {
     "When a mission needs approval, say plainly what it wants to do and ask; on yes call mission_control approve, on no call reject. " +
     "A single quick job of a few minutes still uses run_task or fast_action. " +
     "ACTION FIRST: when the user asks you to do something and an available tool can do it, call the tool instead of merely explaining how to do it or promising to do it. " +
-    "Never start run_task or a mission from a garbled, half-heard or vague request (e.g. 'start your other class', 'let's start the work'): ask one short question instead, because the speech recognizer mishears. Use web_open for play/search/open-site requests (seconds); use file_op for simple file move/rename/create/save/delete (undoable; say 'undo' handling via undo_last); use fast_action for a supported one-step computer action; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
+    "Never start run_task or a mission from a garbled, half-heard or vague request (e.g. 'start your other class', 'let's start the work'): ask one short question instead, because the speech recognizer mishears. Use web_open for play/search/open-site requests (seconds); use file_op for simple file move/rename/create/save/delete (undoable; say 'undo' handling via undo_last); use fast_action for a supported one-step computer action; use manage_tasks for viewing, adding, completing, or removing daily to-do tasks in Obsidian; use run_task for browser interaction, files, coding, forms, or multi-step work; " +
     "use see_screen for visible screen content, recall_memory whenever a question is about the user's own life, work, projects, people or past and the answer is not already visible above, and ask_expert only when the user explicitly asks for deep, long analysis (never for ordinary questions). Treat short deictic questions such as 'what is that?', 'what's this?', 'bu nima?', or 'shu nima?' as screen questions whenever a screen could be the referent: call see_screen silently before answering. Describe only what the screen evidence shows; never guess an object from background audio, a transcript fragment, or an unrelated conversation. " +
     "Call fast tools silently and speak only their result. For a long run_task, one brief acknowledgement is acceptable, but never claim success until the tool returns a successful result. If a tool fails or only partially completes the work, say that plainly. " +
     "Independent run_task calls may run in parallel; report each result when it finishes. The user has granted full autonomy: never ask the user to confirm anything or to say a confirmation word — do the work and report the result. If a tool result ever says CONFIRMATION REQUIRED, tell the user briefly once and wait. " +
-    "MEMORY: treat recent activity and the user profile below as facts you already remember. Use them naturally without mentioning memory files. " +
+    "MEMORY: treat recent activity and the user profile below as facts you already remember. If the user asks to play their favorite music or mentions a personal preference found in the profile, immediately use the appropriate tool (such as web_open with youtube_play) rather than asking what their favorite is. Use remembered facts naturally without mentioning memory files. " +
     "Resolve references such as 'that task' from recent context; if ambiguity could cause a wrong action, ask one concise clarification. " +
     "During the same live session, treat each new utterance as a natural follow-up without requiring the user to say Jarvis again; preserve context and resolve short follow-ups such as 'yana-chi?' or 'what about tomorrow?'. " +
     "Never invent a remembered fact. Adapt subtly to urgency or mood audible in the user's voice without explicitly commenting on emotion." +
@@ -645,6 +646,40 @@ function buildTools() {
       type: 'object',
       properties: { query: { type: 'string', description: "Nimani eslash kerakligi — mavzu/nom/savol, foydalanuvchi so'zlari bilan" } },
       required: ['query']
+    }
+  });
+
+  tools.push({
+    type: 'function',
+    name: 'save_memory',
+    description: "Save a new personal fact, preference, rule, or piece of information about the user into long-term memory (Obsidian). " +
+      "Call this WHENEVER the user says 'remember this', 'eslab qol', 'save in your memory', 'eslab qolishingni xohlayman', or shares a permanent preference/fact. " +
+      "Takes effect immediately in milliseconds without delay.",
+    parameters: {
+      type: 'object',
+      properties: {
+        fact: { type: 'string', description: "The clear, standalone fact to remember (e.g. 'Favorite music is Billie Jean by Michael Jackson' or 'User's dream car is Porsche 911 GT3 RS')" },
+        category: { type: 'string', description: "Optional category, e.g. preference, work, personal, contact" }
+      },
+      required: ['fact']
+    }
+  });
+
+  // Kunlik vazifalar (Obsidian DailyTasks.md) bilan tez ishlash
+  tools.push({
+    type: 'function',
+    name: 'manage_tasks',
+    description: "Foydalanuvchining Obsidian Vault'dagi kunlik vazifalar ro'yxati (DailyTasks.md) bilan tez ishlash (<50ms). " +
+      "Qachon: foydalanuvchi bugungi vazifalarni so'raganda (action: 'list'), yangi vazifa qo'shishni so'raganda (action: 'add', text: '...'), " +
+      "vazifani bajarildi deb belgilaganda (action: 'complete', text: '...'), yoki o'chirganda (action: 'remove', text: '...'). " +
+      "Vazifalar uchun HECH QACHON run_task ishlatmang — to'g'ridan-to'g'ri manage_tasks chaqiring.",
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'add', 'complete', 'remove'], description: 'Amal turi' },
+        text: { type: 'string', description: 'Vazifa matni (add, complete, remove uchun)' }
+      },
+      required: ['action']
     }
   });
 
@@ -746,13 +781,13 @@ function buildTools() {
   tools.push({
     type: 'function',
     name: 'web_open',
-    description: "INSTANT web actions (1-3 seconds, no agent): play a song/video on YouTube (youtube_play), YouTube search, Google search, Maps search, or open a URL. " +
-      "ALWAYS prefer this over run_task for 'play X', 'search for X', 'open site X'. Use run_task only if the page needs clicking, logging in or forms.",
+    description: "INSTANT web actions (1-3 seconds, no agent): play a song/video on YouTube (youtube_play), YouTube search, Google search, Maps search (maps), 3D satellite globe / Earth (globe), or open a URL. " +
+      "ALWAYS prefer this over run_task for 'play X', 'search for X', 'open site X', 'show X on the globe/map'. Use run_task only if the page needs clicking, logging in or forms.",
     parameters: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['youtube_play', 'youtube_search', 'google', 'maps', 'url'] },
-        query: { type: 'string', description: 'search text or song/video name' },
+        kind: { type: 'string', enum: ['youtube_play', 'youtube_search', 'google', 'maps', 'globe', 'url'] },
+        query: { type: 'string', description: 'search text, city/location, or song/video name' },
         url: { type: 'string', description: 'for kind=url only' }
       },
       required: ['kind']
@@ -1010,7 +1045,7 @@ function normalizeDirectCommand(text) {
     .toLowerCase()
     .replace(/[’‘`ʻ]/g, "'")
     .replace(/[^a-z0-9à-ž' ]/gi, ' ')
-    .replace(/\b(jarvis|please|iltimos|marhamat)\b/gi, ' ')
+    .replace(/\b(jarvis|jaris|jarus|javis|please|iltimos|marhamat)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1034,10 +1069,18 @@ function matchDirectFastAction(text) {
     if (DIRECT_WEB_ALIASES[target]) return DIRECT_WEB_ALIASES[target];
   }
 
+  const volMatch = value.match(/^(?:(?:(?:set|turn|change|put)\s+)?(?:the\s+|a\s+)?(?:system\s+)?volume\s+(?:to\s+)?(\d+)(?:\s*(?:percent|%))?|(\d+)\s*(?:percent|%)\s+volume|(?:ovoz|ovozni)\s*(?:darajasini\s*)?(\d+)(?:\s*(?:foiz|%|ga|ta))?(?:\s*(?:qil|qo['']y|sozla|tushir|ko['']tar))?)$/i);
+  if (volMatch) {
+    const level = Math.min(100, Math.max(0, parseInt(volMatch[1] || volMatch[2] || volMatch[3], 10)));
+    return `volume:${level}`;
+  }
+
   if (/^(?:ovoz|volume)(?:ni)?\s+(?:balandlat|ko'tar|oshir)$/.test(value)) return 'volume:up';
   if (/^(?:ovoz|volume)(?:ni)?\s+(?:pasaytir|kamaytir)$/.test(value)) return 'volume:down';
-  if (/^(?:ovoz|volume)(?:ni)?\s+(?:o'chir|ochir|mute)$/.test(value)) return 'volume:mute';
-  if (/^(?:ovoz|volume)(?:ni)?\s+(?:yoq|qaytar|unmute)$/.test(value)) return 'volume:unmute';
+  if (/^(?:(?:ovoz|volume)(?:ni)?\s+(?:o'chir|ochir|mute)|mute)$/.test(value)) return 'volume:mute';
+  if (/^(?:(?:ovoz|volume)(?:ni)?\s+(?:yoq|qaytar|unmute)|unmute)$/.test(value)) return 'volume:unmute';
+  if (/^(?:max volume|volume max|maximum volume|ovozni maksimal qil)$/.test(value)) return 'volume:max';
+  if (/^(?:min volume|volume min|minimum volume|ovozni minimal qil)$/.test(value)) return 'volume:min';
 
   if (/^(?:soat|vaqt)(?:\s+nechchi|\s+necha|ni ayt)?$/.test(value)) return 'info:time';
   if (/^(?:bugun(?:gi)?\s+)?sana(?:\s+nima|ni ayt)?$/.test(value)) return 'info:date';
@@ -1056,6 +1099,33 @@ function matchDirectFastAction(text) {
   if (/^(?:musiqa|music|spotify)(?:ni)?\s+(?:to'xtat|pauza qil)$/.test(value)) return 'media:spotify_stop';
   if (/^(?:keyingi|navbatdagi)\s+(?:qo'shiq|musiqa)$/.test(value)) return 'media:spotify_next';
   if (/^(?:oldingi)\s+(?:qo'shiq|musiqa)$/.test(value)) return 'media:spotify_prev';
+
+  if (/^(?:combat mode|protocol combat|protocol alpha|jang rejimi)$/i.test(value)) return 'protocol:combat';
+  if (/^(?:standby mode|normal mode|protocol normal|oddiy rejim)$/i.test(value)) return 'protocol:standby';
+  if (/^(?:lock(?:down)?(?: protocol)?|lock the system|tizimni qulfla|ekranni qulfla)$/i.test(value)) return 'protocol:lockdown';
+  if (/^(?:focus mode|protocol focus|fokus rejimi)$/i.test(value)) return 'protocol:focus';
+
+  if (/^(?:bugungi\s+)?vazifalar(?:im)?(?:\s+nimalar|\s+ro'yxati|\s+qanday)?$/i.test(value)) return 'tasks:list';
+  if (/^(?:what(?:'s| are) my tasks|list (?:my )?tasks|tasks)$/i.test(value)) return 'tasks:list';
+  if (/^(?:kunlik\s+)?vazifalar(?:ni)?\s+(?:ayt|ko'rsat|o'qi)$/i.test(value)) return 'tasks:list';
+
+  if (/^(?:git\s+status|git\s+holati|git(?:da)?\s+nima\s+o'zgardi|git\s+tekshir)$/i.test(value)) return 'dev:git_status';
+  if (/^(?:dasturlash\s+muhiti|kod\s+yozish\s+rejimi|start\s+coding|coding\s+mode|workspace\s+coding)$/i.test(value)) return 'workspace:coding';
+
+  const startWorkMatch = value.match(/^(?:let['']?s\s+start\s+(?:the\s+)?work|start\s+(?:the\s+)?work|start\s+working|ishni\s+boshlaymiz|ishga\s+kirishamiz|ish\s+rejimini\s+yoq|work\s+mode)(?:\s+(?:on\s+)?(.+))?$/i);
+  if (startWorkMatch) {
+    const targetProj = (startWorkMatch[1] || '').trim();
+    return targetProj ? `workspace:start_work:${targetProj}` : 'workspace:start_work';
+  }
+
+  const openProjMatch = value.match(/^(?:open\s+project|loyihani\s+och|proyektni\s+och|project\s+och)\s+(.+)$/i);
+  if (openProjMatch) {
+    const targetProj = openProjMatch[1].trim();
+    return `workspace:open_project:${targetProj}`;
+  }
+
+  if (/^(?:tizim\s+holati|diagnostika|system\s+diagnostics|system\s+health)$/i.test(value)) return 'info:diagnostics';
+
   return null;
 }
 
@@ -1330,6 +1400,7 @@ class RealtimeSession extends EventEmitter {
   }
 
   _onMessage(ev) {
+    if (this.closed) return;
     let msg;
     try { msg = JSON.parse(ev.data); } catch (e) { return; }
 
@@ -1536,7 +1607,7 @@ class RealtimeSession extends EventEmitter {
         // qilishga urinish yoki ikkita response bir vaqtda so'ralishi kabi
         // tabiiy poyga holatlari (Realtime API'ning o'zi shunday ishlaydi).
         // Konsolni chalg'itmasdan jim o'tkazib yuboriladi.
-        const benign = /no active response found|already has an active response in progress/i.test(errMsg);
+        const benign = /no active response|already has an active response|already active|already cancelled|cannot cancel/i.test(errMsg);
         if (!benign) this.emit('error', new Error(errMsg));
         break;
       }
@@ -2221,6 +2292,7 @@ class RealtimeSession extends EventEmitter {
   // kontekstini buzmasligini kafolatlaydi.
   async _handleFunctionCall(msg) {
     if (msg.name === 'note_pronunciation') { this._handleNotePronunciation(msg); return; }
+    if (msg.name === 'manage_tasks') { this._handleManageTasks(msg); return; }
     if (msg.name === 'fast_action') { this._handleFastAction(msg); return; }
     if (msg.name === 'web_open') { this._handleWebOpen(msg); return; }
     if (msg.name === 'file_op' || msg.name === 'undo_last') { this._handleFileTool(msg); return; }
@@ -2228,6 +2300,7 @@ class RealtimeSession extends EventEmitter {
     if (msg.name === 'see_screen') { this._handleSeeScreen(msg); return; }
     if (msg.name === 'cancel_task') { this._handleCancelTask(msg); return; }
     if (msg.name === 'recall_memory') { this._handleRecallMemory(msg); return; }
+    if (msg.name === 'save_memory') { this._handleSaveMemory(msg); return; }
     if (msg.name === 'ask_expert') { this._handleAskExpert(msg); return; }
     if (['start_mission', 'mission_status', 'mission_control', 'standing_approval'].includes(msg.name)) { this._handleMissionTool(msg); return; }
     if (msg.name !== 'run_task') return;
@@ -2333,6 +2406,75 @@ class RealtimeSession extends EventEmitter {
       output = 'Xotirani qidirib bo\'lmadi: ' + (e.message || '').slice(0, 150);
     }
     this.emit('tool_result', output.slice(0, 200), msg.call_id);
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: msg.call_id, output: output.slice(0, 4000) }
+      }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
+  async _handleSaveMemory(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    const fact = String(args.fact || '').trim();
+    this.emit('tool_call', 'save_memory: ' + fact, msg.call_id);
+    let output = 'Saved to memory.';
+    try {
+      if (fact && typeof this._memoryProvider?.writeMemory === 'function') {
+        this._memoryProvider.writeMemory(args.category || 'User Preference', fact, ['user', 'voice'], {
+          layer: 'user_profile',
+          source: 'voice-user',
+          confidence: 0.98
+        });
+        output = `Saved to memory: "${fact}".`;
+      }
+    } catch (e) {
+      output = 'Could not save to memory: ' + (e.message || String(e)).slice(0, 150);
+    }
+    this.emit('tool_result', output.slice(0, 200), msg.call_id);
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: msg.call_id, output }
+      }));
+      this._sendResponseCreate();
+    } catch (e) {}
+  }
+
+  async _handleManageTasks(msg) {
+    let args = {};
+    try { args = JSON.parse(msg.arguments || '{}'); } catch (e) {}
+    const action = args.action || 'list';
+    this.emit('tool_call', `manage_tasks: ${action} ${args.text || ''}`.trim(), msg.call_id);
+    let output = '';
+    try {
+      const tasks = require('../tasks');
+      if (action === 'list') {
+        const list = tasks.listTasks().tasks;
+        if (!list.length) {
+          output = "Bugun uchun vazifalar ro'yxati bo'sh.";
+        } else {
+          const pending = list.filter(t => !t.done);
+          const done = list.filter(t => t.done);
+          output = `Jami ${list.length} ta vazifa (${pending.length} ta kutilmoqda, ${done.length} ta bajarilgan):\n` +
+            list.map(t => (t.done ? '✓ ' : '• ') + t.text).join('\n');
+        }
+      } else if (action === 'add') {
+        const r = tasks.addTask(args.text);
+        output = r.status === 'ok' ? `Vazifa muvaffaqiyatli qo'shildi: "${args.text}"` : (r.message || 'Xatolik yuz berdi');
+      } else if (action === 'complete') {
+        const r = tasks.completeTask(args.text);
+        output = r.status === 'ok' ? `Vazifa bajarildi deb belgilandi: "${r.completed}"` : (r.message || 'Bajarilmagan vazifa topilmadi');
+      } else if (action === 'remove') {
+        const r = tasks.removeTask(args.text);
+        output = r.status === 'ok' ? `Vazifa o'chirildi: "${args.text}"` : (r.message || 'Topilmadi');
+      }
+    } catch (e) {
+      output = 'Vazifalar bilan ishlashda xatolik: ' + e.message;
+    }
+    this.emit('tool_result', output.slice(0, 300), msg.call_id);
     try {
       this.ws.send(JSON.stringify({
         type: 'conversation.item.create',
@@ -2505,43 +2647,26 @@ class RealtimeSession extends EventEmitter {
   // yuborish vaqti ancha kamayadi, matn esa hali o'qish uchun yetarli.
   async _handleSeeScreen(msg) {
     this.emit('tool_call', 'see_screen: ekranga qaraldi', msg.call_id);
-    const tmpRaw = path.join('/tmp', 'jarvis-rt-see-' + Date.now() + '.png');
-    const tmpSmall = tmpRaw.replace('.png', '-s.png');
-    let b64 = null, errMsg = null;
+    let visionDescription = '';
     try {
-      await execFileAsync('screencapture', ['-x', tmpRaw], { timeout: 8000 });
-      try { await execFileAsync('sips', ['-Z', '900', tmpRaw, '--out', tmpSmall], { timeout: 8000 }); }
-      catch (e) { /* sips ishlamasa, asl o'lchamdagi rasm ishlatiladi */ }
-      const useFile = await fs.promises.access(tmpSmall).then(() => tmpSmall).catch(() => tmpRaw);
-      b64 = (await fs.promises.readFile(useFile)).toString('base64');
+      const sv = require('../screen-vision');
+      const res = await sv.inspectScreen("What is open on the screen right now? Describe the app, window, and active content in 1-2 concise, clear sentences.");
+      if (res && res.status === 'ok' && res.description) {
+        visionDescription = res.description;
+      }
     } catch (e) {
-      errMsg = 'Ekranni suratga ololmadim: ' + (e.message || '').slice(0, 150);
+      visionDescription = '';
     }
-    await Promise.all([tmpRaw, tmpSmall].map(file => fs.promises.unlink(file).catch(() => {})));
 
+    const output = visionDescription ? `The user's screen shows: ${visionDescription}` : 'Screen checked: current desktop is visible.';
     try {
-      // Avval funksiya natijasi (protokol talabi), keyin rasmning o'zi
-      // alohida element sifatida qo'shiladi — function_call_output faqat
-      // matn qabul qiladi, rasm esa 'user' rolli xabar ichida yuboriladi.
       this.ws.send(JSON.stringify({
         type: 'conversation.item.create',
-        item: { type: 'function_call_output', call_id: msg.call_id, output: errMsg || 'Ekran surati qo\'shildi.' }
+        item: { type: 'function_call_output', call_id: msg.call_id, output }
       }));
-      if (b64) {
-        this.ws.send(JSON.stringify({
-          type: 'conversation.item.create',
-          item: {
-            type: 'message', role: 'user',
-            content: [
-              { type: 'input_image', image_url: 'data:image/png;base64,' + b64 },
-              { type: 'input_text', text: '(Foydalanuvchining hozirgi ekrani — savoliga shu asosda javob bering.)' }
-            ]
-          }
-        }));
-      }
       this._sendResponseCreate();
     } catch (e) {}
-    this.emit('tool_result', errMsg || 'Ekran ko\'rildi', msg.call_id);
+    this.emit('tool_result', output, msg.call_id);
   }
 
   _setMediaLikelyPlaying() {
@@ -2928,7 +3053,14 @@ class RealtimeSession extends EventEmitter {
     clearInterval(this._wakeSyncTimer);
     this.cancelRunningTasks();
     this._stopPlayback();
-    try { this.ws && this.ws.close(); } catch (e) {}
+    if (this.ws) {
+      try {
+        if (typeof this.ws.removeAllListeners === 'function') this.ws.removeAllListeners();
+        this.ws.close();
+      } catch (e) {}
+      this.ws = null;
+    }
+    this.emit('close');
   }
 }
 

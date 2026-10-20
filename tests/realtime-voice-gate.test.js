@@ -896,6 +896,13 @@ test('safe common voice commands map to deterministic fast actions', () => {
   assert.equal(matchDirectFastAction('ovozni balandlat'), 'volume:up');
   assert.equal(matchDirectFastAction('soat nechchi?'), 'info:time');
   assert.equal(matchDirectFastAction('skrinshot ol'), 'screenshot:full');
+  assert.equal(matchDirectFastAction('vazifalarim nimalar'), 'tasks:list');
+  assert.equal(matchDirectFastAction('what are my tasks'), 'tasks:list');
+  assert.equal(matchDirectFastAction('git status'), 'dev:git_status');
+  assert.equal(matchDirectFastAction('dasturlash muhiti'), 'workspace:coding');
+  assert.equal(matchDirectFastAction('lets start work'), 'workspace:start_work');
+  assert.equal(matchDirectFastAction('open project forex'), 'workspace:open_project:forex');
+  assert.equal(matchDirectFastAction('tizim holati'), 'info:diagnostics');
   assert.equal(matchDirectFastAction('Telegramni yop'), null);
   assert.equal(matchDirectFastAction('Chrome ochib email yubor'), null);
 });

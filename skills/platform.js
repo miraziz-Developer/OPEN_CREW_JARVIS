@@ -3,9 +3,16 @@
 const { SkillPlatform } = require('../core/skill-platform');
 
 function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
+  const getEnv = (key, fallback = '') => {
+    if (typeof env === 'function') {
+      const v = env(key);
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return process.env[key] !== undefined ? process.env[key] : fallback;
+  };
   const platform = new SkillPlatform(platformOptions);
   // Keep the outer skill deadline beyond the HTTP request deadline.
-  const deepThinkTimeoutMs = Math.max(30000, parseInt(env?.('DEEP_THINK_TIMEOUT_MS'), 10) || 240000) + 5000;
+  const deepThinkTimeoutMs = Math.max(30000, parseInt(getEnv('DEEP_THINK_TIMEOUT_MS'), 10) || 240000) + 5000;
   platform.register({
     id: 'google-calendar', version: '1.0.0', capabilities: ['calendar.read', 'calendar.write'],
     actions: {
@@ -149,16 +156,18 @@ function createSkillPlatform({ projectDir, env, ...platformOptions } = {}) {
       synthesize: (input) => new Promise((resolve, reject) => {
         const tmpIn = '/tmp/tts_' + Date.now() + '.json';
         fs.writeFileSync(tmpIn, JSON.stringify({ text: input.text }), 'utf8');
-        const proc = spawn('node', ['skills/azure-tts/index.js'], {
+        const proc = spawn(process.execPath || 'node', ['skills/azure-tts/index.js'], {
           cwd: projectDir,
           env: {
             ...process.env,
-            AZURE_SPEECH_KEY: env('AZURE_SPEECH_KEY'),
-            AZURE_SPEECH_REGION: env('AZURE_SPEECH_REGION'),
-            AZURE_SPEECH_VOICE: env('AZURE_SPEECH_VOICE') || 'en-US-GuyNeural',
-            AZURE_SPEECH_LANGUAGE: env('AZURE_SPEECH_LANGUAGE') || 'en-US',
-            AZURE_SPEECH_RATE_PERCENT: env('AZURE_SPEECH_RATE_PERCENT') || '-12',
-            AZURE_SPEECH_PITCH_PERCENT: env('AZURE_SPEECH_PITCH_PERCENT') || '-12'
+            PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`,
+            JARVIS_VOICE: getEnv('JARVIS_VOICE', 'en-US-ChristopherNeural'),
+            AZURE_SPEECH_KEY: getEnv('AZURE_SPEECH_KEY'),
+            AZURE_SPEECH_REGION: getEnv('AZURE_SPEECH_REGION'),
+            AZURE_SPEECH_VOICE: getEnv('JARVIS_VOICE') || getEnv('AZURE_SPEECH_VOICE') || 'en-US-ChristopherNeural',
+            AZURE_SPEECH_LANGUAGE: getEnv('AZURE_SPEECH_LANGUAGE', 'en-US'),
+            AZURE_SPEECH_RATE_PERCENT: getEnv('AZURE_SPEECH_RATE_PERCENT', '-12'),
+            AZURE_SPEECH_PITCH_PERCENT: getEnv('AZURE_SPEECH_PITCH_PERCENT', '-12')
           }
         });
         let out = '';

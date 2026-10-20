@@ -105,6 +105,17 @@ function removeTask(text) {
   return { status: 'ok', removed };
 }
 
+// ── Vazifani bajarildi deb belgilash ───────────────────────────────────
+function completeTask(text) {
+  const raw = readRaw();
+  const lines = raw.split('\n');
+  const idx = lines.findIndex(l => /^- \[[ ]\]/.test(l) && l.toLowerCase().includes(String(text).toLowerCase()));
+  if (idx === -1) return { status: 'error', message: 'Bajarilmagan vazifa topilmadi: ' + text };
+  lines[idx] = lines[idx].replace(/^- \[[ ]\]/, '- [x]');
+  fs.writeFileSync(TASKS_FILE, lines.join('\n'), 'utf8');
+  return { status: 'ok', completed: lines[idx].replace(/^- \[x\]\s*/, '') };
+}
+
 // ── Faqat aktiv (bajarilmagan) vazifalar ────────────────────────────────
 function activeTasks() {
   return listTasks().tasks.filter(t => !t.done).map(t => t.text);
@@ -118,13 +129,14 @@ function main() {
   let result;
   switch (input.action) {
     case 'add': result = addTask(input.text, input.force); break;
+    case 'complete': result = completeTask(input.text); break;
     case 'remove': result = removeTask(input.text); break;
     case 'list': result = listTasks(); break;
-    default: result = { status: 'error', message: 'Noma\'lum action: ' + input.action + ' (add|remove|list)' };
+    default: result = { status: 'error', message: 'Noma\'lum action: ' + input.action + ' (add|complete|remove|list)' };
   }
   console.log(JSON.stringify(result));
 }
 
 if (require.main === module) main();
 
-module.exports = { listTasks, addTask, removeTask, activeTasks, TASKS_FILE };
+module.exports = { listTasks, addTask, completeTask, removeTask, activeTasks, TASKS_FILE };

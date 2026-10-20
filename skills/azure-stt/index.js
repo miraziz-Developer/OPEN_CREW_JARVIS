@@ -12,12 +12,22 @@ const readline = require('readline');
 let gemini = null;
 try { gemini = require('../../core/gemini'); } catch (_) {}
 
-const REGION = process.env.AZURE_SPEECH_REGION || 'southeastasia';
-const KEY    = process.env.AZURE_SPEECH_KEY;
-const LOCALE = process.env.AZURE_SPEECH_LANGUAGE || process.env.AZURE_STT_LOCALE || 'en-US';
-const TRANSCRIBE_ENDPOINT = process.env.AZURE_TRANSCRIBE_ENDPOINT;
-const TRANSCRIBE_KEY = process.env.AZURE_TRANSCRIBE_KEY;
-const TRANSCRIBE_MODEL = process.env.AZURE_TRANSCRIBE_DEPLOYMENT || 'gpt-live-transcribe';
+let cachedEnv = null;
+function env(key, fallback) {
+  if (process.env[key] !== undefined) return process.env[key];
+  if (cachedEnv === null) {
+    try { cachedEnv = fs.readFileSync(require('path').join(__dirname, '../../.env'), 'utf8'); } catch (_) { cachedEnv = ''; }
+  }
+  const match = cachedEnv.match(new RegExp('^' + key + '=(.*)$', 'm'));
+  return match ? match[1].trim() : fallback;
+}
+
+const REGION = env('AZURE_SPEECH_REGION', 'uaenorth');
+const KEY    = env('AZURE_SPEECH_KEY');
+const LOCALE = env('AZURE_SPEECH_LANGUAGE', env('AZURE_STT_LOCALE', 'en-US'));
+const TRANSCRIBE_ENDPOINT = env('AZURE_TRANSCRIBE_ENDPOINT');
+const TRANSCRIBE_KEY = env('AZURE_TRANSCRIBE_KEY');
+const TRANSCRIBE_MODEL = env('AZURE_TRANSCRIBE_DEPLOYMENT', 'gpt-live-transcribe');
 
 function ensureKey() {
   if (!KEY && (!gemini || !gemini.hasGemini())) {
@@ -39,8 +49,7 @@ function loadAudio(input) {
 }
 
 async function sttRest(audioBuffer, locale) {
-  ensureKey();
-  const useLocale = locale || LOCALE;
+  const useLocale = (!locale || locale === 'auto') ? (process.env.AZURE_SPEECH_LANGUAGE || LOCALE || 'en-US') : locale;
   const query = '?language=' + encodeURIComponent(useLocale) + '&format=detailed';
 
   return new Promise((resolve, reject) => {

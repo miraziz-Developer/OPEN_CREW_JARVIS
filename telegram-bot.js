@@ -63,7 +63,7 @@ const { parseOwnerIds } = require('./core/telegram-owner');
 let ownerIds = parseOwnerIds(getEnv('TELEGRAM_CHAT_ID'), getEnv('TELEGRAM_OWNER_IDS'));
 let ownerId = ownerIds[0] || '';
 const { createPairing } = require('./core/telegram-pairing');
-const pairing = createPairing({ file: path.join(__dirname, '.run', 'telegram-pair-code.json'), envFile: path.join(__dirname, '.env') });
+const pairing = createPairing({ file: path.join(__dirname, '.run', 'telegram-pair-code.json'), envFile: path.join(__dirname, '.env'), ttlMs: 24 * 60 * 60 * 1000 });
 const buildOwnerHandler = ids => createOwnerUpdateHandler({
   ownerIds: ids.join(','),
   dispatch: update => {
@@ -76,7 +76,7 @@ let ownerHandler = buildOwnerHandler(ownerIds);
 if (!isPaired()) {
   const state = pairing.ensureCode();
   console.error('Telegram locked: no owner yet. Pair from your private Telegram chat with the bot: /pair ' + state.code +
-    ' (code valid ~15 min, stored in .run/telegram-pair-code.json).');
+    ' (code valid ~24h, stored in .run/telegram-pair-code.json).');
 }
 const telegramPoller = createTelegramPoller({
   token: TOKEN,
@@ -101,7 +101,8 @@ const telegramPoller = createTelegramPoller({
         } else if (result.reason === 'locked') {
           bot.sendMessage(msg.chat.id, '⏳ Ko\'p xato urinishlar tufayli ulanish vaqtincha bloklandi. Biroz kuting.').catch(() => {});
         } else {
-          bot.sendMessage(msg.chat.id, '🔒 JARVIS ulanish kutmoqda.\n\nEgalikni tasdiqlash uchun terminaldagi 6 xonali kodni yuboring:\n/pair <KOD>').catch(() => {});
+          const currentPair = pairing.ensureCode();
+          bot.sendMessage(msg.chat.id, `🔒 JARVIS ulanish kutmoqda.\n\nEgalikni tasdiqlash va masofaviy boshqaruvni faollashtirish uchun quyidagi buyruqni yuboring:\n/pair ${currentPair.code}`).catch(() => {});
         }
       }
       return false;
@@ -118,9 +119,16 @@ async function ttsToFile(text, timing = {}) {
   return new Promise((resolve) => {
     const tmpIn = '/tmp/_tts_in_' + Date.now() + '.json';
     fs.writeFileSync(tmpIn, JSON.stringify({ text }), 'utf8');
-    const proc = spawn('node', ['skills/azure-tts/index.js'], {
+    const proc = spawn(process.execPath || 'node', ['skills/azure-tts/index.js'], {
       cwd: PROJECT_DIR,
-      env: { ...process.env, AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, AZURE_SPEECH_VOICE }
+      env: {
+        ...process.env,
+        PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`,
+        JARVIS_VOICE: process.env.JARVIS_VOICE || 'en-US-ChristopherNeural',
+        AZURE_SPEECH_KEY,
+        AZURE_SPEECH_REGION,
+        AZURE_SPEECH_VOICE: process.env.JARVIS_VOICE || AZURE_SPEECH_VOICE || 'en-US-ChristopherNeural'
+      }
     });
     let out = '';
     proc.stdout.on('data', d => (out += d.toString()));

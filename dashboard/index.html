@@ -112,9 +112,81 @@ body.booted header{animation:panelIn .4s backwards}
   #reactorWrap{width:min(60vw,240px); height:min(60vw,240px)}
   .col{order:2; overflow:visible; flex-shrink:0}
 }
+
+/* Protocol & Visual Effects */
+#protocolBar {
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+  margin: 6px 0 10px; z-index: 10;
+}
+.proto-btn {
+  background: #081a2acc; border: 1px solid var(--cyan-dim); color: var(--cyan);
+  font-family: 'Orbitron', sans-serif; font-size: 10px; letter-spacing: 2px;
+  padding: 6px 14px; cursor: pointer; transition: all .2s;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+}
+.proto-btn:hover {
+  background: #00e5ff22; border-color: var(--cyan); box-shadow: 0 0 12px var(--cyan);
+  transform: translateY(-1px);
+}
+.proto-btn.combat-btn {
+  border-color: #ff3b3066; color: #ff4d5e;
+}
+.proto-btn.combat-btn:hover {
+  background: #ff3b3033; border-color: #ff3b30; box-shadow: 0 0 15px #ff3b30;
+}
+.proto-btn.lock-btn {
+  border-color: #ff2a2a66; color: #ff5555;
+}
+
+/* Combat Red Alert Mode */
+#combatAlert {
+  position: fixed; inset: 0; pointer-events: none; z-index: 4;
+  opacity: 0; transition: opacity .4s ease;
+}
+body.mode-combat #combatAlert {
+  opacity: 1;
+  animation: combatPulse 2s ease-in-out infinite;
+}
+body.mode-combat {
+  --cyan: #ff3344;
+  --cyan-dim: #991122;
+  --teal: #ff5566;
+  --panel: #20080bcc;
+  --line: #451016;
+}
+body.mode-combat header h1 {
+  color: #ff2a2a;
+  text-shadow: 0 0 20px #ff2a2a;
+}
+body.mode-combat .panel {
+  border-color: #551118;
+}
+@keyframes combatPulse {
+  0%, 100% { box-shadow: inset 0 0 60px #ff003344, inset 0 0 20px #ff003388; }
+  50% { box-shadow: inset 0 0 140px #ff003399, inset 0 0 50px #ff0033ff; }
+}
+
+/* Laser Scanner Beam */
+#scannerBeam {
+  position: fixed; left: 0; right: 0; height: 3px; z-index: 99; pointer-events: none;
+  background: linear-gradient(90deg, transparent, #00e5ff 20%, #ffffff 50%, #00e5ff 80%, transparent);
+  box-shadow: 0 0 20px #00e5ff, 0 0 40px #00e5ff, 0 0 60px #19f0d8;
+  opacity: 0; top: 0;
+}
+#scannerBeam.scanning {
+  animation: scanDown 2.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes scanDown {
+  0% { top: 0%; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
 </style>
 </head>
 <body>
+<div id="combatAlert"></div>
+<div id="scannerBeam"></div>
 <div id="boot">
   <div id="bootLogo">J.A.R.V.I.S</div>
   <div id="bootSub">OPEN CREW JARVIS — O'ZBEK TILIDAGI YORDAMCHI</div>
@@ -175,6 +247,14 @@ body.booted header{animation:panelIn .4s backwards}
       <canvas id="reactor"></canvas>
       <div id="coreState"><div class="st" id="stateLabel">STANDBY</div><div class="hint" id="stateHint">TIZIM HOLATI KUZATILMOQDA</div></div>
     </div>
+    <div id="protocolBar">
+      <button class="proto-btn combat-btn" id="btnCombat" onclick="triggerProtocol('protocol:combat')">⚔️ COMBAT PROTOCOL</button>
+      <button class="proto-btn" id="btnStandby" onclick="triggerProtocol('protocol:standby')">🛡️ STANDBY</button>
+      <button class="proto-btn" id="btnGlobe" onclick="triggerGlobe()">🌍 3D GLOBE</button>
+      <button class="proto-btn" id="btnScan" onclick="triggerScreenScan()">👁️ SCAN SCREEN</button>
+      <button class="proto-btn lock-btn" id="btnLock" onclick="triggerProtocol('protocol:lockdown')">🔒 LOCKDOWN</button>
+      <button class="proto-btn" id="btnFs" onclick="toggleFullscreen()">⛶ FULLSCREEN</button>
+    </div>
     <div id="chatFeed"></div>
     <div id="chatRow">
       <input id="chatInput" placeholder="Jarvisga yozing…" autocomplete="off">
@@ -213,22 +293,129 @@ sizeCanvas(); addEventListener("resize",sizeCanvas);
 let rot=0, state="standby";
 const STATE_STYLE={
   standby:{speed:.15,color:"#00e5ff",glow:18,pulse:0},
-  active:{speed:.5,color:"#19f0d8",glow:30,pulse:1},
+  active:{speed:.45,color:"#19f0d8",glow:28,pulse:1},
   paused:{speed:.05,color:"#ff4d5e",glow:22,pulse:0},
   degraded:{speed:.3,color:"#ffb300",glow:26,pulse:.4},
+  user_speaking:{speed:.65,color:"#ffb300",glow:38,pulse:2.2},
+  thinking:{speed:2.2,color:"#c084fc",glow:45,pulse:1.8},
+  speaking:{speed:.95,color:"#00f0ff",glow:52,pulse:3},
+  combat:{speed:1.7,color:"#ff2a2a",glow:65,pulse:3.5},
+  lockdown:{speed:.02,color:"#ff1133",glow:55,pulse:0}
 };
+
+/* Audio Synthesizer for Hollywood UI Sounds */
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let actx = null;
+function playUiSound(type = 'beep') {
+  try {
+    if (!actx) actx = new AudioCtx();
+    if (actx.state === 'suspended') actx.resume();
+    const osc = actx.createOscillator();
+    const gain = actx.createGain();
+    osc.connect(gain);
+    gain.connect(actx.destination);
+    const now = actx.currentTime;
+
+    if (type === 'beep') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(1760, now + 0.08);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'combat') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(260, now);
+      osc.frequency.exponentialRampToValueAtTime(130, now + 0.35);
+      gain.gain.setValueAtTime(0.14, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      osc.start(now); osc.stop(now + 0.4);
+    } else if (type === 'scan') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.linearRampToValueAtTime(1400, now + 0.2);
+      osc.frequency.linearRampToValueAtTime(700, now + 0.4);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc.start(now); osc.stop(now + 0.45);
+    } else if (type === 'lock') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.setValueAtTime(320, now + 0.1);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc.start(now); osc.stop(now + 0.25);
+    }
+  } catch(_) {}
+}
+
 function drawRing(cx,cy,r,w,color,alpha,dash,offset){
   ctx.beginPath(); ctx.strokeStyle=color; ctx.globalAlpha=alpha; ctx.lineWidth=w;
   if(dash)ctx.setLineDash(dash); else ctx.setLineDash([]);
   ctx.lineDashOffset=offset||0;
   ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; ctx.setLineDash([]);
 }
+
 function frame(t){
   const s=STATE_STYLE[state]||STATE_STYLE.standby;
   rot+=s.speed;
   const W=cv.width,H=cv.height,cx=W/2,cy=H/2;
   const base=Math.min(W,H)*0.40;
   ctx.clearRect(0,0,W,H);
+
+  // 1. In combat mode: draw HUD targeting brackets and crosshair
+  if (state === 'combat') {
+    ctx.strokeStyle = '#ff2a2a';
+    ctx.lineWidth = 1.5 * devicePixelRatio;
+    ctx.globalAlpha = 0.65 + Math.sin(t / 150) * 0.3;
+    const bLen = base * 1.25, cLen = base * 0.2;
+    ctx.beginPath(); ctx.moveTo(cx - bLen, cy - bLen + cLen); ctx.lineTo(cx - bLen, cy - bLen); ctx.lineTo(cx - bLen + cLen, cy - bLen); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx + bLen - cLen, cy - bLen); ctx.lineTo(cx + bLen, cy - bLen); ctx.lineTo(cx + bLen, cy - bLen + cLen); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - bLen, cy + bLen - cLen); ctx.lineTo(cx - bLen, cy + bLen); ctx.lineTo(cx - bLen + cLen, cy + bLen); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx + bLen - cLen, cy + bLen); ctx.lineTo(cx + bLen, cy + bLen); ctx.lineTo(cx + bLen, cy + bLen - cLen); ctx.stroke();
+    ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.moveTo(cx - bLen * 1.08, cy); ctx.lineTo(cx - base * 0.6, cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx + base * 0.6, cy); ctx.lineTo(cx + bLen * 1.08, cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - bLen * 1.08); ctx.lineTo(cx, cy - base * 0.6); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy + base * 0.6); ctx.lineTo(cx, cy + bLen * 1.08); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 2. In user_speaking: draw acoustic expanding sonar ripples
+  if (state === 'user_speaking') {
+    for (let r = 0; r < 3; r++) {
+      const progress = ((t / 700 + r / 3) % 1);
+      const rippleR = base * (0.45 + progress * 0.7);
+      const alpha = (1 - progress) * 0.65;
+      ctx.beginPath();
+      ctx.strokeStyle = '#ffb300';
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.globalAlpha = alpha;
+      ctx.arc(cx, cy, rippleR, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // 3. In speaking / combat: draw 36 radial audio visualizer wavebars
+  if (state === 'speaking' || state === 'combat') {
+    for (let i = 0; i < 36; i++) {
+      const ang = (i / 36) * Math.PI * 2 + rot / 300;
+      const freq = Math.abs(Math.sin(t / 70 + i * 0.5) * Math.cos(t / 120 + i));
+      const barH = base * 0.04 + freq * base * (state === 'combat' ? 0.22 : 0.18);
+      const r1 = base * 1.12;
+      const r2 = r1 + barH;
+      ctx.beginPath();
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.globalAlpha = 0.5 + freq * 0.5;
+      ctx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+      ctx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   ctx.shadowColor=s.color; ctx.shadowBlur=s.glow*devicePixelRatio;
   const pulse=1+Math.sin(t/300)*0.012*(1+s.pulse*3);
   drawRing(cx,cy,base*pulse,2*devicePixelRatio,s.color,.9);
@@ -247,7 +434,9 @@ function frame(t){
   ctx.globalAlpha=1;
   ctx.shadowColor=s.color; ctx.shadowBlur=40*devicePixelRatio;
   const g=ctx.createRadialGradient(cx,cy,0,cx,cy,base*.42);
-  g.addColorStop(0,s.color+"55"); g.addColorStop(1,"transparent");
+  g.addColorStop(0,s.color+"66");
+  g.addColorStop(0.7,s.color+"22");
+  g.addColorStop(1,"transparent");
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(cx,cy,base*.42,0,Math.PI*2); ctx.fill();
   ctx.shadowBlur=0;
   requestAnimationFrame(frame);
@@ -462,6 +651,101 @@ function refreshAll(){
 refreshAll();
 setInterval(refreshAll, 5000);
 setInterval(refreshHud, 5000); refreshHud();
+
+/* ============================== Fast Voice & Protocol Live Sync ========================= */
+let lastActiveProto = 'standby';
+
+async function refreshQuickState() {
+  try {
+    const s = await jget("/api/status");
+    const proto = (s.protocol && s.protocol.mode) || 'standby';
+    const conv = (s.runtime && s.runtime.conversation) || {};
+    const mode = conv.mode || 'idle';
+
+    if (proto !== lastActiveProto) {
+      lastActiveProto = proto;
+      document.body.classList.toggle('mode-combat', proto === 'combat');
+      document.body.classList.toggle('mode-lockdown', proto === 'lockdown');
+      if (proto === 'combat') playUiSound('combat');
+      if (proto === 'lockdown') playUiSound('lock');
+      if (proto === 'standby') playUiSound('beep');
+    }
+
+    if (proto === 'combat') {
+      setState("combat", "COMBAT PROTOCOL 07", "ALL SYSTEMS ARMED // MAXIMUM DEFENSE");
+    } else if (proto === 'lockdown') {
+      setState("lockdown", "LOCKDOWN ENGAGED", "SECURITY CONTAINMENT ACTIVE");
+    } else if (s.paused) {
+      setState("paused", "PAUZADA", "FN+SHIFT BILAN UYG'OTING");
+    } else if (mode === 'user-speaking') {
+      setState("user_speaking", "VOICE DETECTED", "LISTENING TO USER COMMAND");
+    } else if (mode === 'thinking') {
+      setState("thinking", "NEURAL REASONING", "PROCESSING COGNITIVE STREAM");
+    } else if (mode === 'speaking') {
+      setState("speaking", "J.A.R.V.I.S. VOICE", "AUDIO SYNTHESIS TRANSMITTING");
+    } else if (s.gateway && s.daemon) {
+      setState("active", "STANDBY NOMINAL", "SYSTEM READY // AWAITING VOICE");
+    }
+  } catch(_) {}
+}
+setInterval(refreshQuickState, 350);
+refreshQuickState();
+
+/* ============================== Protocol & Action Handlers ========================= */
+async function triggerProtocol(id) {
+  playUiSound('beep');
+  try {
+    await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    });
+    refreshQuickState();
+  } catch(e) {
+    console.error("Action error:", e);
+  }
+}
+
+function triggerGlobe() {
+  playUiSound('scan');
+  window.open('https://earth.google.com/web/@25.2048,55.2708,12000a,35y,0t,0d', '_blank');
+}
+
+function triggerScreenScan() {
+  playUiSound('scan');
+  const beam = $("scannerBeam");
+  beam.classList.remove('scanning');
+  void beam.offsetWidth;
+  beam.classList.add('scanning');
+  sendChatDirect("Inspect my current screen and give an executive summary of what is visible.");
+}
+
+async function sendChatDirect(text) {
+  if (!text) return;
+  addBubble("you", text);
+  const pending = addBubble("jarvis pending", "ekranni skaner qilmoqda…");
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ message: text })
+    });
+    const data = await r.json();
+    pending.textContent = data.reply || "Tahlil tugadi.";
+    pending.className = "bubble jarvis";
+  } catch(e) {
+    pending.textContent = "Ulanishda xatolik.";
+    pending.className = "bubble jarvis";
+  }
+}
+
+function toggleFullscreen() {
+  playUiSound('beep');
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
 
 /* ============================== boot sequence ========================= */
 const BOOT_LINES=[

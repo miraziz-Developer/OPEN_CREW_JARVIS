@@ -64,6 +64,7 @@ function readJsonSafe(file, def) {
 function getStatus() {
   const paused = fs.existsSync(path.join(PROJECT_DIR, '.jarvis-paused'));
   const runtime = readJsonSafe(path.join(PROJECT_DIR, '.jarvis-runtime.json'), null);
+  const protocol = readJsonSafe(path.join(PROJECT_DIR, '.jarvis-protocol.json'), { mode: 'standby', name: 'Nominal Standby', color: '#00e5ff' });
   return {
     paused,
     gateway: gatewayHealthy(),
@@ -72,6 +73,7 @@ function getStatus() {
     monitor: isAlive(path.join(PROJECT_DIR, 'skills', 'screen-monitor', 'index.js')),
     sentinel: isAlive(path.join(PROJECT_DIR, 'scripts', 'pause-sentinel.js')),
     runtime,
+    protocol,
     model: {
       primary: env('AGENT_FAST_MODEL', 'gemini-3.8-flash'),
       realtime: String(env('JARVIS_BRAIN', '')).toLowerCase() === 'gemini' ? 'gemini-voice' : env('AZURE_REALTIME_DEPLOYMENT', 'gpt-realtime-2.1'),
@@ -211,6 +213,20 @@ async function handleChat(req, res) {
   json(res, { reply: reply || 'I could not respond right now.' });
 }
 
+async function handleAction(req, res) {
+  let payload;
+  try { payload = JSON.parse(await readBody(req)); } catch (e) { payload = {}; }
+  const id = (payload.id || '').trim();
+  if (!id) return json(res, { error: 'Action id is required.' }, 400);
+  try {
+    const fastActions = require('../skills/fast-actions');
+    const result = await fastActions.runFastAction(id);
+    json(res, result);
+  } catch (err) {
+    json(res, { status: 'error', message: err.message }, 500);
+  }
+}
+
 // ── HTTP server ─────────────────────────────────────────────────────────
 const STATIC_DIR = path.join(PROJECT_DIR, 'dashboard');
 const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -221,9 +237,13 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/chat') {
     return handleChat(req, res).catch(e => json(res, { error: e.message }, 500));
   }
+  if (req.method === 'POST' && url.pathname === '/api/action') {
+    return handleAction(req, res).catch(e => json(res, { error: e.message }, 500));
+  }
 
   try {
     if (url.pathname === '/api/status') return json(res, getStatus());
+    if (url.pathname === '/api/protocol') return json(res, readJsonSafe(path.join(PROJECT_DIR, '.jarvis-protocol.json'), { mode: 'standby', name: 'Nominal Standby', color: '#00e5ff' }));
     if (url.pathname === '/api/activity') return json(res, getActivity(parseInt(url.searchParams.get('limit'), 10)));
     if (url.pathname === '/api/tasks') return json(res, getTasks());
     if (url.pathname === '/api/realtime-tasks') return json(res, getRealtimeTasks());

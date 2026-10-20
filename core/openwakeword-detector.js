@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { ok, inf, wrn } = require('./log');
@@ -50,7 +51,7 @@ class OpenWakeWordDetector {
         OPENWAKEWORD_DIAGNOSTIC_FLOOR: this.env('OPENWAKEWORD_DIAGNOSTIC_FLOOR') || '0.03',
         OPENWAKEWORD_PERSONAL_THRESHOLD: this.env('OPENWAKEWORD_PERSONAL_THRESHOLD') || '0.8',
         OPENWAKEWORD_PERSONAL_STRONG: this.env('OPENWAKEWORD_PERSONAL_STRONG') || '0.98',
-        OPENWAKEWORD_MODELS: this.env('OPENWAKEWORD_MODELS') || 'models/wake-word/jarvis.onnx'
+        OPENWAKEWORD_MODELS: this.env('OPENWAKEWORD_MODELS') || (fs.existsSync(path.join(this.projectDir, 'models', 'wake-word', 'jarvis.onnx')) ? 'models/wake-word/jarvis.onnx' : 'hey_jarvis')
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });

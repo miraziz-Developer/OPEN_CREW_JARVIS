@@ -126,8 +126,8 @@ const CHUNK_MS = 1200;             // overlap window (ms) — "Jarvis" to'liq si
 const STEP_MS = 150;               // faster wake inference cadence without reducing confidence
 const ENERGY_MIN_STT = parseFloat(env('ENERGY_MIN_STT')) || 120; // past mikrofonlarda ham backup ishlasin
 const ENERGY_TARGET = 1500;        // adaptive gain target — low, no clip
-const SILENCE_MS = parseInt(env('SILENCE_MS'), 10) || 380;            // silence = command end (380ms for snappy turn-taking)
-const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 150; // buyruq yozib olishda "gapiryapti" chegarasi
+const SILENCE_MS = parseInt(env('SILENCE_MS'), 10) || 450;            // natural speech end pause
+const VOICE_ACTIVITY_THRESHOLD = parseFloat(env('VOICE_ACTIVITY_THRESHOLD')) || 15; // voice activity threshold
 const CMD_MAX = 5.0;               // max command length (s)
 const GAIN_MAX = 8, GAIN_MIN = 2; // gain limits — clipping bo'lmasin
 const HOTWORD_COOLDOWN_MS = parseInt(env('HOTWORD_COOLDOWN_MS'), 10) || 3000;
@@ -510,6 +510,9 @@ let _realtimeFailureCount = 0;
 let _realtimeDisabledUntil = 0;
 const REALTIME_FAILURE_LIMIT = parseInt(env('REALTIME_FAILURE_LIMIT'), 10) || 3;
 const REALTIME_COOLDOWN_MS = parseInt(env('REALTIME_COOLDOWN_MS'), 10) || 120000;
+let inConversation = false;
+let state = 'listening';
+let resumeConversationListening = () => {};
 
 // ════════════════════════════════════════════
 // CONTINUOUS LISTENING ARCHITECTURE (ffmpeg → PCM)
@@ -618,15 +621,19 @@ async function mainLoop() {
   let wakeSpeechBuffers = [];
   let wakeSpeechStartedAt = 0;
   let wakeSpeechLastVoiceAt = 0;
-  let state = 'listening'; // 'listening' | 'realtime' | 'command_record' | 'processing'
+  state = 'listening'; // 'listening' | 'realtime' | 'command_record' | 'processing'
   let cmdBuffers = [];
   let lastVoiceTime = 0;
   let cmdStartTime = 0;
+  let cmdSpeechStarted = false;
+  inConversation = false;
+  let lastConversationActivityAt = 0;
   // Fn push-to-talk emas: u hands-free realtime suhbatini ochadigan trigger.
   // Sessiya ochilgach server VAD tabiiy pauzalarda turnlarni o'zi ajratadi.
   let fnPressed = false;
   let lastFnDownAt = 0;
   let restartFromFn = false;
+  let _startingRealtimeSession = false;
   // Mac mikrofonining real tinch RMS'i sinovda 100–200 oralig'ida chiqdi.
   // 40 dan boshlash shovqinni nutq deb olib, uzluksiz STT segment yuborardi.
   let ambientEnergy = ENERGY_MIN_STT;
@@ -676,9 +683,11 @@ async function mainLoop() {
   // English Realtime owns STT, VAD, conversation and speech. Grok Fast handles
   // normal reasoning, GPT-5.6 Sol handles complex reasoning and executable tasks.
   function startRealtimeSession(reason, trigger = {}) {
-    if (_activeRealtimeSession || state !== 'listening') return false;
-    // Wake so'zidan keyingi birinchi buyruq uchun suhbat oynasini ochamiz.
-    if (trigger.addressedWake) conversationContext.touch();
+    if (_startingRealtimeSession || _activeRealtimeSession || state !== 'listening') return false;
+    _startingRealtimeSession = true;
+    try {
+      // Wake so'zidan keyingi birinchi buyruq uchun suhbat oynasini ochamiz.
+      if (trigger.addressedWake) conversationContext.touch();
 
     const session = new RealtimeSession({
       // Fon missiyalari bilan ko'prik: start/status/control millisekundlarda qaytadi (ovozli suhbat bloklanmaydi).
@@ -1095,7 +1104,7 @@ async function mainLoop() {
       // muammoni ko'rmay qolardi. `finished` hali false bo'lsa (ya'ni 'error'
       // yoki idle-timeout orqali allaqachon yakunlanmagan bo'lsa) — bu
       // kutilmagan uzilish, holatni to'g'ri belgilaymiz.
-      if (!finished) {
+      if (!finished && !session.closed) {
         if (currentTurnId) turnJournal.append(currentTurnId, 'turn.failed', { error: 'socket-closed-unexpectedly' });
         runtime.heartbeat('realtime-api', {
           status: sessionWasReady ? 'degraded' : 'error',
@@ -1116,6 +1125,9 @@ async function mainLoop() {
     session.connect();
     armIdleTimer();
     return true;
+    } finally {
+      _startingRealtimeSession = false;
+    }
   }
 
   // Barcha triggerlar bitta state transition'dan o'tadi. Rekonstruksiya
@@ -1141,7 +1153,11 @@ async function mainLoop() {
   }
 
   function triggerVoice(reason, trigger = {}) {
-    if (state !== 'listening') return false;
+    const isFn = String(reason || '').includes('Fn');
+    if (state !== 'listening' && !isFn) return false;
+    if (isFn && (state === 'processing' || state === 'command_record')) {
+      try { const { execSync } = require('child_process'); execSync('killall afplay >/dev/null 2>&1'); } catch (_) {}
+    }
     inf('[triggerVoice] ' + reason + ' @' + new Date().toISOString() + ' trigger=' + JSON.stringify(trigger).slice(0,200));
     // Lokal model va STT fallback parallel tinglaydi. Ulardan biri trigger
     // qilishi bilan ikkinchisining yarim yig'ilgan segmentini tashlaymiz;
@@ -1160,13 +1176,28 @@ async function mainLoop() {
     }
     const now = Date.now();
     lastHotwordTime = now;
+    inConversation = true;
+    lastConversationActivityAt = now;
     state = 'command_record';
     cmdBuffers = [];
     cmdStartTime = now;
     lastVoiceTime = now;
+    cmdSpeechStarted = true;
     if (trigger.playAck !== false) playWakeSound(WAKE_SOUND_PATH);
-    inf(reason + ' — buyruq tinglanyapti');
+    inf(reason + ' — suhbat ochildi, tinglanyapti');
     return true;
+  }
+
+  resumeConversationListening = function() {
+    const now = Date.now();
+    inConversation = true;
+    lastConversationActivityAt = now;
+    state = 'command_record';
+    cmdBuffers = [];
+    cmdStartTime = now;
+    lastVoiceTime = now;
+    cmdSpeechStarted = true;
+    inf('💬 Suhbat davom etmoqda (hands-free) — gapirishingiz mumkin...');
   }
 
   const fnSocketPath = path.join(PROJECT_DIR, '.run', 'fnkey.sock');
@@ -1187,22 +1218,32 @@ async function mainLoop() {
       for (const raw of lines) {
         const event = raw.trim();
         if (event === 'DOWN') {
-          // flagsChanged dublikat hodisasi ikkinchi realtime sessiya ochmasin.
-          if (fnPressed || Date.now() - lastFnDownAt < 250) continue;
+          // flagsChanged dublikat hodisasi ikkinchi realtime sessiya ochmasin (400ms debounce).
+          if (fnPressed || Date.now() - lastFnDownAt < 400) continue;
           fnPressed = true;
           lastFnDownAt = Date.now();
-          if (state === 'realtime' && _activeRealtimeSession) {
+          if (state === 'realtime' && _activeRealtimeSession && !_activeRealtimeSession.closed) {
             // Fn har doim yangi suhbatni boshlash tugmasi bo'lishi kerak. Idle
             // timer/VAD sessionni hali yopmagan bo'lsa, u keyingi Fn'ni oldin
             // jim rad etardi. Faol agent vazifasini esa hech qachon bekor
             // qilmaymiz; bunday holatda mavjud sessiya saqlanadi.
             if (_activeRealtimeSession._runningTasks?.size) {
               inf('Fn qabul qilindi: faol vazifa bor, mavjud realtime suhbat saqlanadi');
+            } else if (_activeRealtimeSession._isSpeakingNow?.()) {
+              inf('Fn bosildi: mavjud javob to\'xtatildi (barge-in)');
+              _activeRealtimeSession._stopSpeakingByUser?.('fn-pressed');
             } else {
               restartFromFn = true;
-              _activeRealtimeSession.close();
+              const old = _activeRealtimeSession;
+              _activeRealtimeSession = null;
+              state = 'listening';
+              try { old.close(); } catch (_) {}
+              triggerVoice('⌨️ Fn hands-free conversation');
+              restartFromFn = false;
             }
-          } else triggerVoice('⌨️ Fn hands-free conversation');
+          } else {
+            triggerVoice('⌨️ Fn hands-free conversation');
+          }
         } else if (event === 'UP') {
           fnPressed = false;
           // Fn qo'yib yuborilishi suhbat turnini yopmaydi. Mikrofon realtime
@@ -1316,32 +1357,33 @@ async function mainLoop() {
             return;
           }
 
-          // STT backup: har rolling oynani qayta-qayta yubormaymiz. Nutqning
-          // boshlanishi va jimlik bilan tugashini topib, aynan bitta segmentni
-          // tanitamiz — “Hey Jarvis” sukunat ichida yo'qolib ketmaydi.
+          // STT backup: faqat openWakeWord tayyor bo'lmaganda yoki maxsus yoqilganda ishlaydi.
           const energy = getEnergy(stepData);
-          if (!wakeSpeechStartedAt && energy < ambientEnergy * 2.2) ambientEnergy = ambientEnergy * 0.97 + energy * 0.03;
-          const adaptiveSttGate = Math.max(ENERGY_MIN_STT, ambientEnergy * 2.5);
           adaptGain(energy);
-          // Debug: energy log every 2 sec
-          if ((now % 2000) < 200) inf('Energy=' + Math.round(energy) + ' gain=' + _gain.toFixed(1));
-          if (!wakeSpeechStartedAt && energy >= adaptiveSttGate) {
-            wakeSpeechStartedAt = now;
-            wakeSpeechLastVoiceAt = now;
-            wakeSpeechBuffers = [Buffer.from(rolling.sliceLast(WAKE_STT_PREROLL_MS))];
-          } else if (wakeSpeechStartedAt) {
-            wakeSpeechBuffers.push(Buffer.from(stepData));
-            if (energy >= Math.max(ENERGY_MIN_STT * 0.8, ambientEnergy * 1.7)) wakeSpeechLastVoiceAt = now;
+          if (env('DEBUG_ENERGY') === 'true' && (now % 2000) < 200) inf('Energy=' + Math.round(energy) + ' gain=' + _gain.toFixed(1));
 
-            const speechAge = now - wakeSpeechStartedAt;
-            const silenceAge = now - wakeSpeechLastVoiceAt;
-            if ((silenceAge >= WAKE_STT_SILENCE_MS && speechAge >= WAKE_STT_MIN_SPEECH_MS) || speechAge >= WAKE_STT_MAX_MS) {
-              const speechPcm = Buffer.concat(wakeSpeechBuffers);
-              const speechEnergy = getEnergy(speechPcm);
-              wakeSpeechBuffers = [];
-              wakeSpeechStartedAt = 0;
-              wakeSpeechLastVoiceAt = 0;
-              submitWakeStt(speechPcm, speechEnergy);
+          const enableSttWake = (!_detector || !_detector.ready) || (env('JARVIS_STT_WAKE_BACKUP') === 'true');
+          if (enableSttWake) {
+            if (!wakeSpeechStartedAt && energy < ambientEnergy * 2.2) ambientEnergy = ambientEnergy * 0.97 + energy * 0.03;
+            const adaptiveSttGate = Math.max(ENERGY_MIN_STT, ambientEnergy * 2.5);
+            if (!wakeSpeechStartedAt && energy >= adaptiveSttGate) {
+              wakeSpeechStartedAt = now;
+              wakeSpeechLastVoiceAt = now;
+              wakeSpeechBuffers = [Buffer.from(rolling.sliceLast(WAKE_STT_PREROLL_MS))];
+            } else if (wakeSpeechStartedAt) {
+              wakeSpeechBuffers.push(Buffer.from(stepData));
+              if (energy >= Math.max(ENERGY_MIN_STT * 0.8, ambientEnergy * 1.7)) wakeSpeechLastVoiceAt = now;
+
+              const speechAge = now - wakeSpeechStartedAt;
+              const silenceAge = now - wakeSpeechLastVoiceAt;
+              if ((silenceAge >= WAKE_STT_SILENCE_MS && speechAge >= WAKE_STT_MIN_SPEECH_MS) || speechAge >= WAKE_STT_MAX_MS) {
+                const speechPcm = Buffer.concat(wakeSpeechBuffers);
+                const speechEnergy = getEnergy(speechPcm);
+                wakeSpeechBuffers = [];
+                wakeSpeechStartedAt = 0;
+                wakeSpeechLastVoiceAt = 0;
+                submitWakeStt(speechPcm, speechEnergy);
+              }
             }
           }
         }
@@ -1355,28 +1397,52 @@ async function mainLoop() {
         if (elapsed % 120 < 30 && cmdBuffers.length > 2) {
           const recentPCM = Buffer.concat(cmdBuffers.slice(-3));
           const energy = getEnergy(recentPCM);
-          if (energy > VOICE_ACTIVITY_THRESHOLD) lastVoiceTime = now;
+          if (energy > VOICE_ACTIVITY_THRESHOLD) {
+            cmdSpeechStarted = true;
+            lastVoiceTime = now;
+          }
         }
 
         const silence = now - lastVoiceTime;
-        if ((!fnPressed && elapsed > 500 && silence > SILENCE_MS) || elapsed > CMD_MAX * 1000) {
+        const currentSilenceThreshold = inConversation ? 280 : Math.min(320, SILENCE_MS);
+        const speechDone = cmdSpeechStarted
+          ? (silence > currentSilenceThreshold && elapsed > 400)
+          : (elapsed > (inConversation ? 4000 : 2500));
+
+        if ((!fnPressed && speechDone) || elapsed > CMD_MAX * 1000) {
+          if (!cmdSpeechStarted) {
+            inConversation = false;
+            state = 'listening';
+            cmdBuffers = [];
+            inf('Suhbat avtomatik yakunlandi (jimlik)');
+            return;
+          }
           state = 'processing';
           const totalPCM = Buffer.concat(cmdBuffers);
           const wavBuf = pcmToWavBuffer(totalPCM);
           inf('STT ishlanyapti...');
-          _sttPool.recognize(wavBuf, 'en-US').then(r => {
-            state = 'listening';
+          _sttPool.recognize(wavBuf, 'auto').then(r => {
             nextStepTime = Date.now(); // reset timing
             if (r && r.status === 'ok' && r.text && r.text.length > 1) {
               const cmd = r.text.trim();
+              if (/^(\[(?:BLANK_AUDIO|no speech detected)\]|\([^)]+\)|\*+|\s*|\.+|\?+)$/i.test(cmd)) {
+                if (inConversation) resumeConversationListening(); else state = 'listening';
+                return;
+              }
               ok('Buyruq: "' + cmd + '"');
-              processCommand(cmd).catch(() => {});
+              processCommand(cmd).catch(err => {
+                er('processCommand xatolik: ' + (err.message || err));
+                if (inConversation) resumeConversationListening(); else state = 'listening';
+              });
             } else {
               wrn('STT natija topilmadi');
+              if (inConversation) resumeConversationListening();
+              else state = 'listening';
             }
           }).catch(err => {
-            state = 'listening';
             er('STT xatolik: ' + (err.message || err));
+            if (inConversation) resumeConversationListening();
+            else state = 'listening';
           });
         }
       }
@@ -1401,6 +1467,7 @@ async function processCommand(command) {
   const acceptedCommand = runtime.acceptCommand(command, { source: 'batch-stt' });
   if (!acceptedCommand.accepted) {
     wrn('Takror batch buyruq tashlandi: ' + command);
+    if (inConversation) resumeConversationListening(); else state = 'listening';
     return;
   }
   const batchTurnId = turnJournal.createTurn('batch-voice');
@@ -1413,24 +1480,40 @@ async function processCommand(command) {
     const ap = await ttsToFile('Hello. I am Jarvis.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
   }
 
+  // Stop/Standby intent
+  if (/^(?:rahmat|bo'?ldi|to'?xtat|to'?xta|stop|cancel|goodbye|bye)\b/i.test(command)) {
+    inConversation = false;
+    state = 'listening';
+    const ap = await ttsToFile('Standing by, sir.');
+    if (ap) {
+      await execFileAsync('afplay', [ap]).catch(() => {});
+      try { fs.unlinkSync(ap); } catch (_) {}
+    }
+    turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Standing by, sir.' });
+    return;
+  }
+
   // Quick commands
   if (/eslab qol|esda tut/i.test(command) && command.length > 15) {
     const cl = command.replace(/eslab qol|esda tut/gi, '').trim();
     writeMemory('Voice', cl, ['voice']); sendTelegram('✅ Remembered.');
     const ap = await ttsToFile('Remembered.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
     turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Remembered.' });
+    if (inConversation) resumeConversationListening(); else state = 'listening';
     return;
   }
   if (/kuzatishni (boshla|yo?qish)/i.test(command)) {
     await runNodeWithInput('skills/screen-monitor/index.js', '{"action":"start"}\n').catch(() => {});
     const ap = await ttsToFile('Monitoring enabled.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
     turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Monitoring enabled.' });
+    if (inConversation) resumeConversationListening(); else state = 'listening';
     return;
   }
   if (/kuzatishni (to.xtat|o.chir)/i.test(command)) {
     await runNodeWithInput('skills/screen-monitor/index.js', '{"action":"stop"}\n').catch(() => {});
     const ap = await ttsToFile('Monitoring disabled.'); if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
     turnJournal.append(batchTurnId, 'assistant.completed', { text: 'Monitoring disabled.' });
+    if (inConversation) resumeConversationListening(); else state = 'listening';
     return;
   }
 
@@ -1444,6 +1527,7 @@ async function processCommand(command) {
         const ap = await ttsToFile(`Opening ${appName}.`);
         if (ap) await execFileAsync('afplay', [ap]).catch(() => {});
         turnJournal.append(batchTurnId, 'assistant.completed', { text: `Opening ${appName}.` });
+        if (inConversation) resumeConversationListening(); else state = 'listening';
         return;
       } catch (_) {}
     }
@@ -1459,10 +1543,10 @@ async function processCommand(command) {
   // Qiyin / murakkab tasklarni katta modelga (Antigravity/Gemini Pro) fonda yo'naltirish ("ularni gapirtirmay")
   const isHardTask = isComplexTask(command) || /\b(yoz|tuzat|kod|dastur|tekshir|skript|fayl|terminal|build|deploy|code|fix|refactor|analyze|investigate|git|clone|search|qidir|yarat|arxitektura|yozib ber)\b/i.test(command);
   if (isHardTask) {
-    const ack = 'Acknowledged. Processing your task in the background.';
+    const ack = 'Right away, sir. Processing your task in the background. What else can I do for you?';
     const ackAudio = await ttsToFile(ack);
     if (ackAudio) {
-      await execFileAsync('afplay', [ackAudio]).catch(() => {});
+      await execFileAsync('afplay', [ackAudio], { timeout: 10000 }).catch(() => {});
       try { fs.unlinkSync(ackAudio); } catch (_) {}
     }
     sendTelegram('⚙️ Ishga tushirildi: ' + command);
@@ -1476,34 +1560,39 @@ async function processCommand(command) {
           if (agyRes && agyRes.output) taskResult = agyRes.output;
         } catch (_) {}
         if (!taskResult) {
-          taskResult = await askAgent(mem + command);
+          taskResult = await askAgent(mem + command, undefined, { source: 'background-task', routeText: command, persistent: true });
         }
 
         if (taskResult) {
           sendTelegram('✅ Vazifa bajarildi:\n\n' + taskResult.slice(0, 4000));
           turnJournal.append(batchTurnId, 'assistant.completed', { text: taskResult.slice(0, 4000) });
-          // Ularni gapirtirmay — faqat qisqa 1 jumla aytadi:
-          const doneVoice = 'Task completed. Full details sent to Telegram.';
-          const doneAudio = await ttsToFile(doneVoice);
-          if (doneAudio) {
-            await execFileAsync('afplay', [doneAudio]).catch(() => {});
-            try { fs.unlinkSync(doneAudio); } catch (_) {}
+          if (state !== 'command_record') {
+            const doneVoice = 'Task completed, sir. Full report sent to Telegram.';
+            const doneAudio = await ttsToFile(doneVoice);
+            if (doneAudio) {
+              await execFileAsync('afplay', [doneAudio], { timeout: 10000 }).catch(() => {});
+              try { fs.unlinkSync(doneAudio); } catch (_) {}
+            }
           }
         }
       } catch (err) {
         sendTelegram('⚠️ Vazifani bajarishda xatolik: ' + err.message);
       }
     })();
+
+    // Suhbati davom etsin: fon taski bajarilayotganda ham suhbat to'xtamaydi
+    if (inConversation) resumeConversationListening(); else state = 'listening';
     return;
   }
 
-  const reply = await askAgent(mem + command);
+  const reply = await askAgent(mem + command, undefined, { source: 'voice', routeText: command });
   runtime.observeLatency('batch-agent', Date.now() - commandStartedAt);
   if (reply) {
     const acceptedResponse = runtime.acceptResponse(reply);
     if (!acceptedResponse.accepted) {
       wrn('Takror agent javobi ovozga chiqarilmadi');
       turnJournal.append(batchTurnId, 'turn.cancelled', { reason: 'duplicate-response' });
+      if (inConversation) resumeConversationListening(); else state = 'listening';
       return;
     }
     runtime.setConversationMode('speaking');
@@ -1511,11 +1600,18 @@ async function processCommand(command) {
     turnJournal.append(batchTurnId, 'assistant.completed', { text: reply.substring(0, 4000) });
     const audio = await ttsToFile(reply.substring(0, 400));
     if (audio) {
-      await execFileAsync('afplay', [audio]).then(() => ok('🔊 Ovoz')).catch(() => {});
-      const ogg = audio.replace(/\.[^.\/]+$/, '') + '.ogg';
-      await execFileAsync('ffmpeg', ['-y', '-i', audio, '-c:a', 'libopus', ogg]).then(() => sendTelegramVoice(ogg)).catch(() => {});
-      [ogg, audio].forEach(p => { try { fs.unlinkSync(p); } catch(e){} });
+      await execFileAsync('afplay', [audio], { timeout: 15000 }).then(() => ok('🔊 Ovoz')).catch(() => {});
+      (async () => {
+        try {
+          const ogg = audio.replace(/\.[^.\/]+$/, '') + '.ogg';
+          await execFileAsync('ffmpeg', ['-nostdin', '-y', '-i', audio, '-c:a', 'libopus', ogg], { timeout: 6000 });
+          await sendTelegramVoice(ogg);
+          try { fs.unlinkSync(ogg); } catch(e){}
+        } catch(e){}
+        try { fs.unlinkSync(audio); } catch(e){}
+      })();
     }
+    if (inConversation) resumeConversationListening(); else state = 'listening';
   } else {
     const fallback = 'I could not prepare a response. Please say that again.';
     wrn('Agent bo\'sh javob qaytardi');
@@ -1526,6 +1622,7 @@ async function processCommand(command) {
       await execFileAsync('afplay', [audio], { stdio: 'ignore' }).catch(() => {});
       try { fs.unlinkSync(audio); } catch(e) {}
     }
+    if (inConversation) resumeConversationListening(); else state = 'listening';
   }
 }
 

@@ -119,5 +119,17 @@
   { "id": "info:wifi", "uz": "Wi-Fi tarmoq nomi", "type": "shell", "target": "networksetup -getairportnetwork en0" },
   { "id": "info:ip", "uz": "IP manzil", "type": "shell", "target": "ipconfig getifaddr en0" },
   { "id": "info:disk", "uz": "Bo'sh disk joyi", "type": "shell", "target": "df -h / | tail -1 | awk '{print $4\" bo'\\''sh (jami \"$2\"dan)\"}'" },
-  { "id": "info:uptime", "uz": "Kompyuter qancha vaqtdan beri ishlayapti", "type": "shell", "target": "uptime | sed 's/.*up //;s/,.*load.*//'" }
+  { "id": "info:uptime", "uz": "Kompyuter qancha vaqtdan beri ishlayapti", "type": "shell", "target": "uptime | sed 's/.*up //;s/,.*load.*//'" },
+
+  { "id": "protocol:combat", "uz": "Jang rejimi (Combat Mode)", "type": "protocol" },
+  { "id": "protocol:standby", "uz": "Standart rejim (Standby Mode)", "type": "protocol" },
+  { "id": "protocol:lockdown", "uz": "Favqulodda qulflash (Lockdown Protocol)", "type": "protocol" },
+  { "id": "protocol:focus", "uz": "Fokus rejimi (Focus Mode)", "type": "protocol" },
+
+  { "id": "tasks:list", "uz": "Bugungi vazifalar ro'yxatini ko'rish", "type": "custom" },
+  { "id": "dev:git_status", "uz": "Git status tekshirish", "type": "custom" },
+  { "id": "workspace:coding", "uz": "Dasturlash muhitini ishga tushirish", "type": "custom" },
+  { "id": "workspace:start_work", "uz": "Ish rejimini faollashtirish (Dashboard, VS Code, Claude, Antigravity, Billie Jean)", "type": "custom" },
+  { "id": "workspace:open_project", "uz": "Loyihani ochish", "type": "custom" },
+  { "id": "info:diagnostics", "uz": "Tizim diagnostikasi", "type": "custom" }
 ]

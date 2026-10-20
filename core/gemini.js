@@ -5,8 +5,33 @@ const path = require('path');
 const https = require('https');
 const { PROJECT_DIR } = require('./paths');
 
+const httpsKeepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
+
 let cachedEnv = null;
 let quotaExceededUntil = 0; // Dinamik ravishda 429 bo'lganda yangilanadi
+const QUOTA_CACHE_FILE = '/tmp/jarvis_gemini_quota.json';
+
+function isQuotaExceeded() {
+  if (Date.now() < quotaExceededUntil) return true;
+  try {
+    if (fs.existsSync(QUOTA_CACHE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(QUOTA_CACHE_FILE, 'utf8'));
+      if (data.until && Date.now() < data.until) {
+        quotaExceededUntil = data.until;
+        return true;
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
+function setQuotaExceeded(ms = 60000) {
+  quotaExceededUntil = Date.now() + ms;
+  try {
+    fs.writeFileSync(QUOTA_CACHE_FILE, JSON.stringify({ until: quotaExceededUntil }), 'utf8');
+  } catch (_) {}
+}
+
 function getEnv(key, fallback = '') {
   if (process.env[key] !== undefined) return process.env[key];
   if (cachedEnv === null) {
@@ -23,9 +48,11 @@ function getApiKey() {
 function resolveModel(requestedModel, isHard = false) {
   if (requestedModel) {
     let clean = requestedModel.replace(/^google\//i, '').replace(/^gemini\//i, '');
-    if (clean.startsWith('gemini-flash-lite')) return clean;
+    if (clean === '2.5-flash' || clean === 'gemini-2.5-flash' || clean === '3.5-flash' || clean === 'gemini-3.5-flash' || clean === 'flash') return 'gemini-3-flash-preview';
+    return clean;
   }
-  return 'gemini-flash-lite-latest';
+  if (isHard) return getEnv('HARD_MODEL') || 'gemini-3-flash-preview';
+  return getEnv('DEFAULT_MODEL') || 'gemini-3-flash-preview';
 }
 
 /**
@@ -51,6 +78,7 @@ function generateContent({ model, systemInstruction, contents, generationConfig 
 
     const req = https.request(url, {
       method: 'POST',
+      agent: httpsKeepAliveAgent,
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload)
@@ -67,9 +95,8 @@ function generateContent({ model, systemInstruction, contents, generationConfig 
 
         if (res.statusCode >= 400 || parsed.error) {
           const msg = parsed.error?.message || `HTTP ${res.statusCode}`;
-          // Agar 2.5-flash eskirganligi aytilsa, avtomatik 3.8-flash ga o'tish
-          if (res.statusCode === 404 && resolvedModel.includes('2.5-flash')) {
-            return generateContent({ model: 'gemini-3.8-flash', systemInstruction, contents, generationConfig, timeoutMs })
+          if ((res.statusCode === 404 || res.statusCode === 429) && resolvedModel !== 'gemini-3-flash-preview') {
+            return generateContent({ model: 'gemini-3-flash-preview', systemInstruction, contents, generationConfig, timeoutMs })
               .then(resolve)
               .catch(reject);
           }
@@ -102,7 +129,7 @@ function generateContent({ model, systemInstruction, contents, generationConfig 
 /**
  * Matnli suhbat / completion interfeysi
  */
-async function complete({ system, user, prompt, model, maxOutputTokens = 4096, json = false, hard = false, timeoutMs = 120000 }) {
+async function complete({ system, user, prompt, model, maxOutputTokens = 4096, json = false, hard = false, timeoutMs = 120000, thinkingBudget }) {
   const resolved = resolveModel(model, hard);
   const userPrompt = String(user || prompt || '');
   const contents = [
@@ -116,11 +143,17 @@ async function complete({ system, user, prompt, model, maxOutputTokens = 4096, j
     maxOutputTokens: maxOutputTokens || 4096
   };
 
+  if (thinkingBudget !== undefined) {
+    generationConfig.thinkingConfig = { thinkingBudget };
+  } else if (maxOutputTokens <= 250) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
+
   if (json) {
     generationConfig.responseMimeType = 'application/json';
   }
 
-  if (Date.now() < quotaExceededUntil || !getApiKey()) {
+  if (isQuotaExceeded() || !getApiKey()) {
     try {
       const agySkill = require('../skills/antigravity');
       const agyRes = await agySkill.executePrompt((system ? system + '\n\n' : '') + userPrompt, { effort: 'low', timeoutMs });
@@ -138,7 +171,9 @@ async function complete({ system, user, prompt, model, maxOutputTokens = 4096, j
     });
     return res.text;
   } catch (err) {
-    quotaExceededUntil = Date.now() + 3600 * 1000;
+    if (err.message && (err.message.includes('429') || err.message.includes('quota') || err.message.includes('RESOURCE_EXHAUSTED'))) {
+      setQuotaExceeded(3600 * 1000);
+    }
     try {
       const agySkill = require('../skills/antigravity');
       const agyRes = await agySkill.executePrompt((system ? system + '\n\n' : '') + userPrompt, { effort: 'low', timeoutMs });

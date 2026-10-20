@@ -71,17 +71,25 @@ function runAgy(args, options = {}) {
  * Antigravity orqali dasturlash vazifasini bajarish
  */
 async function executePrompt(prompt, options = {}) {
-  const targetDir = options.projectDir || PROJECT_DIR;
+  const targetDir = options.projectDir;
+  const cwd = targetDir || (options.scope === 'workspace' ? PROJECT_DIR : '/tmp');
   const effort = options.effort || 'high';
 
   const args = [
     '-p', String(prompt),
     '--effort', effort,
     '--dangerously-skip-permissions',
-    '--add-dir', targetDir
+    '--disable-slash-commands'
   ];
+  const model = options.model || (effort === 'low' ? 'gemini-3.8-flash-low' : undefined);
+  if (model) {
+    args.push('--model', model);
+  }
+  if (targetDir) {
+    args.push('--add-dir', targetDir);
+  }
 
-  const res = await runAgy(args, { cwd: targetDir, timeoutMs: options.timeoutMs });
+  const res = await runAgy(args, { cwd, timeoutMs: options.timeoutMs });
   return {
     status: res.code === 0 ? 'ok' : 'error',
     output: res.stdout || res.stderr,

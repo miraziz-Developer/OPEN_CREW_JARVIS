@@ -13,6 +13,38 @@ function saveUrgentState(stateFile, s) {
   try { fs.writeFileSync(stateFile, JSON.stringify(s)); } catch (e) {}
 }
 
+function checkBatteryAlert(state, sendTelegram) {
+  if (process.platform !== 'darwin' || typeof sendTelegram !== 'function') return;
+  try {
+    const out = execSync('pmset -g batt', { encoding: 'utf8', timeout: 3000 });
+    const percentMatch = out.match(/(\d+)%/);
+    const discharging = /discharging/i.test(out);
+    if (!percentMatch) return;
+    const percent = parseInt(percentMatch[1], 10);
+    const now = Date.now();
+
+    if (!discharging) {
+      if (state.lastBatteryAlert) state.lastBatteryAlert = 0;
+      return;
+    }
+
+    if (percent <= 20) {
+      const cooldownMs = 30 * 60 * 1000;
+      const shouldAlert = !state.lastBatteryAlert ||
+        (now - state.lastBatteryAlert > cooldownMs) ||
+        (percent <= 10 && (state.lastBatteryLevel || 100) > 10);
+
+      if (shouldAlert) {
+        state.lastBatteryAlert = now;
+        state.lastBatteryLevel = percent;
+        const icon = percent <= 10 ? '🪫 CRITICAL' : '⚠️ OGOHLANTIRISH';
+        sendTelegram(`${icon}: MacBook quvvati kam qoldi (${percent}%).\nQurilma o'chib qolmasligi uchun uni zaryadlovchiga ulang!`);
+        ok(`🚨 Batareya ogohlantirishi yuborildi: ${percent}%`);
+      }
+    }
+  } catch (_) {}
+}
+
 // SHOSHILINCH ekran ogohlantirishlari — proactive-check'ning umumiy
 // 30 daqiqalik tsiklidan FARQLI, screen-monitor #urgent deb belgilagan
 // (xato/crash, xavfsizlik, muddat kabi) yozuvlarni ANCHA tez-tez (default
@@ -23,6 +55,7 @@ function createUrgentCheckJob({ projectDir, localDateStr, proactivePolicy, askAg
 
   async function run() {
     const state = loadUrgentState(stateFile);
+    checkBatteryAlert(state, sendTelegram);
     let mem;
     try { mem = require('../../skills/memory'); } catch (e) { return; }
     const filePath = path.join(mem.MEMORY_DIR, localDateStr() + '.md');

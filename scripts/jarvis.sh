@@ -450,6 +450,10 @@ while true; do
   fi
 
   # ── Bot tekshirish ──
+  if [[ "${TELEGRAM_ENABLED}" != "1" ]] && validate_telegram; then
+    log "[BOT] Tarmoq tiklandi, Telegram bot yoqilmoqda..."
+    TELEGRAM_ENABLED=1
+  fi
   if [[ "${TELEGRAM_ENABLED}" == "1" ]] && ! check_child "${BOT_PID}"; then
     if restart_allowed BOT; then
       warn "[BOT] To'xtagan — qayta ishga tushirish..."

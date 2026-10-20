@@ -15,6 +15,9 @@ function env(key, fallback) {
 }
 
 function extractOutputText(response) {
+  if (response?.choices?.[0]?.message?.content) {
+    return response.choices[0].message.content.trim();
+  }
   if (!response || !Array.isArray(response.output)) return '';
   return response.output
     .filter(item => item && item.type === 'message' && Array.isArray(item.content))
@@ -42,15 +45,29 @@ function extractJson(text) {
   throw new Error('JSON tugallanmagan');
 }
 
-function request({ model, system, user, maxOutputTokens, timeoutMs, effort }) {
+function request({ model, system, user, maxOutputTokens, timeoutMs, effort, endpointPath }) {
   return new Promise((resolve, reject) => {
     const key = env('AZURE_OPENAI_KEY');
     const base = String(env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '').replace(/\/api\/projects\/[^/]+$/, '').replace(/\/openai\/v1$/, '');
     if (!key || !base) return reject(new Error('Azure OpenAI endpoint/key sozlanmagan'));
-    const body = { model, instructions: system, input: String(user).slice(0, 60000), max_output_tokens: maxOutputTokens };
-    if (effort) body.reasoning = { effort };
+    const useResponses = endpointPath === '/openai/v1/responses';
+    const path = useResponses ? '/openai/v1/responses' : '/openai/v1/chat/completions';
+    const body = useResponses ? {
+      model, instructions: system, input: String(user).slice(0, 60000), max_output_tokens: maxOutputTokens
+    } : {
+      model: model || env('AZURE_OPENAI_DEPLOYMENT', 'gpt-4.1-mini'),
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: String(user).slice(0, 60000) }
+      ],
+      max_tokens: maxOutputTokens || 4096
+    };
+    if (effort) {
+      if (useResponses) body.reasoning = { effort };
+      else body.reasoning_effort = effort;
+    }
     const payload = JSON.stringify(body);
-    const req = https.request(new URL(base + '/openai/v1/responses'), {
+    const req = https.request(new URL(base + path), {
       method: 'POST',
       headers: { 'api-key': key, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
     }, res => {

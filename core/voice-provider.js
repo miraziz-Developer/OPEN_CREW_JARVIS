@@ -82,6 +82,20 @@ function buildVoiceProviders(env) {
     });
   }
 
+  const openaiKey = env('OPENAI_API_KEY');
+  if (configured(openaiKey)) {
+    const deployment = env('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview');
+    providers.push({
+      id: 'openai-realtime',
+      url: `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(deployment)}`,
+      headers: {
+        'Authorization': `Bearer ${openaiKey}`,
+        'OpenAI-Beta': 'realtime=v1'
+      },
+      voice: getRealtimeVoice(env('OPENAI_REALTIME_VOICE'), unifiedVoice)
+    });
+  }
+
   return providers;
 }
 

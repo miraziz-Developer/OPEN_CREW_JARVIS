@@ -44,13 +44,24 @@ function yesterday() {
   return localDateStr(d);
 }
 
-function askAgent(message) {
+async function askAgent(message) {
+  const englishOnly = '[Language policy: Produce all newly written prose only in natural English. Never answer in Uzbek.]\n\n';
+  try {
+    const llm = require(path.join(PROJECT_DIR, 'core', 'llm'));
+    const reply = await llm.complete({
+      system: 'You are J.A.R.V.I.S. background synthesis engine. ' + englishOnly,
+      user: message,
+      maxOutputTokens: 2048,
+      timeoutMs: 30000
+    });
+    if (reply && reply.trim()) return reply.trim();
+  } catch (_) {}
+
   return new Promise((resolve) => {
-    const englishOnly = '[Language policy: Produce all newly written prose only in natural English. Never answer in Uzbek.]\n\n';
     const proc = spawn('openclaw', ['agent', '--session-key', 'agent:main:jarvis-background', '--message', englishOnly + message, '--agent', 'main'], {
       cwd: PROJECT_DIR,
       env: { ...process.env, AZURE_OPENAI_KEY: env('AZURE_OPENAI_KEY') },
-      timeout: 120000
+      timeout: 30000
     });
     let out = '';
     proc.stdout.on('data', d => out += d);
@@ -130,7 +141,9 @@ async function synthesize(date) {
 
 async function main() {
   let input = {};
-  try { input = JSON.parse(fs.readFileSync(0, 'utf8').trim() || '{}'); } catch (e) {}
+  if (!process.stdin.isTTY) {
+    try { input = JSON.parse(fs.readFileSync(0, 'utf8').trim() || '{}'); } catch (e) {}
+  }
   try {
     const result = await synthesize(input.date || yesterday());
     console.log(JSON.stringify(result));

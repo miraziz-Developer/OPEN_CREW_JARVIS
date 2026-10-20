@@ -191,11 +191,20 @@ function openBrowser(url) {
 }
 
 async function show(input = {}) {
-  const server = await ensureServer(input);
   const place = await geocode(input.place);
-  const url = createViewUrl(server.baseUrl, place.latitude, place.longitude, input);
+  const config = configuration();
+  const hasLocalApp = fs.existsSync(path.join(config.appDir, 'package.json'));
+  let url;
+  let started = false;
+  if (hasLocalApp) {
+    const server = await ensureServer(input);
+    started = server.started;
+    url = createViewUrl(server.baseUrl, place.latitude, place.longitude, input);
+  } else {
+    url = `https://earth.google.com/web/@${place.latitude.toFixed(6)},${place.longitude.toFixed(6)},12000a,35y,0t,0d`;
+  }
   await openBrowser(url);
-  return { status: 'ok', started: server.started, place, url, message: `${place.name} God's Eye View oynasida ochildi.` };
+  return { status: 'ok', started, place, url, message: `${place.name} God's Eye View / 3D Globe oynasida ochildi.` };
 }
 
 async function status() {
