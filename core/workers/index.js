@@ -70,6 +70,8 @@ function createWorkers(options = {}) {
     catch (_) { return { ...process.env, AZURE_OPENAI_KEY: azureKey(), JARVIS_PROJECT_DIR: PROJECT_DIR }; }
   };
   const agentModel = () => env('MISSION_WORKER_MODEL', env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini'));
+  const venvPython = name => path.join(PROJECT_DIR, name, 'bin', 'python');
+  const hasVenv = name => fs.existsSync(venvPython(name));
 
   // 1) To'liq OpenClaw agenti: barcha skill'lar (kalendar, pochta, Telegram, fayl, ilovalar, veb qidiruv, xotira)
   const agent = {
@@ -91,6 +93,7 @@ function createWorkers(options = {}) {
   // 2) Open Interpreter: kod, terminal, skriptlar, fayllar, ma'lumot, lokal serverlar — Azure gpt-5-mini bilan.
   //    Python API orqali past reasoning_effort (CLI'da yo'q): ~8 s, avval ~200 s.
   const interpreter = {
+    available: () => Boolean(env('INTERPRETER_PYTHON')) || hasVenv('.venv-interpreter'),
     async run({ prompt, mission, timeoutMs }) {
       const cwd = workspace(mission);
       const brief = `Work in ${cwd} unless the task names another absolute path. Do not access secrets or credential stores. ` +
@@ -111,6 +114,7 @@ function createWorkers(options = {}) {
 
   // 3) Web Specialist: Browser-use + Playwright/Chromium (alohida Python muhit)
   const browser = {
+    available: () => hasVenv('.venv-workers'),
     async run({ prompt, timeoutMs }) {
       const python = path.join(PROJECT_DIR, '.venv-workers', 'bin', 'python');
       if (!fs.existsSync(python)) return { ok: false, output: '', error: 'Browser-use o\'rnatilmagan (scripts/install-workers.sh)' };
@@ -158,6 +162,7 @@ function createWorkers(options = {}) {
   // 4b) BabyAGI (yoheinakajima/babyagi, functionz): vazifani funksiyalarga bo'lib, kodini o'zi yozadi, ro'yxatga oladi va
   //     ishga tushiradi. O'rganilgan funksiyalar doimiy papkada to'planadi (o'zini-o'zi quruvchi kutubxona).
   const babyagi = {
+    available: () => hasVenv('.venv-babyagi'),
     async run({ prompt, timeoutMs }) {
       const python = path.join(PROJECT_DIR, '.venv-babyagi', 'bin', 'python');
       if (!fs.existsSync(python)) return { ok: false, output: '', error: 'BabyAGI o\'rnatilmagan (.venv-babyagi)' };
@@ -176,6 +181,7 @@ function createWorkers(options = {}) {
   // 4c) AutoGPT (Significant-Gravitas/Auto-GPT): maqsadga qarab fikrlash -> buyruq -> natija tsikli (continuous rejim).
   //     Xavfsizlik: ishchi papka bilan cheklangan, lokal shell o'chiq, iteratsiya chegarasi bor.
   const autogpt = {
+    available: () => hasVenv('.venv-autogpt'),
     async run({ prompt, mission, task, timeoutMs }) {
       const python = path.join(PROJECT_DIR, '.venv-autogpt', 'bin', 'python');
       if (!fs.existsSync(python)) return { ok: false, output: '', error: 'AutoGPT o\'rnatilmagan (.venv-autogpt)' };
@@ -203,6 +209,7 @@ function createWorkers(options = {}) {
   // 6) Antigravity Worker: Gemini Desktop ichidagi Antigravity dasturchi agenti orqali
   //    loyihalarni yaratish, kod yozish, refactoring va dasturlash vazifalarini bajarish.
   const antigravity = {
+    available: () => require('../../skills/antigravity').status().available,
     async run({ prompt, mission, task, timeoutMs }) {
       const { executePrompt } = require('../../skills/antigravity');
       try {

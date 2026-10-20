@@ -4,17 +4,30 @@ const { assessAction, ActionSafetyPolicy } = require('../action-safety-policy');
 
 const WORKERS = ['agent', 'interpreter', 'browser', 'gui', 'phone', 'babyagi', 'autogpt', 'think', 'antigravity'];
 
-const PLAN_SYSTEM =
-  "You are the planning core of JARVIS's autonomous goal engine (BabyAGI/AutoGPT style). Turn the user's goal into " +
+const WORKER_DESCRIPTIONS = {
+  agent: 'full computer agent with skills (calendar, email, files, Telegram, memory, desktop apps, web search)',
+  interpreter: 'code, terminal, scripts, files, data work and local dev servers',
+  browser: "multi-step web research, portals and forms with a real browser that is ALREADY signed in to the user's Google and " +
+    'LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it)',
+  gui: 'visual desktop UI when no API or accessibility exists',
+  phone: "controls the user's real connected iPhone (screenshots, taps, typing, navigation) for tasks only doable on the phone " +
+    '(an app with no Mac/web equivalent) — never for anything the browser/agent worker can already do on the Mac',
+  babyagi: 'BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later',
+  autogpt: 'AutoGPT, an autonomous think-act loop with web search and file output for open-ended research or writing that ends in a written deliverable',
+  think: 'pure reasoning or writing, no side effects',
+  antigravity: 'Antigravity coding agent for creating projects, multi-file code changes, refactoring and debugging'
+};
+
+/** Builds the planner prompt, listing only workers that are installed and usable right now. */
+function buildPlanSystem(workers = WORKERS) {
+  return "You are the planning core of JARVIS's autonomous goal engine (BabyAGI/AutoGPT style). Turn the user's goal into " +
   "verifiable success criteria and a short list of concrete tasks. Reply with ONE JSON object only:\n" +
-  '{"criteria":["..."],"tasks":[{"title":"...","worker":"agent|interpreter|browser|gui|phone|babyagi|autogpt|think","prompt":"...","priority":1-10}]}\n' +
-  "Workers: agent = full computer agent with skills (calendar, email, files, Telegram, memory, desktop apps, web search); " +
-  "interpreter = code, terminal, scripts, files, data work and local dev servers; browser = multi-step web research, portals and forms " +
-  "with a real browser that is ALREADY signed in to the user's Google and LinkedIn accounts (never type passwords; on login, 2FA or CAPTCHA stop and report it); gui = visual desktop UI when no API or accessibility exists; phone = controls the user's real connected iPhone (screenshots, taps, typing, navigation) for tasks only doable on the phone (an app with no Mac/web equivalent) — never for anything the browser/agent worker can already do on the Mac; babyagi = BabyAGI, writes and registers new Python functions on the fly for computational or data subtasks and reuses them later; " +
-  "autogpt = AutoGPT, an autonomous think-act loop with web search and file output for open-ended research or writing that ends in a written deliverable; think = pure reasoning or writing, no side effects.\n" +
+  `{"criteria":["..."],"tasks":[{"title":"...","worker":"${workers.join('|')}","prompt":"...","priority":1-10}]}\n` +
+  'Workers: ' + workers.map(name => `${name} = ${WORKER_DESCRIPTIONS[name]}`).join('; ') + '.\n' +
   "Rules: 3-6 criteria a reviewer could check from evidence; use the FEWEST tasks that make sense (one to three for a simple goal, at most 8 for a large one): " +
   "each worker session is slow, so one task should do as much as it safely can, self-contained, with absolute paths and exact expectations in its prompt, and include its own verification step; each job application or outreach message must be its own task (one job or one recipient per task); prefer read-only inspection first; higher priority number runs first — SEQUENCE the plan: think through the whole job end to end, list tasks in the exact order they must run, give them strictly decreasing priorities (10, 9, 8, …) in that order, and in each later task's prompt name the files or results the earlier tasks produce and where (absolute paths) so no task depends on guessing; never include secrets; " +
   "never plan irreversible, external or costly actions unless the goal explicitly asks for them. For job hunting: research, shortlisting and drafting are separate tasks from actually applying or messaging recruiters, so the approval gate can ask the user first.";
+}
 
 const REFLECT_SYSTEM =
   "You are the verification and reflection core of JARVIS's autonomous goal engine. You receive the goal, success criteria, the task list " +
@@ -60,12 +73,12 @@ const OUTREACH_RISK = /\b(?:apply(?:ing)?\s+(?:to|for|on)|easy\s+apply|submit(?:
 
 function clip(value, max) { return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max); }
 
-function normalizeTasks(rawTasks, existingCount = 0, now = Date.now()) {
+function normalizeTasks(rawTasks, existingCount = 0, now = Date.now(), allowed = WORKERS) {
   const list = Array.isArray(rawTasks) ? rawTasks : [];
   return list.filter(task => task && task.prompt).slice(0, 12).map((task, index) => ({
     id: `t${existingCount + index + 1}`,
     title: clip(task.title || task.prompt, 120),
-    worker: WORKERS.includes(task.worker) ? task.worker : 'agent',
+    worker: allowed.includes(task.worker) ? task.worker : 'agent',
     prompt: String(task.prompt).slice(0, 4000),
     priority: Math.max(1, Math.min(10, Number(task.priority) || 5)),
     status: 'pending', attempts: 0, result: null, error: null, approved: false,
@@ -87,6 +100,15 @@ class GoalEngine {
     // doim tasdiq bilan. 'strict' rejimida hammasi tasdiqli.
     this.routineAutonomy = options.routineAutonomy !== false;
     this.standing = options.standing || null;   // StandingApprovals (doimiy ruxsatlar)
+  }
+
+  /** Workers that exist and report themselves usable (missing venvs, signed-out CLIs are excluded). */
+  availableWorkers() {
+    return WORKERS.filter(name => {
+      const worker = this.workers?.[name];
+      if (!worker) return false;
+      try { return typeof worker.available !== 'function' || worker.available(); } catch (_) { return false; }
+    });
   }
 
   _log(mission, kind, text) {
@@ -155,11 +177,11 @@ class GoalEngine {
   async plan(mission) {
     const notes = mission.notes.length ? `\nUser notes:\n- ${mission.notes.join('\n- ')}` : '';
     const plan = await this.llm.completeJson({
-      system: PLAN_SYSTEM, user: `Goal: ${mission.goal}${notes}`, model: this.model, hard: true, effort: 'medium', maxOutputTokens: 6000
+      system: buildPlanSystem(this.availableWorkers()), user: `Goal: ${mission.goal}${notes}`, model: this.model, hard: true, effort: 'medium', maxOutputTokens: 6000
     });
     mission.criteria = (Array.isArray(plan.criteria) ? plan.criteria : []).map(c => clip(c, 300)).filter(Boolean).slice(0, 8);
     if (!mission.criteria.length) mission.criteria = [`The goal is fully achieved: ${clip(mission.goal, 200)}`];
-    mission.tasks = normalizeTasks(plan.tasks, 0, this.now());
+    mission.tasks = normalizeTasks(plan.tasks, 0, this.now(), this.availableWorkers());
     if (!mission.tasks.length) throw new Error('Reja bo\'sh chiqdi');
     mission.status = 'running';
     this._log(mission, 'plan', `${mission.tasks.length} tasks, ${mission.criteria.length} criteria`);
@@ -276,7 +298,7 @@ class GoalEngine {
     }
     if (verdict.summary) mission.summary = clip(verdict.summary, 300);
     this._skipTasks(mission, verdict.skip_tasks);
-    const fresh = normalizeTasks(verdict.new_tasks, mission.tasks.length, this.now());
+    const fresh = normalizeTasks(verdict.new_tasks, mission.tasks.length, this.now(), this.availableWorkers());
     if (fresh.length) {
       const known = new Set(mission.tasks.map(t => `${t.worker}|${t.prompt}`));
       for (const item of fresh) if (!known.has(`${item.worker}|${item.prompt}`)) mission.tasks.push(item);
@@ -324,11 +346,11 @@ class GoalEngine {
     if (verdict.goal_achieved === true && clip(verdict.goal_evidence, 10)) {
       return this._finish(mission, 'completed', `Mission ${mission.n} is complete: ${clip(verdict.summary || verdict.goal_evidence, 240)}`, clip(verdict.goal_evidence, 1500));
     }
-    const fresh = normalizeTasks(verdict.new_tasks, mission.tasks.length, this.now());
+    const fresh = normalizeTasks(verdict.new_tasks, mission.tasks.length, this.now(), this.availableWorkers());
     if (fresh.length) { mission.tasks.push(...fresh); return this.store.save(mission); }
     if (verdict.blocked === true) return this._finish(mission, 'blocked', `Mission ${mission.n} blocked: ${clip(verdict.blocker || 'unknown', 90)}.`);
     return this._finish(mission, 'blocked', `Mission ${mission.n} has no further tasks but the goal is not verified. Tell me what is missing.`);
   }
 }
 
-module.exports = { GoalEngine, normalizeTasks, WORKERS, sanitizeForRisk };
+module.exports = { GoalEngine, normalizeTasks, buildPlanSystem, WORKERS, sanitizeForRisk };
