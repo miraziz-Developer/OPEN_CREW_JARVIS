@@ -28,7 +28,7 @@ function telegramNotifier(env) {
   return async text => {
     text = await briefer.prepare(text);
     if (!text) return false;
-    // .env ni har safar yangidan o'qiymiz: egalar o'zgarganda qayta ishga tushirish shart emas.
+    // .env is re-read every time, so changing owners needs no restart.
     let fresh = {};
     try { fresh = require('./config').parseEnv(fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8')); } catch (_) {}
     const botKey = (fresh.TELEGRAM_BOT_TOKEN) || env('TELEGRAM_BOT_TOKEN');
@@ -40,8 +40,8 @@ function telegramNotifier(env) {
 }
 
 /**
- * Missiya runner: doimiy jarayon. Ovozli daemon'dan mustaqil — uzoq (soatlab/kunlab) missiyalar ovoz suhbatiga
- * hech qachon xalaqit bermaydi. Har tickda: inbox buyruqlari → faol missiyalarning keyingi iteratsiyasi (parallel).
+ * Mission runner: a persistent process, independent of the voice daemon, so long (hours/days) missions
+ * never interfere with voice conversation. Every tick: inbox commands → the next iteration of active missions (in parallel).
  */
 function createRunner(options = {}) {
   const store = options.store;
@@ -51,10 +51,10 @@ function createRunner(options = {}) {
   const remember = options.remember || (() => {});
   const usage = options.usage || null;
   const tokenBudget = options.tokenBudget || 0;            // kunlik LLM token chegarasi (0 — cheksiz)
-  const voiceMinutesAlert = options.voiceMinutesAlert || 0; // kunlik ovoz daqiqalari ogohlantirishi
+  const voiceMinutesAlert = options.voiceMinutesAlert || 0; // daily voice-minutes alert
   const spawnFn = options.spawn || require('child_process').spawn;
   let awake = null;
-  const live = new Map();            // missionId -> in-memory mission (buyruqlar shu obyektga qo'llanadi)
+  const live = new Map();            // missionId -> in-memory mission (commands are applied to this object)
   const log = options.log || (() => {});
   let eventOffset = store.eventsOffset();
   let stopped = false;
@@ -73,7 +73,7 @@ function createRunner(options = {}) {
     const { events, offset } = store.readEventsSince(eventOffset);
     eventOffset = offset;
     for (const event of events) {
-      if (MEMORY_KINDS.has(event.kind)) { try { remember(event); } catch (_) {} }   // Obsidian xotira: JARVIS keyin eslay oladi
+      if (MEMORY_KINDS.has(event.kind)) { try { remember(event); } catch (_) {} }   // Obsidian memory, so JARVIS can recall it later
       if (NOTIFY_KINDS.has(event.kind)) { try { await notify(event.text); } catch (_) {} }
     }
   }
@@ -87,7 +87,7 @@ function createRunner(options = {}) {
     }
   }
 
-  // Missiya ishlayotganda Mac uyquga ketmasin (soatlab/kunlab ishlaydigan vazifalar uchun). Runner tugasa `caffeinate` ham tugaydi.
+  // Keep the Mac awake while missions run (tasks that take hours or days). `caffeinate` ends with the runner.
   function ensureAwake(need) {
     if (need && !awake) {
       try {
@@ -108,7 +108,7 @@ function createRunner(options = {}) {
     if (voiceMinutesAlert && (totals.voice_seconds || 0) / 60 >= voiceMinutesAlert && usage.once('voice-alert')) {
       try { await notify(`Voice listening used ${Math.round((totals.voice_seconds || 0) / 60)} minutes of cloud audio today (alert at ${voiceMinutesAlert}).`); } catch (_) {}
     }
-    // Byudjet oshsa missiyalar TO'XTAMAYDI — faqat bir marta xabar beriladi (kuniga bir marta, keyin har +50% da).
+    // Missions do NOT stop when the budget is exceeded; a notice is sent once (once a day, then at every +50%).
     let freshLevel = false;
     for (const step of [1, 1.5, 2, 3]) {
       if (tokenBudget && (totals.llm_tokens || 0) >= tokenBudget * step && usage.once(`token-budget-${step}`)) freshLevel = true;
@@ -135,7 +135,7 @@ function createRunner(options = {}) {
       live.set(mission.id, mission);
       engine.step(mission)
         .catch(error => {
-          log(`step xatosi (${mission.id}): ${error.message}`);
+          log(`step error (${mission.id}): ${error.message}`);
           mission.consecutiveFailures = (mission.consecutiveFailures || 0) + 1;
           try { store.save(mission); } catch (_) {}
         })
@@ -148,7 +148,7 @@ function createRunner(options = {}) {
   async function run(pollMs = 2000) {
     recover();
     while (!stopped) {
-      try { await tick(); } catch (error) { log('tick xatosi: ' + error.message); }
+      try { await tick(); } catch (error) { log('tick error: ' + error.message); }
       await new Promise(resolve => setTimeout(resolve, pollMs));
     }
   }
@@ -171,7 +171,7 @@ function main() {
     remember: event => require('../skills/memory').writeMemory(`Mission ${event.n}`, event.text, ['mission', event.kind.replace('mission.', '')]),
     log: message => console.log(`[${new Date().toISOString()}] ${message}`)
   });
-  console.log(`[${new Date().toISOString()}] mission-runner ishga tushdi (pid ${process.pid})`);
+  console.log(`[${new Date().toISOString()}] mission-runner started (pid ${process.pid})`);
   process.on('SIGTERM', () => { runner.stop(); setTimeout(() => process.exit(0), 300); });
   runner.run().catch(error => { console.error(error); process.exit(1); });
 }

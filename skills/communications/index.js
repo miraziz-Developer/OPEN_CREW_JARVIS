@@ -32,7 +32,7 @@ JSON.stringify(matches);
 
 function cleanText(value, label, maxLength) {
   const text = String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!text) throw new Error(`${label} kerak`);
+  if (!text) throw new Error(`${label} is required`);
   if (text.length > maxLength) throw new Error(`${label} juda uzun (maksimum ${maxLength})`);
   return text;
 }
@@ -51,7 +51,7 @@ function normalizePhone(value, defaultCountryCode = '') {
 }
 
 function buildYouTubeSearchUrl(query) {
-  const clean = cleanText(query, 'YouTube qidiruv so‘rovi', MAX_QUERY_LENGTH);
+  const clean = cleanText(query, 'YouTube search query', MAX_QUERY_LENGTH);
   const url = new URL('https://www.youtube.com/results');
   url.searchParams.set('search_query', clean);
   return url.toString();
@@ -59,8 +59,8 @@ function buildYouTubeSearchUrl(query) {
 
 function buildWhatsAppDraftUrl(phone, message, options = {}) {
   const normalizedPhone = normalizePhone(phone, options.defaultCountryCode);
-  if (!normalizedPhone) throw new Error('WhatsApp uchun E.164 telefon raqami kerak');
-  const cleanMessage = cleanText(message, 'Xabar', MAX_MESSAGE_LENGTH);
+  if (!normalizedPhone) throw new Error('WhatsApp needs an E.164 phone number');
+  const cleanMessage = cleanText(message, 'Message', MAX_MESSAGE_LENGTH);
   const url = new URL('https://wa.me/' + normalizedPhone.slice(1));
   url.searchParams.set('text', cleanMessage);
   return url.toString();
@@ -68,7 +68,7 @@ function buildWhatsAppDraftUrl(phone, message, options = {}) {
 
 function buildFaceTimeUrl(phone, options = {}) {
   const normalizedPhone = normalizePhone(phone, options.defaultCountryCode);
-  if (!normalizedPhone) throw new Error('FaceTime uchun E.164 telefon raqami kerak');
+  if (!normalizedPhone) throw new Error('FaceTime needs an E.164 phone number');
   return 'facetime://' + encodeURIComponent(normalizedPhone);
 }
 
@@ -81,7 +81,7 @@ function openUrl(url, options = {}) {
 
 function searchYouTube(query, options = {}) {
   const url = buildYouTubeSearchUrl(query);
-  return openUrl(url, options).then(() => ({ status: 'ok', kind: 'youtube-search', url, message: 'YouTube qidiruvi ochildi.' }));
+  return openUrl(url, options).then(() => ({ status: 'ok', kind: 'youtube-search', url, message: 'YouTube search opened.' }));
 }
 
 function lookupContact(query, options = {}) {
@@ -92,12 +92,12 @@ function lookupContact(query, options = {}) {
       env: { ...process.env, JARVIS_CONTACT_QUERY: cleanQuery },
       maxBuffer: 1024 * 1024
     }, (error, stdout) => {
-      if (error) return reject(new Error('Contacts qidiruvi bajarilmadi: ' + String(error.message || error).slice(0, 180)));
+      if (error) return reject(new Error('Contacts search failed: ' + String(error.message || error).slice(0, 180)));
       try {
         const contacts = JSON.parse(String(stdout || '[]'));
         resolve(Array.isArray(contacts) ? contacts.slice(0, 10) : []);
       } catch (parseError) {
-        reject(new Error('Contacts javobi noto‘g‘ri formatda'));
+        reject(new Error('Contacts returned an unexpected format'));
       }
     });
   });
@@ -106,16 +106,16 @@ function lookupContact(query, options = {}) {
 async function openWhatsAppDraft(input = {}, options = {}) {
   const url = buildWhatsAppDraftUrl(input.phone, input.message, options);
   await openUrl(url, options);
-  return { status: 'ok', kind: 'whatsapp-draft', url, message: 'WhatsApp draft ochildi; yuborish tugmasini siz bosasiz.' };
+  return { status: 'ok', kind: 'whatsapp-draft', url, message: 'WhatsApp draft opened; you press send.' };
 }
 
 async function startFaceTimeCall(input = {}, options = {}) {
   if (input.confirmed !== true) {
-    return { status: 'confirmation_required', kind: 'facetime-call', message: 'Qo‘ng‘iroq boshlashdan oldin aynan shu kontakt uchun tasdiq kerak.' };
+    return { status: 'confirmation_required', kind: 'facetime-call', message: 'Confirmation for exactly this contact is required before starting a call.' };
   }
   const url = buildFaceTimeUrl(input.phone, options);
   await openUrl(url, options);
-  return { status: 'ok', kind: 'facetime-call', url, message: 'FaceTime qo‘ng‘irog‘i boshlandi.' };
+  return { status: 'ok', kind: 'facetime-call', url, message: 'FaceTime call started.' };
 }
 
 function parseCommunicationIntent(text) {

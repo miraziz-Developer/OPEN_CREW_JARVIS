@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * GOOGLE AUTH — umumiy modul (skill emas, boshqa skilllar ichida
- * ishlatiladi). `scripts/google-oauth-setup.js` orqali olingan
- * refresh_token'dan doim yangi access_token oladi (kerak bo'lganda
- * avtomatik yangilaydi — foydalanuvchi qayta kirishi shart emas).
+ * GOOGLE AUTH: a shared module (not a skill; used inside other skills). Always gets a
+ * fresh access_token from the refresh_token obtained via `scripts/google-oauth-setup.js`
+ * (refreshing automatically when needed; the user never has to sign in again).
  */
 
 const fs = require('fs');
@@ -40,13 +39,12 @@ function postForm(url, formBody) {
   });
 }
 
-// Har doim ISHLAYDIGAN access_token qaytaradi — kerak bo'lsa avtomatik
-// yangilaydi (access_token ~1 soatda eskiradi, refresh_token esa
-// odatda muddatsiz, foydalanuvchi o'zi bekor qilmaguncha).
+// Always returns a WORKING access_token, refreshing it when needed (an access_token
+// expires in ~1 hour; a refresh_token usually does not expire until the user revokes it).
 async function getAccessToken() {
   const tokens = loadTokens();
   if (!tokens || !tokens.refresh_token) {
-    throw new Error('Google ulanmagan — avval: node scripts/google-oauth-setup.js');
+    throw new Error('Google is not connected; first run: node scripts/google-oauth-setup.js');
   }
   if (tokens.access_token && tokens.expiry_date && Date.now() < tokens.expiry_date - 60000) {
     return tokens.access_token;
@@ -55,7 +53,7 @@ async function getAccessToken() {
     client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
     refresh_token: tokens.refresh_token, grant_type: 'refresh_token'
   });
-  if (resp.error) throw new Error('Google token yangilashda xatolik: ' + (resp.error_description || resp.error));
+  if (resp.error) throw new Error('Google token refresh error: ' + (resp.error_description || resp.error));
   tokens.access_token = resp.access_token;
   tokens.expiry_date = Date.now() + (resp.expires_in || 3600) * 1000;
   saveTokens(tokens);
@@ -67,7 +65,7 @@ function isConnected() {
   return !!(t && t.refresh_token);
 }
 
-// Google REST API'ga tayyor Authorization header bilan so'rov.
+// A Google REST API request with a ready Authorization header.
 function apiRequest(method, url, body) {
   return getAccessToken().then(token => new Promise((resolve, reject) => {
     const payload = body ? JSON.stringify(body) : null;
@@ -79,7 +77,7 @@ function apiRequest(method, url, body) {
         let parsed;
         try { parsed = d ? JSON.parse(d) : {}; } catch (e) { parsed = { raw: d }; }
         if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed);
-        else reject(new Error('Google API xatolik (' + res.statusCode + '): ' + (parsed.error?.message || d)));
+        else reject(new Error('Google API error (' + res.statusCode + '): ' + (parsed.error?.message || d)));
       });
     });
     req.on('error', reject);

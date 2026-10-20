@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * GMAIL Skill — muhim/o'qilmagan xatlarni ko'rish, o'qilgan deb
- * belgilash, yangi xat yuborish. Ulanish uchun avval bir marta:
+ * GMAIL skill: view important/unread mail, mark it as read, send new mail.
+ * Connect once first:
  *   node scripts/google-oauth-setup.js
- * Kirish (stdin JSON): { action: "list_messages"|"send_message"|"mark_read", ... }
+ * Input (stdin JSON): { action: "list_messages"|"send_message"|"mark_read", ... }
  */
 
 const fs = require('fs');
@@ -19,9 +19,9 @@ function headerVal(headers, name) {
   return h ? h.value : '';
 }
 
-// ── Xatlarni ko'rish (default: o'qilmagan) ──────────────────────────────
+// ── Listing mail (default: unread) ──────────────────────────────────────
 async function listMessages(query, maxResults) {
-  if (!isConnected()) return { status: 'error', message: "Google ulanmagan — avval: node scripts/google-oauth-setup.js" };
+  if (!isConnected()) return { status: 'error', message: 'Google is not connected; first run: node scripts/google-oauth-setup.js' };
   const q = query || 'is:unread';
   const params = new URLSearchParams({ q, maxResults: String(maxResults || 10) });
   const listResp = await apiRequest('GET', GMAIL_BASE + '/messages?' + params.toString());
@@ -41,9 +41,9 @@ async function listMessages(query, maxResults) {
   return { status: 'ok', messages };
 }
 
-// ── O'qilgan deb belgilash ────────────────────────────────────────────
+// ── Marking as read ───────────────────────────────────────────────────
 async function markRead(id) {
-  if (!id) return { status: 'error', message: 'id kerak' };
+  if (!id) return { status: 'error', message: 'id is required' };
   await apiRequest('POST', GMAIL_BASE + '/messages/' + id + '/modify', { removeLabelIds: ['UNREAD'] });
   return { status: 'ok' };
 }
@@ -52,10 +52,10 @@ function base64url(str) {
   return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-// ── Xat yuborish ──────────────────────────────────────────────────────
+// ── Sending mail ──────────────────────────────────────────────────────
 async function sendMessage(to, subject, body) {
-  if (!isConnected()) return { status: 'error', message: "Google ulanmagan — avval: node scripts/google-oauth-setup.js" };
-  if (!to || !subject || !body) return { status: 'error', message: 'to, subject, body kerak' };
+  if (!isConnected()) return { status: 'error', message: 'Google is not connected; first run: node scripts/google-oauth-setup.js' };
+  if (!to || !subject || !body) return { status: 'error', message: 'to, subject and body are required' };
   const mime = [
     'To: ' + to,
     'Subject: =?UTF-8?B?' + Buffer.from(subject, 'utf8').toString('base64') + '?=',
@@ -65,7 +65,7 @@ async function sendMessage(to, subject, body) {
     body
   ].join('\r\n');
   const resp = await apiRequest('POST', GMAIL_BASE + '/messages/send', { raw: base64url(mime) });
-  if (!resp.id) return { status: 'error', message: 'yuborilmadi: ' + JSON.stringify(resp) };
+  if (!resp.id) return { status: 'error', message: 'not sent: ' + JSON.stringify(resp) };
   return { status: 'ok', id: resp.id };
 }
 

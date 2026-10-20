@@ -7,7 +7,7 @@ const communications = require('../skills/communications');
 test('YouTube search uses a canonical HTTPS URL and encodes user text', () => {
   const url = communications.buildYouTubeSearchUrl('  lo-fi & chill  ');
   assert.equal(url, 'https://www.youtube.com/results?search_query=lo-fi+%26+chill');
-  assert.throws(() => communications.buildYouTubeSearchUrl('   '), /qidiruv/i);
+  assert.throws(() => communications.buildYouTubeSearchUrl('   '), /search query/i);
 });
 
 test('phone normalization only accepts valid E.164 numbers', () => {
@@ -26,7 +26,7 @@ test('WhatsApp flow opens a prefilled draft and never sends it', async () => {
   assert.equal(result.kind, 'whatsapp-draft');
   assert.match(result.url, /^https:\/\/wa\.me\/14155552671\?text=Salom/);
   assert.deepEqual(calls, [{ file: 'open', args: [result.url] }]);
-  assert.match(result.message, /siz bosasiz/i);
+  assert.match(result.message, /you press send/i);
 });
 
 test('FaceTime cannot start without an explicit scoped confirmation', async () => {
