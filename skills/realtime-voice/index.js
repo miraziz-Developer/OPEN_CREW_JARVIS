@@ -300,7 +300,7 @@ function recentContextBlock() {
         const bt = new Date(d); bt.setHours(+m[1], +m[2], 0, 0);
         const ageH = (now - bt) / 3600000;
         if (ageH < 0 || ageH > RECENT_CONTEXT_HOURS) continue;
-        const body = block.replace(/^## .+$/m, '').replace(/\*\*Teglar:\*\*.*$/m, '').trim();
+        const body = block.replace(/^## .+$/m, '').replace(/\*\*(?:Tags|Teglar):\*\*.*$/m, '').trim();
         if (body) items.push({ t: bt, line: m[1] + ':' + m[2] + ' — ' + m[3] + ': ' + body.replace(/\s+/g, ' ').slice(0, 220) });
       }
     }

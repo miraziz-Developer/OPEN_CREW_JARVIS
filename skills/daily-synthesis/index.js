@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * DAILY SYNTHESIS Skill — kunlik xom kuzatuvlardan naqsh (pattern) o'rganish
+ * DAILY SYNTHESIS skill: learns patterns from a day's raw observations.
  *
- * Xom ekran kuzatuvlari `Jarvis/Memory/YYYY-MM-DD.md` ga yig'iladi, lekin
- * ulardan foyda bo'lishi uchun umumlashtirilishi kerak. Bu skill kunlik
- * yozuvlarni o'qib, agentdan barqaror naqshlarni ajratib olishni so'raydi
- * va natijani `Jarvis/Profile/User.md` profiliga qo'shadi — shu tariqa
- * "o'rganish" xotira orqali to'planib boradi.
+ * Raw screen observations accumulate in `Jarvis/Memory/YYYY-MM-DD.md`, but they
+ * are only useful once summarised. This skill reads a day's entries, asks the
+ * agent to extract stable patterns and appends the result to the
+ * `Jarvis/Profile/User.md` profile, so "learning" accumulates in memory.
  *
- * Kirish (stdin JSON): { date?: "YYYY-MM-DD" }  — default: kecha
- * Chiqish: { status, date, learned? , skipped? }
+ * Input (stdin JSON): { date?: "YYYY-MM-DD" }  (default: yesterday)
+ * Output: { status, date, learned?, skipped? }
  */
 
 const fs = require('fs');
@@ -30,8 +29,8 @@ function saveState(s) {
   try { fs.writeFileSync(STATE_FILE, JSON.stringify(s)); } catch (e) {}
 }
 
-// Mahalliy (timezone) sanani beradi — toISOString() UTC qaytaradi, shuning
-// uchun UTC+8'da mahalliy soat 08:00gacha noto'g'ri kunni tanlab qolardi.
+// Returns the local (timezone-aware) date. toISOString() returns UTC, so at UTC+8
+// the wrong day was picked until 08:00 local time.
 function localDateStr(d) {
   d = d || new Date();
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
@@ -77,12 +76,12 @@ async function askAgent(message) {
 async function synthesize(date) {
   const state = loadState();
   if (state.done.includes(date)) {
-    return { status: 'ok', date, skipped: 'allaqachon bajarilgan' };
+    return { status: 'ok', date, skipped: 'already done' };
   }
 
   const filePath = path.join(mem.MEMORY_DIR, date + '.md');
   if (!fs.existsSync(filePath)) {
-    return { status: 'ok', date, skipped: 'kuzatuv yozuvi yo\'q' };
+    return { status: 'ok', date, skipped: 'no observations' };
   }
 
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -94,48 +93,46 @@ async function synthesize(date) {
   let existingTasks = [];
   try { existingTasks = require('../tasks').activeTasks(); } catch (e) {}
   const prompt =
-    'Quyida ' + date + ' kuni foydalanuvchi kompyuterida kuzatilgan xom yozuvlar bor.\n\n' +
-    '=== XOM KUZATUVLAR ===\n' + raw.slice(0, 12000) + '\n\n' +
-    '=== MAVJUD PROFIL ===\n' + (profile.content || '(bo\'sh)').slice(0, 4000) + '\n\n' +
-    '=== HOZIRGI KUNLIK VAZIFALAR RO\'YXATI ===\n' + (existingTasks.length ? existingTasks.join('\n') : '(bo\'sh)') + '\n\n' +
-    'Vazifa 1: shu kundagi kuzatuvlardan foydalanuvchi haqida BARQAROR, kelajakda foydali ' +
-    'xulosalar chiqaring (qanday loyihalar ustida ishlaydi, qanday vositalardan foydalanadi, ' +
-    'ish uslubi, takrorlanadigan odatlar). Bir martalik tasodifiy narsalarni yozmang.\n\n' +
-    'Vazifa 2: agar shu naqshlar orasida SIZ (Jarvis) har kuni mustaqil bajarishingiz mumkin bo\'lgan ' +
-    'aniq, takrorlanadigan ish bo\'lsa (masalan muayyan tekshiruv, tozalash, kuzatuv, eslatma) — ' +
-    'uni to\'g\'ridan-to\'g\'ri `exec` orqali kunlik vazifalar ro\'yxatiga qo\'shing: ' +
+    'Below are the raw entries observed on the user\'s computer on ' + date + '.\n\n' +
+    '=== RAW OBSERVATIONS ===\n' + raw.slice(0, 12000) + '\n\n' +
+    '=== CURRENT PROFILE ===\n' + (profile.content || '(empty)').slice(0, 4000) + '\n\n' +
+    '=== CURRENT DAILY TASK LIST ===\n' + (existingTasks.length ? existingTasks.join('\n') : '(empty)') + '\n\n' +
+    'Task 1: from these observations, draw STABLE conclusions about the user that will be useful later ' +
+    '(which projects they work on, which tools they use, their working style, recurring habits). ' +
+    'Do not record one-off, incidental things.\n\n' +
+    'Task 2: if these patterns include concrete, recurring work that YOU (Jarvis) could do independently every day ' +
+    '(e.g. a specific check, cleanup, monitoring or reminder), add it to the daily task list directly with `exec`: ' +
     'echo \'{"action":"add","text":"..."}\' | node skills/tasks/index.js — ' +
-    'lekin faqat aniq va foydali bo\'lsa, ro\'yxatda allaqachon bor narsani qayta qo\'shmang.\n\n' +
-    'Qoidalar (Vazifa 1 javobi uchun):\n' +
-    '- Faqat 2-5 ta eng muhim xulosa, har biri bitta qisqa qatorda, "- " bilan boshlanadi.\n' +
-    '- Mavjud profilda allaqachon bor narsani takrorlamang.\n' +
-    '- Yangi barqaror xulosa yo\'q bo\'lsa, faqat "YANGI_YOQ" deb yozing, boshqa hech narsa emas.\n' +
-    '- Javobingiz FAQAT shu ro\'yxat bo\'lsin (Vazifa 2\'ni bajargan bo\'lsangiz ham, unga izoh yozmang) — kirish/xulosa gapi yo\'q.';
+    'but only if it is concrete and useful; never re-add something already on the list.\n\n' +
+    'Rules (for the Task 1 answer):\n' +
+    '- Only the 2-5 most important conclusions, one short line each, starting with "- ".\n' +
+    '- Do not repeat anything already in the profile.\n' +
+    '- If there is no new stable conclusion, reply with exactly "NO_NEW_FACTS" and nothing else.\n' +
+    '- Reply with ONLY that list (even if you did Task 2, do not comment on it); no intro or summary sentence.';
 
   const reply = await askAgent(prompt);
 
-  // Agent hech qanday javob bermasa (timeout/xatolik) — bu "yangi naqsh
-  // yo'q" bilan bir xil emas. Shu kunni "bajarilgan" deb belgilamaymiz,
-  // shunda keyingi safar qayta urinib ko'riladi (aks holda vaqtinchalik
-  // xatolik tufayli o'sha kun butunlay o'tkazib yuborilgan bo'lardi).
+  // No reply from the agent (timeout/error) is not the same as "no new pattern".
+  // The day is not marked done, so it is retried next time (otherwise a transient
+  // error would skip that day for good).
   if (!reply) {
-    return { status: 'error', date, message: 'agentdan javob kelmadi (qayta uriniladi)' };
+    return { status: 'error', date, message: 'no reply from the agent (will retry)' };
   }
 
   state.done.push(date);
   if (state.done.length > 90) state.done = state.done.slice(-90);
   saveState(state);
 
-  if (reply.includes('YANGI_YOQ')) {
+  if (/NO_NEW_FACTS|YANGI_YOQ/.test(reply)) {
     return { status: 'ok', date, learned: null };
   }
 
   const lines = reply.split('\n').map(l => l.trim()).filter(l => l.startsWith('-'));
   if (!lines.length) return { status: 'ok', date, learned: null };
 
-  // updateProfile qiymat oldiga "- " qo'shadi — takror chiziqcha bo'lmasin
+  // updateProfile prefixes the value with "- ", so avoid a double dash
   const value = lines.map(l => l.replace(/^-\s*/, '')).join('\n- ');
-  mem.updateProfile('O\'rganilgan naqshlar — ' + date, value, 'avtomatik kuzatuv');
+  mem.updateProfile('Learned patterns — ' + date, value, 'automatic observation');
   return { status: 'ok', date, learned: lines };
 }
 

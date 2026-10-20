@@ -78,7 +78,7 @@ function createUrgentCheckJob({ projectDir, localDateStr, proactivePolicy, askAg
     if (!urgentBlocks.length) return;
 
     for (const { block } of urgentBlocks) {
-      const summary = block.replace(/^## .+$/m, '').replace(/\*\*Teglar:\*\*.*$/m, '').trim();
+      const summary = block.replace(/^## .+$/m, '').replace(/\*\*(?:Tags|Teglar):\*\*.*$/m, '').trim();
       const decision = proactivePolicy.evaluate({
         source: 'screen-urgent', summary, confidence: 0.82, urgency: 0.95,
         benefit: 0.9, reversibility: 1, risk: 0.25, disruption: 0.25

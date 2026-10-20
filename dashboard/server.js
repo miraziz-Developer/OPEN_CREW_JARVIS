@@ -102,7 +102,7 @@ function parseMemoryFile(filePath) {
   for (const block of blocks) {
     const m = block.match(/^## (\d{2}:\d{2}) — (.+)$/m);
     if (!m) continue;
-    const rest = block.slice(block.indexOf('\n') + 1).replace(/\*\*Teglar:\*\*.*$/ms, '').trim();
+    const rest = block.slice(block.indexOf('\n') + 1).replace(/\*\*(?:Tags|Teglar):\*\*.*$/ms, '').trim();
     entries.push({ time: m[1], topic: m[2], content: rest.slice(0, 400) });
   }
   return entries.reverse(); // eng yangisi birinchi

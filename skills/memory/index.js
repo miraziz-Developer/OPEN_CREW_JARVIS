@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * MEMORY Skill — Obsidian Vault'ga xotira yozish va qidirish
+ * MEMORY skill: writes to and searches memory in the Obsidian vault
  * Vault: ~/Documents/Obsidian Vault
- * Structure: Jarvis/Memory/YYYY-MM-DD.md  va  Jarvis/Profile/User.md
+ * Structure: Jarvis/Memory/YYYY-MM-DD.md and Jarvis/Profile/User.md
  */
 
 const fs = require('fs');
@@ -17,10 +17,9 @@ const VAULT = process.env.OBSIDIAN_VAULT
 const MEMORY_DIR = path.join(VAULT, 'Jarvis', 'Memory');
 const PROFILE_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'User.md');
 const CONTEXT_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'SessionContext.md');
-// Diskdagi haqiqiy fayl nomi birlik ("Pronunciation.md") -- bu konstanta
-// avval ko'plik ("Pronunciations.md") deb yozilgan bo'lib, mos kelmagani
-// uchun getPronunciationNotes() doim bo'sh qaytargan va foydalanuvchi
-// tuzatgan barcha talaffuz xatolari amalda hech qachon ishlatilmagan.
+// The real file name on disk is singular ("Pronunciation.md"). This constant was
+// once plural ("Pronunciations.md"), so getPronunciationNotes() always returned
+// nothing and none of the user's pronunciation corrections were ever used.
 const PRONUNCIATION_FILE = path.join(VAULT, 'Jarvis', 'Profile', 'Pronunciation.md');
 const PRONUNCIATION_MAX = 100;
 const SESSION_CONTEXT_MAX_TURNS = 12;
@@ -71,9 +70,8 @@ function ensureDirs() {
   });
 }
 
-// Mahalliy (timezone) sanani beradi — toISOString() har doim UTC qaytaradi,
-// shuning uchun UTC+8 kabi zonalarda kun 08:00gacha "kechagi kun" bo'lib
-// yozilib qolardi (Obsidian faylida sana kechikib almashadi degan xato).
+// Returns the local (timezone-aware) date. toISOString() always returns UTC, so in
+// zones like UTC+8 entries before 08:00 were written to "yesterday's" file.
 function localDateStr(d) {
   d = d || new Date();
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
@@ -106,7 +104,7 @@ function writeMemory(topic, content, tags = [], options = {}) {
   const time = new Date().toTimeString().slice(0, 5);
   const filePath = path.join(MEMORY_DIR, date + '.md');
 
-  const tagLine = tags.length ? '\n**Teglar:** ' + tags.map(t => `#${t}`).join(' ') + '\n' : '';
+  const tagLine = tags.length ? '\n**Tags:** ' + tags.map(t => `#${t}`).join(' ') + '\n' : '';
   const block = `
 ---
 ## ${time} — ${safeTopic}
@@ -116,7 +114,7 @@ ${tagLine}
 
   let existing = '';
   if (fs.existsSync(filePath)) existing = fs.readFileSync(filePath, 'utf8');
-  else existing = `# ${date} — Jarvis Xotirasi\n\nBog'liq: [[User]] · [[DailyTasks]]\n\n`;
+  else existing = `# ${date} — Jarvis memory\n\nRelated: [[User]] · [[DailyTasks]]\n\n`;
 
   fs.writeFileSync(filePath, existing + block, 'utf8');
   let structured = null;
@@ -141,19 +139,19 @@ function renderTurn(turn) {
   const lines = [
     `<!-- turnId:${turn.turnId} -->`,
     `**Turn ID:** ${turn.turnId}`,
-    `**Holat:** ${turn.status || 'accepted'}`,
-    `Foydalanuvchi: ${turn.user || '(javob kutilmoqda)'}`
+    `**Status:** ${turn.status || 'accepted'}`,
+    `User: ${turn.user || '(awaiting reply)'}`
   ];
   if (turn.assistant) lines.push(`Jarvis: ${turn.assistant}`);
   for (const tool of turn.tools || []) {
-    lines.push(`Vazifa [${tool.status || 'running'}] ${tool.description || tool.callId}: ${tool.result || ''}`.trim());
+    lines.push(`Task [${tool.status || 'running'}] ${tool.description || tool.callId}: ${tool.result || ''}`.trim());
   }
-  if (turn.error) lines.push(`Xatolik: ${turn.error}`);
+  if (turn.error) lines.push(`Error: ${turn.error}`);
   return lines.join('\n');
 }
 
 function upsertTurnMemory(turn) {
-  if (!turn?.turnId || !turn?.user) throw new Error('Persist qilish uchun turnId va accepted user text kerak');
+  if (!turn?.turnId || !turn?.user) throw new Error('turnId and accepted user text are required to persist a turn');
   ensureDirs();
   const safeTurn = {
     ...turn,
@@ -171,10 +169,10 @@ function upsertTurnMemory(turn) {
   const date = localDateStr(new Date(turn.createdAt || Date.now()));
   const time = new Date(turn.createdAt || Date.now()).toTimeString().slice(0, 5);
   const filePath = path.join(MEMORY_DIR, date + '.md');
-  const header = `# ${date} — Jarvis Xotirasi\n\nBog'liq: [[User]] · [[DailyTasks]]\n\n`;
+  const header = `# ${date} — Jarvis memory\n\nRelated: [[User]] · [[DailyTasks]]\n\n`;
   let existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : header;
   const marker = `<!-- turnId:${safeTurn.turnId} -->`;
-  const block = `---\n## ${time} — Ovozli turn\n${renderTurn(safeTurn)}\n\n**Teglar:** #voice #turn-journal\n`;
+  const block = `---\n## ${time} — Voice turn\n${renderTurn(safeTurn)}\n\n**Tags:** #voice #turn-journal\n`;
   const start = existing.indexOf(marker);
   if (start >= 0) {
     const separator = existing.lastIndexOf('---\n', start);
@@ -187,7 +185,7 @@ function upsertTurnMemory(turn) {
 
   const content = renderTurn(safeTurn);
   const structured = rememberStructured({
-    id: `turn:${safeTurn.turnId}`, layer: 'episodic', title: 'Ovozli turn', content,
+    id: `turn:${safeTurn.turnId}`, layer: 'episodic', title: 'Voice turn', content,
     tags: ['voice', 'turn-journal', safeTurn.status || 'accepted'], source: safeTurn.source || 'voice',
     confidence: 0.95, privacy: 'private', createdAt: safeTurn.createdAt
   });
@@ -199,7 +197,7 @@ function upsertTurnMemory(turn) {
 function searchMemory(query, limit = 5) {
   ensureDirs();
 
-  // Birinchi to'g'ri matn qidiruvi
+  // First, a plain text search
   const results = [];
   const files = (fs.existsSync(MEMORY_DIR) ? fs.readdirSync(MEMORY_DIR) : [])
     .filter(f => f.endsWith('.md'))
@@ -225,7 +223,7 @@ function searchMemory(query, limit = 5) {
     }
   }
 
-  // Agar hech narsa topilmasa — profilni ham qidirib ko'r
+  // If nothing was found, search the profile too
   if (results.length === 0 && fs.existsSync(PROFILE_FILE)) {
     const prof = fs.readFileSync(PROFILE_FILE, 'utf8');
     const lines = prof.split('\n');
@@ -247,18 +245,17 @@ function searchMemory(query, limit = 5) {
   return { status: 'ok', query, results, structured };
 }
 
-// ── 2b. Semantik (ma'no bo'yicha) qidiruv — RAG ─────────────────────────
-// Oddiy grep faqat bir xil so'zni topadi ("topdim.uz" desa faqat shu so'z
-// bor joylarni). Semantik qidiruv ma'noga qaraydi — "loyihamda qanday
-// xato bor edi" kabi savol bilan "topdim.uz'da bug topildi" degan
-// yozuvni ham topa oladi, so'zlar mos kelmasa ham.
+// ── 2b. Semantic (meaning-based) search — RAG ──────────────────────────
+// Plain grep only finds the same words ("topdim.uz" finds only that word). Semantic
+// search looks at meaning: a question like "what bug did my project have" also
+// finds an entry saying "found a bug on topdim.uz", even when the words differ.
 function embedText(text) {
   return new Promise((resolve, reject) => {
     const KEY = azureEnv('AZURE_EMBEDDING_KEY', azureEnv('AZURE_OPENAI_KEY'));
     const RAW_ENDPOINT = (azureEnv('AZURE_EMBEDDING_ENDPOINT', azureEnv('AZURE_OPENAI_ENDPOINT')) || '').replace(/\/$/, '').replace(/\/openai\/v1$/, '');
-    // Bazadagi yorliq (AZURE_EMBEDDING_DEPLOYMENT) eski yozuvlarga bog'langan; haqiqiy Azure deployment nomi alohida bo'lishi mumkin.
+    // The label stored in the database (AZURE_EMBEDDING_DEPLOYMENT) is tied to old entries; the real Azure deployment name may differ.
     const deployment = azureEnv('AZURE_EMBEDDING_API_DEPLOYMENT', azureEnv('AZURE_EMBEDDING_DEPLOYMENT', 'text-embedding-3-large-2'));
-    if (!KEY || !RAW_ENDPOINT) return reject(new Error('AZURE_EMBEDDING_KEY/ENDPOINT yo\'q'));
+    if (!KEY || !RAW_ENDPOINT) return reject(new Error('AZURE_EMBEDDING_KEY/ENDPOINT is missing'));
     const payload = JSON.stringify({ model: deployment, input: String(text).slice(0, 8000) });
     const url = new URL(RAW_ENDPOINT + '/openai/v1/embeddings');
     const req = https.request(url, { method: 'POST', headers: { 'api-key': KEY, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => {
@@ -267,7 +264,7 @@ function embedText(text) {
         try {
           const parsed = JSON.parse(d);
           if (parsed.data && parsed.data[0] && parsed.data[0].embedding) resolve(parsed.data[0].embedding);
-          else reject(new Error(parsed.error?.message || 'embedding topilmadi'));
+          else reject(new Error(parsed.error?.message || 'no embedding returned'));
         } catch (e) { reject(e); }
       });
     });
@@ -373,7 +370,7 @@ async function semanticSearch(query, limit = 5, options = {}) {
   return { status: 'ok', query, results: results.slice(0, limit) };
 }
 
-// ── 3. Sessiya konteksti ─────────────────────────────────────────────
+// ── 3. Session context ──────────────────────────────────────────────
 function readSessionContext() {
   if (!fs.existsSync(CONTEXT_FILE)) return '';
   return fs.readFileSync(CONTEXT_FILE, 'utf8');
@@ -407,13 +404,13 @@ function updateSessionContext(turn) {
   if (index >= 0) turns[index] = compact; else turns.push(compact);
   turns = turns.slice(-SESSION_CONTEXT_MAX_TURNS);
   while (JSON.stringify(turns).length > SESSION_CONTEXT_MAX_CHARS && turns.length > 1) turns.shift();
-  atomicWrite(CONTEXT_FILE, '# Jarvis Session Context\n\nFaqat Jarvisga qaratilgan so‘nggi turnlar. Avtomatik yangilanadi.\n\n```json\n' + JSON.stringify(turns, null, 2) + '\n```\n');
+  atomicWrite(CONTEXT_FILE, '# Jarvis Session Context\n\nOnly the latest turns addressed to JARVIS. Updated automatically.\n\n```json\n' + JSON.stringify(turns, null, 2) + '\n```\n');
   return { status: 'ok', turns: turns.length };
 }
 
 async function recallMemory(query, limit = 6) {
   const cleanQuery = String(query || '').trim();
-  if (!cleanQuery) return { status: 'error', message: 'query kerak', results: [] };
+  if (!cleanQuery) return { status: 'error', message: 'query is required', results: [] };
   const merged = [];
   const seen = new Set();
   const add = (item) => {
@@ -454,7 +451,7 @@ function updateProfile(section, value, source = 'user') {
   ensureDirs();
   let content = '';
   if (fs.existsSync(PROFILE_FILE)) content = fs.readFileSync(PROFILE_FILE, 'utf8');
-  else content = '# Foydalanuvchi Profili\n\nAvtoyaratilgan. Bu yerda foydalanuvchi haqida muhim ma\'lumotlar saqlanadi.\n\nBog\'liq: [[DailyTasks]] · kunlik yozuvlar `Jarvis/Memory/`\n\n';
+  else content = '# User profile\n\nCreated automatically. Important information about the user is kept here.\n\nRelated: [[DailyTasks]] · daily entries in `Jarvis/Memory/`\n\n';
 
   const today = localDateStr();
   const marker = `## ${section}`;
@@ -462,7 +459,7 @@ function updateProfile(section, value, source = 'user') {
   const newBlock = `${marker}\n- ${value}${suffix}\n\n`;
 
   if (content.includes(marker)) {
-    // Mavjud bo'limni yangilash
+    // Update the existing section
     const regex = new RegExp(`## ${section}\\s*\\n([^#]*)(?=\\n## |$)`, 's');
     content = content.replace(regex, `## ${section}\n- ${value}${suffix}\n\n`);
   } else {
@@ -480,22 +477,22 @@ function updateProfile(section, value, source = 'user') {
   return { status: 'ok' };
 }
 
-// ── 4b. Talaffuz eslatmalari ─────────────────────────────────────────
-// Foydalanuvchi realtime suhbatda noto'g'ri eshitilgan so'zni tuzatsa,
-// juftlik keyingi sessiyalar instructions'iga qo'shilishi uchun saqlanadi.
+// ── 4b. Pronunciation notes ──────────────────────────────────────────
+// When the user corrects a misheard word during a realtime conversation, the pair
+// is saved so it can be added to the instructions of later sessions.
 function readPronunciationEntries() {
   if (!fs.existsSync(PRONUNCIATION_FILE)) return [];
   const content = fs.readFileSync(PRONUNCIATION_FILE, 'utf8');
   const entries = [];
   content.split('\n').forEach(line => {
-    const m = line.match(/^- "(.+?)" emas, "(.+?)" \(/);
+    const m = line.match(/^- "(.+?)" (?:should be|emas,) "(.+?)" \(/); // "emas," = older Uzbek entries
     if (m) entries.push({ misheard: m[1], actual: m[2] });
   });
   return entries;
 }
 
 function addPronunciationNote(misheard, actual) {
-  if (!misheard || !actual) return { status: 'error', message: 'misheard va actual kerak' };
+  if (!misheard || !actual) return { status: 'error', message: 'misheard and actual are required' };
   ensureDirs();
   const normalizedMisheard = String(misheard).trim();
   const normalizedActual = String(actual).trim();
@@ -507,8 +504,8 @@ function addPronunciationNote(misheard, actual) {
 
   entries.push({ misheard: normalizedMisheard, actual: normalizedActual, date: localDateStr() });
   const retained = entries.slice(-PRONUNCIATION_MAX);
-  const header = '# Talaffuz eslatmalari\n\nJarvis foydalanuvchini noto\'g\'ri tushunib, u to\'g\'rilaganda shu yerga avtomatik yozadi.\n\nBog\'liq: [[User]]\n\n';
-  const body = retained.map(e => `- "${e.misheard}" emas, "${e.actual}" (${e.date || localDateStr()})`).join('\n') + '\n';
+  const header = '# Pronunciation notes\n\nJarvis writes here automatically when the user corrects something it misheard.\n\nRelated: [[User]]\n\n';
+  const body = retained.map(e => `- "${e.misheard}" should be "${e.actual}" (${e.date || localDateStr()})`).join('\n') + '\n';
   fs.writeFileSync(PRONUNCIATION_FILE, header + body, 'utf8');
   return { status: 'ok' };
 }
@@ -536,7 +533,7 @@ async function main() {
       return;
 
     case 'semantic_search': {
-      if (!payload.query) { console.log(JSON.stringify({ status: 'error', message: 'query kerak' })); return; }
+      if (!payload.query) { console.log(JSON.stringify({ status: 'error', message: 'query is required' })); return; }
       const ssr = await semanticSearch(payload.query, payload.limit || 5);
       console.log(JSON.stringify(ssr));
       return;
@@ -560,7 +557,7 @@ async function main() {
       return;
     case 'write':
       if (!payload.topic || !payload.content) {
-        console.log(JSON.stringify({ status: 'error', message: 'topic va content kerak' }));
+        console.log(JSON.stringify({ status: 'error', message: 'topic and content are required' }));
         return;
       }
       const wr = writeMemory(payload.topic, payload.content, payload.tags || [], payload.options || {});
@@ -587,7 +584,7 @@ async function main() {
 
     case 'profile_update':
       if (!payload.section || !payload.value) {
-        console.log(JSON.stringify({ status: 'error', message: 'section va value kerak' }));
+        console.log(JSON.stringify({ status: 'error', message: 'section and value are required' }));
         return;
       }
       const pr = updateProfile(payload.section, payload.value, payload.source || 'user');
