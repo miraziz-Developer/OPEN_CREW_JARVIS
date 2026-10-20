@@ -15,10 +15,12 @@ const { PROJECT_DIR } = require('../core/paths');
 const { findMatchingProcesses } = require('../core/runtime-health');
 
 const PORT = parseInt(process.env.DASHBOARD_PORT, 10) || 7890;
+const { isTrustedLocalRequest } = require('../core/local-request-guard');
 // Standart faqat lokal. Docker'da konteyner ichida 0.0.0.0 qilinadi, lekin host tomonda faqat 127.0.0.1 ga e'lon qilinadi.
 const HOST = process.env.DASHBOARD_HOST || '127.0.0.1';
 
-const ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8');
+let ENV = '';
+try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (_) {} // fresh checkout: run with defaults
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
 
 const mem = require(path.join(PROJECT_DIR, 'skills', 'memory'));
@@ -227,6 +229,16 @@ async function handleAction(req, res) {
   }
 }
 
+// Opens the requested place in God's Eye View (local 3D globe), or Google Earth when it is not installed.
+async function handleGlobe(req, res) {
+  let payload;
+  try { payload = JSON.parse(await readBody(req)); } catch (e) { payload = {}; }
+  const place = String(payload.place || '').trim().slice(0, 120);
+  if (!place) return json(res, { status: 'error', message: 'A place is required.' }, 400);
+  const result = await require('../skills/gods-eye-view').show({ place });
+  json(res, { status: 'ok', place: result.place?.name || place, url: result.url });
+}
+
 // ── HTTP server ─────────────────────────────────────────────────────────
 const STATIC_DIR = path.join(PROJECT_DIR, 'dashboard');
 const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -234,11 +246,18 @@ const MIME = { '.html': 'text/html', '.js': 'application/javascript', '.css': 't
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
+  if (req.method === 'POST') {
+    const trust = isTrustedLocalRequest(req, PORT);
+    if (!trust.ok) return json(res, { error: `Rejected untrusted request (${trust.reason}).` }, 403);
+  }
   if (req.method === 'POST' && url.pathname === '/api/chat') {
     return handleChat(req, res).catch(e => json(res, { error: e.message }, 500));
   }
   if (req.method === 'POST' && url.pathname === '/api/action') {
     return handleAction(req, res).catch(e => json(res, { error: e.message }, 500));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/globe') {
+    return handleGlobe(req, res).catch(e => json(res, { status: 'error', message: e.message }, 500));
   }
 
   try {

@@ -55,6 +55,9 @@ function getPgPool() {
   if (_pgPool) return _pgPool;
   const { Pool } = require('pg');
   _pgPool = new Pool({ ...postgresConfig(), max: 4, idleTimeoutMillis: 30_000 });
+  // An idle client losing its connection (e.g. Postgres restarting) emits 'error' on the pool;
+  // unhandled, that kills the whole host process. The next query simply reconnects.
+  _pgPool.on('error', error => console.error('Memory PostgreSQL pool error:', error.message));
   return _pgPool;
 }
 

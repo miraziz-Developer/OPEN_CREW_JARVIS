@@ -183,8 +183,8 @@ function findAction(id) {
   if (id === 'protocol:lockdown') {
     return {
       id: 'protocol:lockdown',
-      en: 'Lockdown protocol executed. Standing by for biometric authorization.',
-      uz: 'Tizim to\'liq qulflandi. Biometrik tasdiq kutilmoqda.',
+      en: 'Lockdown engaged. Display is going to sleep.',
+      uz: 'Qulflash rejimi yoqildi. Ekran o\'chirilmoqda.',
       type: 'protocol',
       mode: 'lockdown',
       name: 'Emergency Lockdown',

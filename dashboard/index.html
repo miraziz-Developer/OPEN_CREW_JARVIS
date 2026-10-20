@@ -706,9 +706,21 @@ async function triggerProtocol(id) {
   }
 }
 
-function triggerGlobe() {
+async function triggerGlobe() {
+  const place = (window.prompt('Show which place on the 3D globe?', '') || '').trim();
+  if (!place) return;
   playUiSound('scan');
-  window.open('https://earth.google.com/web/@25.2048,55.2708,12000a,35y,0t,0d', '_blank');
+  try {
+    const r = await fetch('/api/globe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ place })
+    });
+    const data = await r.json();
+    if (data.status !== 'ok') addBubble('jarvis', 'Globe error: ' + (data.message || 'unknown'));
+  } catch (e) {
+    addBubble('jarvis', 'Globe error: ' + e.message);
+  }
 }
 
 function triggerScreenScan() {
