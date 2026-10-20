@@ -242,9 +242,9 @@ function findAction(id) {
       en: 'Git status check',
       type: 'custom',
       handler: async () => {
-        const { exec } = require('child_process');
+        const { execFile } = require('child_process');
         return new Promise((resolve) => {
-          exec('cd /Users/mirazizerkinaliyev_dev/OPEN_CREW_JARVIS && git status --short', (err, stdout) => {
+          execFile('git', ['status', '--short'], { cwd: PROJECT_DIR }, (err, stdout) => {
             if (err) {
               resolve({ status: 'error', uz: 'Git tekshirishda xatolik: ' + err.message, en: 'Git error: ' + err.message });
               return;
@@ -316,8 +316,9 @@ function findAction(id) {
       type: 'custom',
       handler: async () => {
         setProtocolState('focus', 'Deep Focus', '#a855f7');
-        const { exec } = require('child_process');
-        exec('open -a "Visual Studio Code" /Users/mirazizerkinaliyev_dev/OPEN_CREW_JARVIS && osascript -e "set volume output volume 40"');
+        const { execFile } = require('child_process');
+        execFile('open', ['-a', 'Visual Studio Code', PROJECT_DIR], () => {});
+        execFile('osascript', ['-e', 'set volume output volume 40'], () => {});
         return { status: 'ok', uz: 'Dasturlash muhiti tayyorlandi, VS Code ochildi va fokus rejimi yoqildi.', en: 'Developer workspace ready. Visual Studio Code opened and focus mode engaged.' };
       }
     };
