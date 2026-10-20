@@ -13,7 +13,7 @@ NODE_BIN="$(command -v node)"
 echo "🚀 Jarvis avtostart yuklanmoqda..."
 
 if [[ ! -f "${SRC}" ]]; then
-  echo "❌ Xatolik: ${SRC} topilmadi. "
+  echo "❌ Error: ${SRC} not found. "
   exit 1
 fi
 
@@ -24,12 +24,12 @@ if launchctl list | grep -q "com.jarvis.openclaw"; then
   launchctl bootout gui/$(id -u)/com.jarvis.openclaw 2>/dev/null || true
 fi
 
-# Joriy clone yo'lidan portable plist yaratish.
+# Build a portable plist from the current clone path.
 mkdir -p "${HOME}/Library/LaunchAgents" "${PROJECT_DIR}/logs"
 node "${PROJECT_DIR}/scripts/render-launchd.js" "${SRC}" "${DEST}" "${PROJECT_DIR}" "${NODE_BIN}"
 chmod 644 "${DEST}"
 
-# Yangi macOS (10.10+) da bootstrap, eskisida load
+# bootstrap on newer macOS (10.10+), load on older versions
 USER_ID=$(id -u)
 echo "User ID: $USER_ID"
 
@@ -38,12 +38,12 @@ if launchctl bootstrap gui/$USER_ID "${DEST}" 2>/dev/null; then
 elif launchctl load -w "${DEST}" 2>/dev/null; then
   echo "✅ Jarvis avtostart yuklandi (legacy mode)!"
 else
-  echo "⚠️ Autostart yuklanmadi. Qo'lda bajaring:"
+  echo "⚠️ Autostart was not loaded. Run it manually:"
   echo "   launchctl load -w ${DEST}"
   exit 1
 fi
 
-echo "   Login/restart bo'lganda avtomatik ishga tushadi."
+echo "   It starts automatically at login/restart."
 
 RUNNER_PLIST="com.jarvis.persistent-agent-runner.plist"
 RUNNER_SRC="${PROJECT_DIR}/scripts/${RUNNER_PLIST}"
@@ -56,7 +56,7 @@ if [[ -f "${RUNNER_SRC}" ]]; then
   if launchctl bootstrap gui/$USER_ID "${RUNNER_DEST}" 2>/dev/null; then
     echo "✅ Persistent agent runner yuklandi!"
   else
-    echo "⚠️ Persistent runner yuklanmadi. Qo'lda: launchctl bootstrap gui/${USER_ID} ${RUNNER_DEST}"
+    echo "⚠️ Persistent runner was not loaded. Manually: launchctl bootstrap gui/${USER_ID} ${RUNNER_DEST}"
   fi
 fi
 
@@ -71,12 +71,12 @@ if [[ -f "${MISSION_SRC}" ]]; then
   if launchctl bootstrap gui/$USER_ID "${MISSION_DEST}" 2>/dev/null; then
     echo "✅ Mission runner (avtonom maqsadlar) yuklandi!"
   else
-    echo "⚠️ Mission runner yuklanmadi. Qo'lda: launchctl bootstrap gui/${USER_ID} ${MISSION_DEST}"
+    echo "⚠️ Mission runner was not loaded. Manually: launchctl bootstrap gui/${USER_ID} ${MISSION_DEST}"
   fi
 fi
 
-# ── Pauza sentinel (Fn+Shift bilan to'xtatish/uyg'otish) — alohida,
-# doim ishlab turadigan LaunchAgent, asosiy Jarvis'dan mustaqil ──
+# ── Pause sentinel (pause/wake with Fn+Shift): a separate, always-running
+# LaunchAgent, independent of the main JARVIS ──
 SENTINEL_PLIST="com.jarvis.pausesentinel.plist"
 SENTINEL_SRC="${PROJECT_DIR}/scripts/${SENTINEL_PLIST}"
 SENTINEL_DEST="${HOME}/Library/LaunchAgents/${SENTINEL_PLIST}"
@@ -90,11 +90,11 @@ if [[ -f "${SENTINEL_SRC}" ]]; then
   if launchctl bootstrap gui/$USER_ID "${SENTINEL_DEST}" 2>/dev/null; then
     echo "✅ Pauza sentinel (Fn+Shift) yuklandi!"
   else
-    echo "⚠️ Pauza sentinel yuklanmadi. Qo'lda: launchctl bootstrap gui/${USER_ID} ${SENTINEL_DEST}"
+    echo "⚠️ Pause sentinel was not loaded. Manually: launchctl bootstrap gui/${USER_ID} ${SENTINEL_DEST}"
   fi
 fi
 
-# ── Tekshiruv: bootout/bootstrap poygasi jimgina xizmatni yo'qotmasin (qayta urinish bilan) ──
+# ── Verify: a bootout/bootstrap race must not silently lose a service (with retries) ──
 for LABEL_PLIST in "com.jarvis.mission-runner" "com.jarvis.persistent-agent-runner" "com.jarvis.pausesentinel" "com.jarvis.openclaw"; do
   PLIST_FILE="${HOME}/Library/LaunchAgents/${LABEL_PLIST}.plist"
   [[ -f "${PLIST_FILE}" ]] || continue
@@ -103,5 +103,5 @@ for LABEL_PLIST in "com.jarvis.mission-runner" "com.jarvis.persistent-agent-runn
     sleep 2
     launchctl bootstrap gui/$USER_ID "${PLIST_FILE}" 2>/dev/null || true
   done
-  launchctl list | grep -q "${LABEL_PLIST}" && echo "✅ ${LABEL_PLIST} ishlayapti" || echo "⚠️ ${LABEL_PLIST} ishga tushmadi"
+  launchctl list | grep -q "${LABEL_PLIST}" && echo "✅ ${LABEL_PLIST} running" || echo "⚠️ ${LABEL_PLIST} did not start"
 done

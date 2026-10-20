@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * RAM hakami: bir vaqtda faqat BITTA backend (ollama yoki bonsai) xotirada bo'ladi.
- * - Boshqa backend kerak bo'lsa: joriy so'rovlar tugashini kutadi → eskisini chiqaradi → xotirani tekshiradi → yangisini beradi.
- * - Bir xil backend'ga kelgan so'rovlar navbatsiz o'tadi (Ollama o'z modellarini o'zi almashtiradi, MAX_LOADED_MODELS=1).
- * - Bonsai uchun bo'sh xotira yetmasa MemoryPressureError — chaqiruvchi kichikroq modelga tushadi (kompyuter qotmasin).
+ * RAM arbiter: only ONE backend (ollama or bonsai) is in memory at a time.
+ * - When another backend is needed: wait for current requests → unload the old one → check memory → hand out the new one.
+ * - Requests for the same backend pass without queueing (Ollama swaps its own models, MAX_LOADED_MODELS=1).
+ * - If free memory is not enough for Bonsai: MemoryPressureError, and the caller falls back to a smaller model (the Mac must not freeze).
  */
 class MemoryPressureError extends Error {
   constructor(message, details = {}) { super(message); this.name = 'MemoryPressureError'; this.details = details; }
@@ -15,11 +15,11 @@ class BrainArbiter {
     this.settleMs = settleMs;
     this.backends = backends;           // { ollama: { evict() }, bonsai: { evict() } }
     this.availableBytes = availableBytes;
-    this.requirements = requirements;   // { bonsai: bytes } — yuklashdan oldin kerakli bo'sh xotira
+    this.requirements = requirements;   // { bonsai: bytes }: free memory required before loading
     this.log = log;
-    this.resident = null;               // hozir xotiradagi backend nomi
+    this.resident = null;               // name of the backend currently in memory
     this.inFlight = 0;
-    this.chain = Promise.resolve();     // backend almashtirishlar ketma-ket bo'ladi
+    this.chain = Promise.resolve();     // backend switches happen one after another
     this.idleWaiters = [];
   }
 
@@ -33,7 +33,7 @@ class BrainArbiter {
     if (this.inFlight === 0) { const waiters = this.idleWaiters.splice(0); waiters.forEach(w => w()); }
   }
 
-  // Slot oladi; qaytgan funksiya bilan bo'shatiladi. Har chaqiruv albatta release qilinishi kerak.
+  // Acquires a slot; the returned function releases it. Every call must be released.
   acquire(backend) {
     if (backend === 'gemini') {
       this.inFlight += 1;
@@ -44,8 +44,8 @@ class BrainArbiter {
         await this._waitIdle();
         const previous = this.resident;
         const need = this.requirements[backend] || 0;
-        // Avval hisob: joriy modelni chiqarsak yetadimi? Yetmasa hech narsaga tegmaymiz — aks holda
-        // Qwen behuda chiqarilib, keyin yana ~60 s qayta yuklanardi (jonli logda kuzatilgan).
+        // Check first: is unloading the current model enough? If not, touch nothing; otherwise Qwen
+        // would be unloaded for nothing and then reloaded for ~60 s (seen in the live log).
         if (need) {
           const free = await this.availableBytes();
           const reclaim = previous && this.backends[previous]?.footprintBytes ? await this.backends[previous].footprintBytes().catch(() => 0) : 0;
@@ -59,7 +59,7 @@ class BrainArbiter {
         }
         this.resident = null;
         if (need) {
-          // Chiqarish asinxron (Ollama xotirani bir necha soniyada qaytaradi) — bo'shashini kutamiz.
+          // Unloading is asynchronous (Ollama returns memory within a few seconds), so wait for it.
           let free = await this.availableBytes();
           for (const deadline = Date.now() + this.settleMs; free < need && Date.now() < deadline;) {
             await new Promise(r => setTimeout(r, 250));
@@ -75,12 +75,12 @@ class BrainArbiter {
       let released = false;
       return () => { if (!released) { released = true; this._release(); } };
     });
-    // Zanjir xatodan uzilmasin: keyingi so'rovlar davom etadi.
+    // An error must not break the chain: later requests continue.
     this.chain = step.then(() => {}, () => {});
     return step;
   }
 
-  // Backend o'zi bo'shasa (masalan bonsai idle-timeout bilan yopilsa) hakamga xabar beriladi.
+  // The arbiter is told when a backend frees itself (e.g. bonsai closes on idle timeout).
   markEvicted(backend) { if (this.resident === backend && this.inFlight === 0) this.resident = null; }
 
   status() { return { resident: this.resident, inFlight: this.inFlight }; }

@@ -56,7 +56,7 @@ function checkProcess(name, script, required = true) {
   const healthy = processes.length === 1;
   const status = healthy ? 'ok' : required ? 'error' : 'warn';
   add(`process:${name}`, status, healthy ? `pid=${processes[0].pid}` : `count=${processes.length}${processes.length ? `, pids=${processes.map(item => item.pid).join(',')}` : ''}`,
-    healthy ? null : 'Supervisor va duplicate jarayonlarni tekshiring');
+    healthy ? null : 'Check the supervisor and duplicate processes');
 }
 
 function checkSupervisor() {
@@ -72,13 +72,13 @@ function checkSupervisor() {
 
 async function main() {
   const major = Number(process.versions.node.split('.')[0]);
-  add('platform:macos', process.platform === 'darwin' ? 'ok' : 'error', process.platform, 'JARVIS macOS uchun mo‘ljallangan');
-  add('runtime:node', major >= 22 ? 'ok' : 'error', process.version, 'Node.js 22 yoki yangirog‘ini o‘rnating');
+  add('platform:macos', process.platform === 'darwin' ? 'ok' : 'error', process.platform, 'JARVIS is built for macOS');
+  add('runtime:node', major >= 22 ? 'ok' : 'error', process.version, 'Install Node.js 22 or newer');
 
   const envFile = path.join(PROJECT_DIR, '.env');
   let envValues = {};
   if (!fs.existsSync(envFile)) {
-    add('config:env-file', 'error', '.env topilmadi', 'cp .env.example .env va haqiqiy secretlarni kiriting');
+    add('config:env-file', 'error', '.env not found', 'cp .env.example .env and fill in the real secrets (or run ./install.sh)');
   } else {
     const mode = fs.statSync(envFile).mode & 0o777;
     add('security:env-permissions', isPrivateFileMode(mode) ? 'ok' : 'error', `mode=${mode.toString(8).padStart(3, '0')}`, 'chmod 600 .env');
@@ -89,15 +89,15 @@ async function main() {
 
   for (const binary of ['node', 'openclaw', 'curl', 'sox', 'afplay']) {
     const location = executable(binary);
-    add(`binary:${binary}`, location ? 'ok' : 'error', location || 'topilmadi', location ? null : `${binary} binarysini o‘rnating`);
+    add(`binary:${binary}`, location ? 'ok' : 'error', location || 'not found', location ? null : `install the ${binary} binary`);
   }
 
   const paused = fs.existsSync(path.join(PROJECT_DIR, '.jarvis-paused'));
-  add('state:paused', paused ? 'warn' : 'ok', paused ? 'JARVIS pauzada' : 'faol', paused ? 'Fn tugmasi yoki jarvis start bilan davom ettiring' : null);
+  add('state:paused', paused ? 'warn' : 'ok', paused ? 'JARVIS is paused' : 'active', paused ? 'Press Fn+Shift or run ./jarvis start to resume' : null);
 
   for (const [name, label] of Object.entries({ supervisor: 'com.jarvis.openclaw', persistentRunner: 'com.jarvis.persistent-agent-runner', sentinel: 'com.jarvis.pausesentinel', gateway: 'ai.openclaw.gateway' })) {
     const state = launchdState(label);
-    add(`launchd:${name}`, state === 'running' ? 'ok' : 'error', state || 'ro‘yxatdan o‘tmagan', './scripts/enable-autostart.sh');
+    add(`launchd:${name}`, state === 'running' ? 'ok' : 'error', state || 'not registered', './scripts/enable-autostart.sh');
   }
 
   checkSupervisor();
@@ -122,8 +122,8 @@ async function main() {
     if (validation.values.SCREEN_MONITOR_ENABLED !== false) requiredComponents.push('monitor');
     const unhealthy = requiredComponents.filter(name => status?.[name] !== true);
     if (envValues.TELEGRAM_BOT_TOKEN && status?.bot !== true) unhealthy.push('bot');
-    add('http:dashboard', unhealthy.length ? 'error' : 'ok', unhealthy.length ? `unhealthy=${unhealthy.join(',')}` : 'API va komponentlar healthy', 'Supervisor loglarini tekshiring');
-  } catch (error) { add('http:dashboard', 'error', error.message, 'Dashboard/supervisorni tekshiring'); }
+    add('http:dashboard', unhealthy.length ? 'error' : 'ok', unhealthy.length ? `unhealthy=${unhealthy.join(',')}` : 'API and components healthy', 'Check the supervisor logs');
+  } catch (error) { add('http:dashboard', 'error', error.message, 'Check the dashboard/supervisor'); }
 
   if (validation.values.HOME_ASSISTANT_URL && validation.values.HOME_ASSISTANT_TOKEN) {
     try {
@@ -133,9 +133,9 @@ async function main() {
         accessToken: validation.values.HOME_ASSISTANT_TOKEN,
         timeoutMs: validation.values.HOME_ASSISTANT_TIMEOUT_MS
       }).status();
-      add('http:home-assistant', status.connected ? 'ok' : 'error', status.message, 'Home Assistant URL, token va tarmoqni tekshiring');
+      add('http:home-assistant', status.connected ? 'ok' : 'error', status.message, 'Check the Home Assistant URL, token and network');
     } catch (error) {
-      add('http:home-assistant', 'error', error.message, 'Home Assistant URL, Long-Lived Access Token va tarmoqni tekshiring');
+      add('http:home-assistant', 'error', error.message, 'Check the Home Assistant URL, Long-Lived Access Token and network');
     }
   }
 
@@ -155,6 +155,6 @@ async function main() {
 
 main().catch(error => {
   if (jsonOutput) console.log(JSON.stringify({ summary: { healthy: false }, fatal: error.message }));
-  else console.error(`❌ Doctor ishlamadi: ${error.message}`);
+  else console.error(`❌ Doctor failed: ${error.message}`);
   process.exitCode = 1;
 });
