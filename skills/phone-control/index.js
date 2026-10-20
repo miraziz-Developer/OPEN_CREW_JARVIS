@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * PHONE CONTROL Skill — iPhone Mirroring (macOS 15+, Apple Silicon) orqali
- * bog'langan iPhone'ni boshqaradi: skrinshot, bosish, sudrash, yozish, uy/App
- * Switcher/Spotlight. Haqiqiy teginish sifatida telefonga uzatiladi.
- * Kirish (stdin JSON): { action: "...", ... }
- * Chiqish: { status: "ok", ... } | { status: "error", message }
+ * PHONE CONTROL skill: controls the paired iPhone through iPhone Mirroring (macOS 15+,
+ * Apple Silicon): screenshots, taps, drags, typing, Home/App Switcher/Spotlight.
+ * Input is delivered to the phone as real touches.
+ * Input (stdin JSON): { action: "...", ... }
+ * Output: { status: "ok", ... } | { status: "error", message }
  */
 'use strict';
 
@@ -13,7 +13,7 @@ const { PhoneMirror } = require('../../core/phone-mirror');
 async function main() {
   let input = {};
   try { input = JSON.parse(require('fs').readFileSync(0, 'utf8') || '{}'); } catch (e) {
-    console.log(JSON.stringify({ status: 'error', message: 'stdin JSON noto\'g\'ri: ' + e.message }));
+    console.log(JSON.stringify({ status: 'error', message: 'invalid stdin JSON: ' + e.message }));
     process.exit(1);
   }
   const pm = new PhoneMirror();

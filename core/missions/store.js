@@ -16,10 +16,10 @@ function atomicWriteJson(file, value) {
 }
 
 /**
- * Doimiy missiya saqlagichi. Ovozli daemon (yaratadi/boshqaradi) va missiya runner (bajaradi) alohida jarayonlar:
- *  - har missiya bitta JSON fayl (atomik yoziladi);
- *  - boshqaruv buyruqlari (pauza/bekor/tasdiq) `inbox/` orqali — poyga yo'q, runner o'zi qo'llaydi;
- *  - hodisalar `events.jsonl` ga qo'shiladi, daemon uni kuzatib ovozli xabar beradi.
+ * Persistent mission store. The voice daemon (creates/controls) and the mission runner (executes) are separate processes:
+ *  - each mission is one JSON file (written atomically);
+ *  - control commands (pause/cancel/approve) go through `inbox/`: no races, the runner applies them itself;
+ *  - events are appended to `events.jsonl`, which the daemon watches to announce them by voice.
  */
 class MissionStore {
   constructor(options = {}) {
@@ -56,7 +56,7 @@ class MissionStore {
 
   create(goal, options = {}) {
     const text = String(goal || '').replace(/\s+/g, ' ').trim();
-    if (!text) throw new Error('Missiya maqsadi kerak');
+    if (!text) throw new Error('A mission goal is required');
     const all = this.list();
     const now = this.now();
     const hours = Number.isFinite(options.maxHours) ? options.maxHours : 72;
@@ -88,7 +88,7 @@ class MissionStore {
 
   enqueue(idOrNumber, action, payload = {}) {
     const mission = this.get(idOrNumber);
-    if (!mission) throw new Error(`Missiya topilmadi: ${idOrNumber}`);
+    if (!mission) throw new Error(`Mission not found: ${idOrNumber}`);
     const file = path.join(this.inboxDir, `${this.now()}-${crypto.randomBytes(2).toString('hex')}-${mission.id}.json`);
     atomicWriteJson(file, { id: mission.id, action, payload, at: this.now() });
     return mission;
@@ -129,7 +129,7 @@ class MissionStore {
     } finally { fs.closeSync(fd); }
   }
 
-  // Ovoz uchun qisqa holat matni.
+  // Short status text for voice.
   describe(mission) {
     const done = mission.tasks.filter(t => t.status === 'done').length;
     const total = mission.tasks.length;

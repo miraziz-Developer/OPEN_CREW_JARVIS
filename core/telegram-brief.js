@@ -1,16 +1,16 @@
 'use strict';
 
 /**
- * Telegram xabarlarini qisqa va tushunarli qiladi: tozalash, takrorlarni tashlash, progressni siyraklash,
- * uzun matnni "nima bo'ldi / natija / sizdan nima kerak" ko'rinishiga keltirish. Faqat tizim boshlagan xabarlarga qo'llanadi.
+ * Makes Telegram messages short and clear: cleans up, drops duplicates, thins out progress updates and
+ * reshapes long text into "what happened / result / what we need from you". Applies only to system-initiated messages.
  */
 const EMOJI_LEAD = /^\s*((?:\p{Extended_Pictographic}️?)+)\s*/u;
 const fs = require('fs');
 const path = require('path');
 
-// Foydalanuvchi so'ramagan, qaror talab qilmaydigan tizim xabarlari — standart holatda yuborilmaydi
-// (TELEGRAM_VERBOSE=true bilan qaytadi). Qoladi: ☀️ ertalabki brifing, 🚨 shoshilinch, missiya natijalari,
-// siz qo'ygan kunlik vazifalar natijasi, bot'ning sizga bergan javoblari.
+// System messages the user did not ask for and that need no decision are not sent by default
+// (TELEGRAM_VERBOSE=true restores them). Kept: ☀️ morning brief, 🚨 urgent alerts, mission results,
+// results of the daily tasks you set, and the bot's replies to you.
 const NOISE = [
   { re: /^\s*🚀/u, why: 'startup' },
   { re: /^\s*⏳/u, why: 'progress' },
@@ -97,7 +97,7 @@ class TelegramBrief {
       if (noise) { this._lastDrop = noise.why; return null; }
     }
 
-    // Ovozli suhbatning har bir gapini Telegramga nusxalash — yolg'on shovqin (TELEGRAM_MIRROR_VOICE=true bilan yoqiladi).
+    // Mirroring every sentence of a voice conversation to Telegram is pointless noise (enable with TELEGRAM_MIRROR_VOICE=true).
     if (/^\s*(?:🎙|🤖)/u.test(raw) && !this.mirrorVoice) { this._lastDrop = 'voice-mirror'; return null; }
     if (/^\s*⏳/u.test(raw)) {
       if (this.lastProgressAt !== null && at - this.lastProgressAt < this.progressGapMs) return null;

@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Hech qachon doimiy ruxsat bilan qoplanmaydi: pul, butunlay o'chirish, parol/kalit, tizim va ruxsat o'zgarishi.
+// Never covered by a standing permission: money, permanent deletion, passwords/keys, system and permission changes.
 const NEVER_STANDING = /\b(?:purchase|buy|pay(?:ment)?|transfer|wire|checkout|bank|card|invoice|delet|remov|erase|wipe|format|reset|sudo|password|passcode|secret|token|credential|api\s*key|permission|shutdown|restart|trade|crypto)/i;
 
 const SCOPES = Object.freeze({
@@ -26,8 +26,8 @@ function dayOf(now) {
 }
 
 /**
- * Doimiy ruxsatlar: "shu turdagi tashqi amallarga kuniga N tagacha, D kun davomida so'rama". Muddatli, kunlik limitli,
- * bekor qilinadigan; xavfli toifalar (NEVER_STANDING) hech qachon qoplanmaydi.
+ * Standing permissions: "don't ask about this kind of external action, up to N per day, for D days". Time-limited,
+ * daily-capped and revocable; risky categories (NEVER_STANDING) are never covered.
  */
 class StandingApprovals {
   constructor(options = {}) {
@@ -46,7 +46,7 @@ class StandingApprovals {
 
   grant({ scopes, perDay = 10, days = 7, note = '' } = {}) {
     const valid = (Array.isArray(scopes) ? scopes : [scopes]).filter(scope => Object.hasOwn(SCOPES, scope));
-    if (!valid.length) throw new Error(`Noma'lum ruxsat turi. Mumkin: ${Object.keys(SCOPES).join(', ')}`);
+    if (!valid.length) throw new Error(`Unknown permission type. Allowed: ${Object.keys(SCOPES).join(', ')}`);
     const state = this._read();
     const rule = {
       id: crypto.randomBytes(3).toString('hex'), scopes: valid,
@@ -67,14 +67,14 @@ class StandingApprovals {
     return count;
   }
 
-  // Aniq turlar ("job-applications", "recruiter-messages") ustun; umumiy "external-messages" faqat aniq tur topilmasa.
+  // Specific types ("job-applications", "recruiter-messages") win; the general "external-messages" applies only if none matches.
   scopesFor(text, assessment = {}) {
     const specific = ['job-applications', 'recruiter-messages'].filter(scope => SCOPES[scope].test(text));
     if (specific.length) return specific;
     return assessment.category === 'external-communication' && SCOPES['external-messages'].test(text) ? ['external-messages'] : [];
   }
 
-  // Mos qoida bo'lsa va bugungi limit tugamagan bo'lsa, bitta ishlatishni hisoblab qoidani qaytaradi.
+  // If a rule matches and today's limit is not used up, counts one use and returns the rule.
   consume(text, assessment = {}) {
     if (NEVER_STANDING.test(String(text))) return null;
     if (['payment', 'irreversible-delete', 'credential-or-permission-change', 'system-impact'].includes(assessment.category)) return null;

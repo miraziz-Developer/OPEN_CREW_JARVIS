@@ -15,7 +15,7 @@ case "${1:-start}" in
     ;;
   brain)
     # ./jarvis brain local | cloud | status
-    if [ "${2:-status}" = status ]; then curl -s http://127.0.0.1:11435/brain/status || echo "Brain xizmati ishlamayapti"; echo; exit 0; fi
+    if [ "${2:-status}" = status ]; then curl -s http://127.0.0.1:11435/brain/status || echo "Brain service is not running"; echo; exit 0; fi
     node "$ROOT/scripts/set-brain.js" "$2" && exec "$0" restart
     ;;
   update)
@@ -37,13 +37,13 @@ case "${1:-start}" in
     else
       "$ROOT/scripts/enable-autostart.sh"
     fi
-    echo "✅ Jarvis ishga tushdi"
+    echo "✅ Jarvis started"
     ;;
   stop)
     launchctl kill TERM "$DOMAIN/$LABEL" 2>/dev/null || true
-    # Lokal miya xizmatlari ham (RAM to'liq bo'shaydi)
+    # Local brain services too (frees RAM completely)
     for L in com.jarvis.brain com.jarvis.ollama; do launchctl bootout "$DOMAIN/$L" 2>/dev/null || true; done
-    echo "⏹ Jarvis to'xtatildi"
+    echo "⏹ Jarvis stopped"
     ;;
   restart)
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
@@ -51,7 +51,7 @@ case "${1:-start}" in
     else
       "$ROOT/scripts/enable-autostart.sh"
     fi
-    echo "🔄 Jarvis to'liq qayta ishga tushirildi"
+    echo "🔄 Jarvis fully restarted"
     ;;
   status)
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then

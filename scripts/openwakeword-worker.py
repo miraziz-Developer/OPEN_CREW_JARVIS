@@ -18,10 +18,9 @@ import numpy as np
 from openwakeword.model import Model
 
 FRAME_BYTES = 1280 * 2
-# Ushbu Mac mikrofonida aniq "Hey Jarvis" 0.19 atrofida ham chiqdi. Aksentli
-# talaffuzda score bitta frame'da cho'qqiga chiqib, yon frame'larda pasayadi.
-# Shu sabab qisqa temporal oyna ichida bitta asosiy va bitta yumshoq tasdiq
-# talab qilinadi; juda kuchli score esa darhol trigger bo'ladi.
+# On this Mac's microphone a clear "Hey Jarvis" also scored around 0.19. With an accent the
+# score peaks in one frame and drops in the neighbours, so within a short temporal window one
+# main and one soft confirmation are required; a very strong score triggers immediately.
 THRESHOLD = float(os.environ.get("OPENWAKEWORD_THRESHOLD", "0.18"))
 STRONG_THRESHOLD = float(os.environ.get("OPENWAKEWORD_STRONG_THRESHOLD", "0.55"))
 CONFIRM_THRESHOLD = float(os.environ.get("OPENWAKEWORD_CONFIRM_THRESHOLD", "0.06"))
@@ -29,8 +28,8 @@ CONFIRM_COUNT = max(2, int(os.environ.get("OPENWAKEWORD_CONFIRM_COUNT", "2")))
 CONFIRM_WINDOW_FRAMES = max(CONFIRM_COUNT, int(os.environ.get("OPENWAKEWORD_CONFIRM_WINDOW_FRAMES", "4")))
 DIAGNOSTIC_FLOOR = float(os.environ.get("OPENWAKEWORD_DIAGNOSTIC_FLOOR", "0.03"))
 OWNER_PID = int(os.environ.get("JARVIS_OWNER_PID", "0") or "0")
-# Shaxsiy (o'zingiz ovozingizda o'qitilgan) model skorlari ~1.0 ga yaqin va juda
-# ajratuvchi: unga alohida, baland chegara beramiz. Built-in modellar yumshoq.
+# Personal models (trained on your own voice) score close to ~1.0 and are very selective, so
+# they get their own, higher threshold. Built-in models are softer.
 PERSONAL_THRESHOLD = float(os.environ.get("OPENWAKEWORD_PERSONAL_THRESHOLD", "0.6"))
 PERSONAL_STRONG = float(os.environ.get("OPENWAKEWORD_PERSONAL_STRONG", "0.9"))
 PERSONAL_CONFIRM = float(os.environ.get("OPENWAKEWORD_PERSONAL_CONFIRM", "0.2"))
@@ -64,7 +63,7 @@ def owner_is_alive():
         return False
 
 def watch_owner():
-    """Parent daemon yo'qolsa, stdin ochiq qolgan taqdirda ham worker chiqadi."""
+    """Exits even if stdin stays open when the parent daemon disappears."""
     while True:
         time.sleep(1.0)
         if not owner_is_alive() or os.getppid() == 1:

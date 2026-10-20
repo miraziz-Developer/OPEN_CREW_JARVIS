@@ -23,10 +23,10 @@ function invocationTimeoutMs(invocationCount, timeoutMs, coldStartTimeoutMs) {
   return invocationCount === 0 ? Math.max(timeoutMs, coldStartTimeoutMs) : timeoutMs;
 }
 
-// whisper.cpp CLI stdin uchun barqaror streaming protocol bermaydi. Shu sabab
-// audio capture persistent qoladi, worker esa vaqt bo'yicha chegaralangan eng
-// so'nggi PCM oynani bitta CLI invocation bilan taniydi. Eski oynalar queue
-// qilinmaydi: wake detector realtime audio yoki daemon memory'ni egallamaydi.
+// The whisper.cpp CLI offers no stable streaming protocol over stdin, so audio capture
+// stays persistent and the worker recognises the latest time-bounded PCM window with one
+// CLI invocation. Old windows are never queued, so the wake detector never ties up
+// realtime audio or daemon memory.
 class WhisperWakeDetector {
   constructor(options = {}) {
     this.binaryPath = options.binaryPath;
@@ -57,11 +57,11 @@ class WhisperWakeDetector {
   start() {
     if (this.started) return true;
     if (!this.binaryPath || !fs.existsSync(this.binaryPath)) {
-      this.onError(new Error('whisper.cpp binary topilmadi: ' + (this.binaryPath || '(bo\'sh)')));
+      this.onError(new Error('whisper.cpp binary not found: ' + (this.binaryPath || '(empty)')));
       return false;
     }
     if (!this.modelPath || !fs.existsSync(this.modelPath)) {
-      this.onError(new Error('whisper.cpp model topilmadi: ' + (this.modelPath || '(bo\'sh)')));
+      this.onError(new Error('whisper.cpp model not found: ' + (this.modelPath || '(empty)')));
       return false;
     }
     this.started = true;

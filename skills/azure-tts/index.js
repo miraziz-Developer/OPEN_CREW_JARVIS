@@ -107,7 +107,7 @@ function edgeNeuralTts(text, voice) {
   }
 }
 
-// TTS REST yuborish
+// Send the TTS REST request
 async function azureTts(text, voice) {
   const resolvedVoice = voice || DEFAULT_VOICE;
   if (!isAzureKeyValid(KEY) || !REGION || REGION === 'placeholder') {
@@ -122,8 +122,8 @@ async function azureTts(text, voice) {
       headers: {
         'Ocp-Apim-Subscription-Key': KEY,
         'Content-Type': 'application/ssml+xml',
-        // Realtime voice AEC aynan karnayga yuborilgan PCM'ni reference sifatida
-        // ishlata olishi uchun siqilgan MP3 emas, 24 kHz PCM WAV so'raymiz.
+        // Ask for 24 kHz PCM WAV, not compressed MP3, so the realtime voice AEC can use exactly
+        // the PCM sent to the speaker as its reference.
         'X-Microsoft-OutputFormat': 'riff-24khz-16bit-mono-pcm',
         'User-Agent': 'Jarvis-Azure-TTS/1.0'
       },
@@ -159,14 +159,14 @@ async function main() {
     const input = raw ? JSON.parse(raw) : {};
 
     if (!input.text || typeof input.text !== 'string') {
-      console.log(JSON.stringify({ error: 'text maydoni talab qilinadi.' }));
+      console.log(JSON.stringify({ error: 'the text field is required.' }));
       process.exit(1);
     }
 
     const result = await azureTts(input.text, input.voice);
     console.log(JSON.stringify(result));
   } catch (err) {
-    console.error(JSON.stringify({ error: err.message || 'TTS xatolik' }));
+    console.error(JSON.stringify({ error: err.message || 'TTS error' }));
     process.exit(1);
   }
 }

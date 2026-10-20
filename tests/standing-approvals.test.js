@@ -47,7 +47,7 @@ test('standing permissions never cover payments, deletions, passwords or unrelat
 test('rules expire, can be revoked, and reject unknown scopes', () => {
   let now = 1000;
   const standing = new StandingApprovals({ file: path.join(tmp(), 's.json'), now: () => now });
-  assert.throws(() => standing.grant({ scopes: ['everything'] }), /Noma'lum/);
+  assert.throws(() => standing.grant({ scopes: ['everything'] }), /Unknown permission type/);
   const rule = standing.grant({ scopes: ['external-messages'], days: 1 });
   assert.equal(standing.list().length, 1);
   assert.equal(standing.revoke(rule.id), 1);

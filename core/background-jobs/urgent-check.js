@@ -38,18 +38,17 @@ function checkBatteryAlert(state, sendTelegram) {
         state.lastBatteryAlert = now;
         state.lastBatteryLevel = percent;
         const icon = percent <= 10 ? '🪫 CRITICAL' : '⚠️ OGOHLANTIRISH';
-        sendTelegram(`${icon}: MacBook quvvati kam qoldi (${percent}%).\nQurilma o'chib qolmasligi uchun uni zaryadlovchiga ulang!`);
-        ok(`🚨 Batareya ogohlantirishi yuborildi: ${percent}%`);
+        sendTelegram(`${icon}: MacBook battery is low (${percent}%).\nPlug in the charger so it does not shut down.`);
+        ok(`🚨 Battery alert sent: ${percent}%`);
       }
     }
   } catch (_) {}
 }
 
-// SHOSHILINCH ekran ogohlantirishlari — proactive-check'ning umumiy
-// 30 daqiqalik tsiklidan FARQLI, screen-monitor #urgent deb belgilagan
-// (xato/crash, xavfsizlik, muddat kabi) yozuvlarni ANCHA tez-tez (default
-// 3 daqiqada) tekshiradi va DARHOL ovozli+Telegram xabar beradi — muhim
-// narsa 30 daqiqagacha "kutib qolmasin". Alohida state fayli ishlatadi.
+// URGENT screen alerts. Unlike the 30-minute proactive cycle, entries the screen monitor
+// tagged #urgent (errors/crashes, security, deadlines) are checked much more often (every
+// 3 minutes by default) and announced IMMEDIATELY by voice and Telegram, so nothing
+// important waits up to 30 minutes. Uses its own state file.
 function createUrgentCheckJob({ projectDir, localDateStr, proactivePolicy, askAgent, sendTelegram, ttsToFile }) {
   const stateFile = path.join(projectDir, '.urgent-check-state.json');
 
