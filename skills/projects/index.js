@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * PROJECTS Skill — ko'p bosqichli, kun davomida ketma-ket bajariladigan
- * avtonom loyihalar. Oddiy kunlik vazifalardan farqi: bir loyihaning
- * bosqichlari MA'LUM TARTIBDA, bitta umumiy kontekst/session bilan
- * bajariladi (har biri oldingisidan xabardor), va OXIRIDA yakuniy,
- * konsolidatsiyalangan hisobot beriladi — alohida-alohida emas.
+ * PROJECTS skill: multi-step autonomous projects run in sequence during the day.
+ * Unlike plain daily tasks, a project's steps run IN A FIXED ORDER within one shared
+ * context/session (each aware of the previous ones), and a final consolidated report
+ * is delivered AT THE END, not one per step.
+ * File: Obsidian Vault/Jarvis/Tasks/Projects.md
  * Fayl: Obsidian Vault/Jarvis/Tasks/Projects.md
  */
 
@@ -24,7 +24,7 @@ function ensureDir() {
 function readRaw() {
   ensureDir();
   if (!fs.existsSync(PROJECTS_FILE)) {
-    fs.writeFileSync(PROJECTS_FILE, "# Loyihalar\n\nKo'p bosqichli, kun davomida ketma-ket bajariladigan vazifalar. Bog'liq: [[DailyTasks]]\n\n", 'utf8');
+    fs.writeFileSync(PROJECTS_FILE, '# Projects\n\nMulti-step tasks run in sequence during the day. Related: [[DailyTasks]]\n\n', 'utf8');
   }
   return fs.readFileSync(PROJECTS_FILE, 'utf8');
 }
@@ -33,7 +33,7 @@ function slugify(name) {
   return String(name).toLowerCase().trim().replace(/[^a-z0-9а-яёʻʼ]+/gi, '-').replace(/(^-|-$)/g, '').slice(0, 40) || 'loyiha';
 }
 
-// ── Faylni bo'lim (loyiha)larga ajratish ────────────────────────────────
+// ── Split the file into sections (projects) ─────────────────────────────
 function parseProjects(raw) {
   const projects = [];
   const lines = raw.split('\n');
@@ -57,10 +57,10 @@ function listProjects() {
   return { status: 'ok', projects: parseProjects(readRaw()) };
 }
 
-// ── Yangi loyiha yaratish ────────────────────────────────────────────────
+// ── Create a new project ────────────────────────────────────────────────
 function createProject(name, steps) {
   if (!name || !Array.isArray(steps) || !steps.length) {
-    return { status: 'error', message: 'name va steps (kamida 1 ta) kerak' };
+    return { status: 'error', message: 'name and steps (at least 1) are required' };
   }
   const raw = readRaw();
   const slug = slugify(name) + '-' + Date.now().toString(36);
@@ -71,8 +71,8 @@ function createProject(name, steps) {
   return { status: 'ok', slug, name: name.trim(), steps: steps.length };
 }
 
-// ── Fon jarayoni uchun: birinchi tugallanmagan loyihaning navbatdagi
-// bosqichini qaytaradi (yo'q bo'lsa null) ─────────────────────────────────
+// ── For the background job: returns the next step of the first unfinished
+// project (or null) ─────────────────────────────────────────────────────
 function activeStep() {
   const projects = parseProjects(readRaw());
   for (const p of projects) {
@@ -82,8 +82,8 @@ function activeStep() {
   return null;
 }
 
-// ── Bosqichni bajarilgan deb belgilash; agar shu bilan loyiha tugasa,
-// hammasi bajarilgan (barcha qadamlar matni) qaytariladi ────────────────
+// ── Marks a step done; if that finishes the project, returns everything done
+// (the text of all steps) ────────────────────────────────────────────────
 function completeStep(slug, stepText) {
   const raw = readRaw();
   const lines = raw.split('\n');
@@ -96,7 +96,7 @@ function completeStep(slug, stepText) {
       if (m && m[1].trim() === String(stepText).trim()) { lines[i] = lines[i].replace('[ ]', '[x]'); changed = true; break; }
     }
   }
-  if (!changed) return { status: 'error', message: 'bosqich topilmadi' };
+  if (!changed) return { status: 'error', message: 'step not found' };
   fs.writeFileSync(PROJECTS_FILE, lines.join('\n'), 'utf8');
 
   const projects = parseProjects(lines.join('\n'));

@@ -12,9 +12,9 @@ function preserveCase(source, replacement) {
   return replacement;
 }
 
-// Realtime STT tez aytilgan o'zbekcha qo'shimcha va unlilarni tez-tez tushirib
-// qoldiradi. Bu ro'yxat faqat ma'nosi bir xil, xavfsiz og'zaki variantlarni
-// adabiyroq shaklga keltiradi; ism yoki erkin matnni "taxminan" o'zgartirmaydi.
+// Realtime STT often drops the suffixes and vowels of quickly spoken Uzbek. This list
+// only maps safe spoken variants with the same meaning to their standard form; it never
+// changes names or free text "approximately".
 const UZBEK_SPOKEN_FORMS = [
   ['qivor', 'qilib yubor'], ['qvor', 'qilib yubor'],
   ['qiber', 'qilib ber'], ['qb ber', 'qilib ber'],

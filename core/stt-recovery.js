@@ -31,10 +31,9 @@ function chooseTranscript(authoritativeResult, nativeText, options = {}) {
   });
   const native = transcriptQuality(nativeText, { context: options.context });
 
-  // Wake-word'dan keyingi birinchi turnda Realtime'ning en-US transkripti
-  // o'zbekcha buyruqni uzun, ravon ko'rinadigan inglizcha matnga aylantirishi
-  // mumkin. Uz-UZ natija policy bo'yicha yaroqli bo'lsa, matn uzunligiga
-  // asoslangan score bunday xato native taxminni ustun qo'ymasligi kerak.
+  // On the first turn after the wake word, Realtime's en-US transcript can turn an Uzbek
+  // command into long, fluent-looking English. When the uz-UZ result is valid per policy,
+  // a length-based score must not let such a wrong native guess win.
   if (options.preferAuthoritative && authoritative.usable) {
     return { source: 'authoritative', text: authoritative.text, authoritative, native };
   }
@@ -48,16 +47,14 @@ function chooseTranscript(authoritativeResult, nativeText, options = {}) {
   return { source: native.text ? 'native-low-quality' : 'none', text: native.text, authoritative, native };
 }
 
-// Realtime API'ning o'z (native) transkripti YETARLICHA aniq bo'lsa,
-// authoritative Azure STT tugashini kutmasdan darhol javob boshlash uchun
-// ishlatiladi. `chooseTranscript()`ning "usable" chegarasidan ATAYLAB
-// qattiqroq: bitta/ikkita so'zli qisqa buyruqlar (masalan "Musiqani
-// to'xtat", 2 token) hali ham authoritative STT'ni kutadi — faqat aniq,
-// bir necha so'zli, past ehtimolli-xato buyruqlar darhol o'tadi.
-// Empirik kalibratsiya (core/stt-recovery.js smoke-test orqali): "Chrome
-// ni och" (3 token) ~64 ball, "Xo'p, Chrome dasturini och" (4 token) ~87,
-// "Musiqani to'xtat" (2 token) 60 ball lekin token-soni gate'idan
-// o'tolmaydi, "ha"/"xo'p" kabi tasdiqlar policy'ning o'zida rad etiladi.
+// Used to start replying at once, without waiting for the authoritative Azure STT, when
+// the Realtime API's own (native) transcript is accurate ENOUGH. Deliberately stricter
+// than chooseTranscript()'s "usable" threshold: one- or two-word commands (e.g.
+// "Musiqani to'xtat", 2 tokens) still wait for the authoritative STT; only clear,
+// multi-word, low-risk commands pass immediately. Empirical calibration (via the
+// core/stt-recovery.js smoke test): "Chrome ni och" (3 tokens) ~64 points, "Xo'p, Chrome
+// dasturini och" (4 tokens) ~87, "Musiqani to'xtat" (2 tokens) 60 points but fails the
+// token-count gate; confirmations like "ha"/"xo'p" are rejected by the policy itself.
 function nativeIsConfident(text, options = {}) {
   const quality = transcriptQuality(text, options);
   const minScore = Number.isFinite(options.minScore) ? options.minScore : 60;
