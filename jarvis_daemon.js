@@ -740,7 +740,7 @@ async function mainLoop() {
       });
       nativeMic.on('exit', info => {
         session.disableNativeAec('helper-exit');
-        if (!session.closed) wrn('Native AEC to\'xtadi (' + (info.error || info.code) + ') — oddiy mikrofon yo\'liga qaytildi');
+        if (!session.closed) wrn('Native AEC stopped (' + (info.error || info.code) + '); fell back to the plain microphone path');
       });
       nativeMic.on('unavailable', reason => { wrn('Native AEC unavailable: ' + reason); });
       nativeMic.start();
@@ -1614,7 +1614,7 @@ async function processCommand(command) {
 // GRACEFUL EXIT
 // ════════════════════════════════════════════
 function cleanup(exitCode = 0) {
-  inf('To\'xtatilmoqda...');
+  inf('Shutting down...');
   if (_activeRealtimeSession) { try { _activeRealtimeSession.close(); } catch(e){} }
   if (_sox) { try { _sox.kill(); } catch(e){} }
   if (_detector) { try { _detector.release(); } catch(e){} }

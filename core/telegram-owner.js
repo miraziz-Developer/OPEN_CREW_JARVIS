@@ -1,6 +1,6 @@
 'use strict';
 
-// TELEGRAM_OWNER_IDS="123,456": bir nechta ega (har biri o'z shaxsiy chatida). TELEGRAM_CHAT_ID — asosiy ega.
+// TELEGRAM_OWNER_IDS="123,456": several owners (each in their own private chat). TELEGRAM_CHAT_ID is the main owner.
 function parseOwnerIds(...values) {
   const ids = [];
   for (const value of values) {

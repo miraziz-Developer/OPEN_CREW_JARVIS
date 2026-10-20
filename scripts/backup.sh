@@ -1,6 +1,6 @@
 #!/bin/bash
-# JARVIS kunlik zaxira: kod (git bundle), sozlamalar, xotira, missiyalar, Obsidian "Jarvis" papkasi.
-# Joy: ~/.jarvis-backups/daily/YYYY-MM-DD (faqat egasi o'qiydi). Oxirgi 7 kun saqlanadi.
+# JARVIS daily backup: code (git bundle), settings, memory, missions, the Obsidian "Jarvis" folder.
+# Location: ~/.jarvis-backups/daily/YYYY-MM-DD (readable by the owner only). The last 7 days are kept.
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="${HOME}/.jarvis-backups/daily"

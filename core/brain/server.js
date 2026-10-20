@@ -22,6 +22,6 @@ const brain = createBrainService({
 const port = Number(process.env.BRAIN_PORT) || 11435;
 brain.server().listen(port, '127.0.0.1', () => log(`listening on 127.0.0.1:${port} (project ${path.basename(PROJECT_DIR)})`));
 setInterval(() => brain.idleSweep().catch(e => log('idle sweep: ' + e.message)), 30000).unref();
-// Xizmat to'xtasa Bonsai jarayoni ham to'xtaydi — aks holda u RAM'da qolib ketardi.
+// When the service stops, the Bonsai process stops too; otherwise it would stay in RAM.
 const shutdown = async () => { log('stopping'); try { await bonsai.evict(); } catch (_) {} process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

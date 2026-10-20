@@ -11,7 +11,7 @@ function loadState(file, today) {
   return s && s.date === today ? s : { date: today, sent: false };
 }
 
-// Faktlardan qisqa brifing matni (LLM'siz — tez va ishonchli).
+// A short brief built from facts (no LLM: fast and reliable).
 function composeBrief({ now = new Date(), missions = [], usage = {}, yesterday = '', events = [], unread = [] }) {
   const lines = [`Good morning. ${DAYS[now.getDay()]}, ${now.toISOString().slice(0, 10)}.`];
   const waiting = missions.filter(m => m.status === 'awaiting_approval');

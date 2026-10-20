@@ -3,8 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-// Ekran/ilova kontekstini kuzatadi: hozirgi ilova + oxirgi o'zgarishlar.
-// Ovozli sessiya boshida "Sen nima ko'ryapsan" degan bilim beradi.
+// Tracks screen/app context: the current app plus recent changes.
+// At the start of a voice session it provides the "what are you looking at" knowledge.
 class AmbientContext {
   constructor({ file, collect, intervalMs = 5000, historySize = 8, now = Date.now } = {}) {
     this.file = file; this.collect = collect; this.intervalMs = intervalMs;
@@ -39,7 +39,7 @@ class AmbientContext {
   stop() { clearInterval(this.timer); this.timer = null; }
 }
 
-// Sessiya ko'rsatmasi uchun blok (faylni o'qiydi — ovoz jarayoni va daemon alohida bo'lishi mumkin).
+// Block for the session instructions (reads the file: the voice process and the daemon may be separate).
 function ambientBlock(file, now = Date.now()) {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));

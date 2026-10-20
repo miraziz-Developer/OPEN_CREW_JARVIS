@@ -86,7 +86,7 @@ class MissionControl extends EventEmitter {
 
   submitResult(missionId, stepId, result, evidence = []) {
     const { mission, step } = this._step(missionId, stepId);
-    if (step.status !== 'running' && step.status !== 'awaiting_verification') throw new Error(`Step result qabul qilmaydi: ${step.status}`);
+    if (step.status !== 'running' && step.status !== 'awaiting_verification') throw new Error(`Step does not accept a result: ${step.status}`);
     step.result = result;
     step.evidence.push(...this._normalizeEvidence(evidence));
     step.status = 'awaiting_verification'; step.lease = null; step.updatedAt = this.now();
@@ -101,7 +101,7 @@ class MissionControl extends EventEmitter {
     const validEvidence = step.evidence.some(item => item && item.type && (item.value !== undefined || item.uri || item.summary));
     const ok = verification.ok === true && validEvidence;
     step.verification = { ...verification, ok, verifiedAt: this.now(), evidenceRequired: true };
-    if (!ok) return this.failStep(missionId, stepId, verification.error || (validEvidence ? 'Verifier rad etdi' : 'Dalil yo‘q'));
+    if (!ok) return this.failStep(missionId, stepId, verification.error || (validEvidence ? 'Rejected by the verifier' : 'No evidence'));
     step.status = 'verified'; step.updatedAt = this.now();
     mission.updatedAt = this.now();
     this._record('step.verified', mission, { stepId, method: verification.method || 'unspecified' });
@@ -124,7 +124,7 @@ class MissionControl extends EventEmitter {
   failStep(missionId, stepId, error, options = {}) {
     const { mission, step } = this._step(missionId, stepId);
     if (STEP_TERMINAL.has(step.status)) return clone(step);
-    step.error = String(error || 'Noma’lum xato'); step.lease = null; step.updatedAt = this.now();
+    step.error = String(error || 'Unknown error'); step.lease = null; step.updatedAt = this.now();
     const retryable = options.retryable !== false && step.attempts < step.maxAttempts;
     if (retryable) {
       step.status = 'retry_wait';
@@ -172,7 +172,7 @@ class MissionControl extends EventEmitter {
   _validatePlan(steps) {
     const ids = new Set();
     for (const step of steps) {
-      if (!step.id || ids.has(step.id)) throw new Error(`Takror yoki bo‘sh step id: ${step.id}`);
+      if (!step.id || ids.has(step.id)) throw new Error(`Duplicate or empty step id: ${step.id}`);
       ids.add(step.id);
     }
     for (const step of steps) for (const dependency of step.dependsOn) if (!ids.has(dependency)) throw new Error(`Noma’lum dependency: ${dependency}`);

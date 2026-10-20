@@ -11,8 +11,8 @@ function parseWakeWorkerLine(line) {
   return { model: match[1] || 'hey_jarvis', score: Number(match[2]) };
 }
 
-// Bepul va to'liq lokal hey_jarvis modeli. Python worker ishlamay qolsa
-// daemon qulamaydi: Azure STT backup hotword ishlashda davom etadi.
+// The free, fully local hey_jarvis model. If the Python worker fails the daemon does
+// not crash: the Azure STT backup hotword keeps working.
 class OpenWakeWordDetector {
   constructor({ projectDir, pythonPath, env, sampleRate = 16000, spawnProcess = spawn, restartBaseMs, restartMaxMs } = {}) {
     this.detected = null;
@@ -62,7 +62,7 @@ class OpenWakeWordDetector {
     });
     this.worker.on('error', error => {
       this.lastError = error.message;
-      wrn('openWakeWord worker ishga tushmadi: ' + error.message);
+      wrn('openWakeWord worker failed to start: ' + error.message);
       this._scheduleRestart();
     });
     this.worker.on('close', (code, signal) => {
@@ -70,7 +70,7 @@ class OpenWakeWordDetector {
       this.lastExit = { code, signal: signal || null, at: Date.now() };
       if (!this.closed && code !== 0) {
         this.lastError = 'worker exited with code ' + code;
-        wrn('openWakeWord worker to\'xtadi (code=' + code + ') — bounded restart, fallback faol');
+        wrn('openWakeWord worker stopped (code=' + code + '); bounded restart, fallback active');
       }
       if (!this.closed) this._scheduleRestart();
     });
@@ -96,7 +96,7 @@ class OpenWakeWordDetector {
         this.ready = true;
         this.restartCount = 0;
         this.lastError = null;
-        ok('openWakeWord lokal worker tayyor (bepul)');
+        ok('openWakeWord local worker ready (free)');
       } else if (line.startsWith('MODELS ')) {
         ok('openWakeWord modellar: ' + line.slice(7));
       } else if (line.startsWith('DETECT ')) {

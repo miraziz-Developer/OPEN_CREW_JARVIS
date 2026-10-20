@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Qaysi "miya" ishlaydi:
- *  - audio            → Gemma 4 E2B (audioni faqat u tushunadi)
- *  - qiyin fikrlash   → Ternary Bonsai 2 27B (faqat matn; rasm → Qwen)
- *  - qolgan hammasi   → Qwen 3.5 9B (matn, asboblar va RASM — oddiy skrinshot uchun model almashtirilmaydi)
+ * Which "brain" runs:
+ *  - audio            → Gemma 4 E2B (the only one that understands audio)
+ *  - hard reasoning   → Ternary Bonsai 2 27B (text only; images → Qwen)
+ *  - everything else  → Qwen 3.5 9B (text, tools and IMAGES: no model swap for an ordinary screenshot)
  */
 const isGeminiBrain = String(process.env.BRAIN_BACKEND || process.env.JARVIS_BRAIN || '').toLowerCase() === 'gemini' || Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
 

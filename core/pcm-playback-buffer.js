@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * Realtime PCM oqimining boshlanishida kichik zaxira yig'adi. Tarmoq yoki
- * model chunklari notekis kelganda audio qurilma darhol och qolib, gap orasida
- * jimlik hosil qilmasligi uchun bu zaxira sox pipe ichida oldindan turadi.
+ * Collects a small buffer at the start of a realtime PCM stream. When network or model
+ * chunks arrive unevenly, the audio device would immediately starve and leave silence
+ * mid-sentence, so this buffer sits ready inside the sox pipe.
  */
 class PcmPlaybackBuffer {
   constructor(options = {}) {
@@ -36,8 +36,8 @@ class PcmPlaybackBuffer {
     if (this.queuedMs >= this.prebufferMs || this.prebufferMs === 0) {
       this._release();
     } else if (!this._timer && this.maxWaitMs > 0) {
-      // Juda qisqa javob prebuffer chegarasiga yetmasligi mumkin. Serverning
-      // done eventi kelmasa ham ovoz cheksiz ushlanib qolmaydi.
+      // A very short reply may never reach the prebuffer threshold; the audio is still
+      // never held forever, even if the server's done event does not arrive.
       this._timer = setTimeout(() => this._release(), this.maxWaitMs);
       this._timer.unref?.();
     }

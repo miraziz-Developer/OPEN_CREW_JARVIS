@@ -108,7 +108,7 @@ function requestVision({ endpoint, key, deployment, framePaths, prompt, request 
   if (gemini.hasGemini() && (!endpoint || !key || String(endpoint).includes('gemini.mode.local'))) {
     return gemini.analyzeFrames({ framePaths, prompt });
   }
-  if (!endpoint || !key) return Promise.reject(new Error('AZURE_OPENAI_KEY yoki AZURE_OPENAI_ENDPOINT sozlanmagan'));
+  if (!endpoint || !key) return Promise.reject(new Error('AZURE_OPENAI_KEY or AZURE_OPENAI_ENDPOINT is not configured'));
   const body = JSON.stringify(buildVisionBody(framePaths, prompt, deployment || 'gpt-4.1'));
   const url = new URL(String(endpoint).replace(/\/$/, '') + '/chat/completions');
   return new Promise((resolve, reject) => {

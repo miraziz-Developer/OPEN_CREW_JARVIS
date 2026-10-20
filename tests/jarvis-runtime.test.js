@@ -39,7 +39,7 @@ test('task ledger enforces transitions and only marks non-error output verified'
   const task = runtime.completeTask('call-1', 'Safari ochildi');
   assert.equal(task.state, 'verified');
   assert.equal(task.verification.ok, true);
-  assert.throws(() => runtime.transitionTask('call-1', 'running'), /Noto'g'ri task transition/);
+  assert.throws(() => runtime.transitionTask('call-1', 'running'), /Invalid task transition/);
 
   runtime.requestTask('Noto\'g\'ri vazifa', { id: 'call-2' });
   runtime.transitionTask('call-2', 'running');

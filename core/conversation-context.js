@@ -45,7 +45,7 @@ class ConversationContext {
     return Boolean(this.state.lastActivityAt && at - this.state.lastActivityAt <= this.windowMs);
   }
 
-  // Suhbat oynasini turn yozmasdan yangilaydi (masalan faqat "Jarvis" deyilganda).
+  // Refreshes the conversation window without recording a turn (e.g. when only "Jarvis" was said).
   touch(at = this.now()) { this.state.lastActivityAt = at; }
 
   observe(role, text, options = {}) {

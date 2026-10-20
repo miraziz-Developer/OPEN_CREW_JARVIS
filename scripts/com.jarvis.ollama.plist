@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.jarvis.ollama</string>
-  <!-- JARVIS lokal miyasi: RAM'da bir vaqtda faqat 1 model; 5 daqiqa ishlatilmasa o'zi bo'shaydi. -->
+  <!-- JARVIS local brain: only 1 model in RAM at a time; it unloads itself after 5 idle minutes. -->
   <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>exec "$(command -v ollama)" serve</string></array>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer>
   <key>WorkingDirectory</key><string>__PROJECT_DIR__</string>

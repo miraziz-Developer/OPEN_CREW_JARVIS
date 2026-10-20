@@ -22,8 +22,8 @@ class TurnJournal extends EventEmitter {
     this.maxRetries = options.maxRetries ?? 3;
     this.maxBytes = options.maxBytes || 8 * 1024 * 1024;
     this.retentionFiles = options.retentionFiles || 5;
-    // Ixtiyoriy sidecar: qaysi turn qaysi holatda xotiraga yozilganini eslab qoladi, shunda qayta ishga tushganda
-    // allaqachon yozilganlari qayta yozilmaydi (idempotent, lekin qimmat: har biri Obsidian + xotira JSON'ini qayta yozadi).
+    // Optional sidecar: remembers which turn was written to memory in which state, so a restart does not
+    // rewrite turns already written (idempotent, but expensive: each rewrites Obsidian + the memory JSON).
     this.sidecarFile = options.sidecarFile || null;
     this.signatures = new Map();
     this._sidecarTimer = null;
@@ -39,7 +39,7 @@ class TurnJournal extends EventEmitter {
   }
 
   append(turnId, type, data = {}) {
-    if (!turnId || !type) throw new Error('turnId va type kerak');
+    if (!turnId || !type) throw new Error('turnId and type are required');
     const at = this.now();
     const safeData = this._sanitize(data);
     const event = { version: 1, turnId: clean(turnId, 300), type: clean(type, 80), at, data: safeData };
@@ -91,7 +91,7 @@ class TurnJournal extends EventEmitter {
   }
 
   sweepStale(maxAgeMs, reason = 'turn watchdog timeout') {
-    if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) throw new Error('maxAgeMs musbat son bo‘lishi kerak');
+    if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) throw new Error('maxAgeMs must be a positive number');
     const cutoff = this.now() - maxAgeMs;
     const staleIds = [...this.turns.values()]
       .filter(turn => turn.user && !TERMINAL_STATUSES.has(turn.status) && turn.updatedAt <= cutoff)

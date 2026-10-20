@@ -7,7 +7,7 @@ const { execFile } = require('child_process');
 
 const MAX_BACKUP_BYTES = 1024 * 1024;
 
-// Bitta umumiy "undo" stek: har amal o'zini qanday qaytarishini ro'yxatdan o'tkazadi.
+// One shared "undo" stack: every action registers how to reverse itself.
 class UndoStack {
   constructor(limit = 50) { this.limit = limit; this.items = []; }
   push(label, undo) {
@@ -39,7 +39,7 @@ function uniqueTrashPath(name, home) {
   return target;
 }
 
-// Fayl amallari — hammasi qaytariladigan. O'chirish = Trash'ga ko'chirish.
+// File actions are all reversible. Deleting = moving to the Trash.
 function fileOps({ stack = shared, home = os.homedir() } = {}) {
   const P = p => safePath(p, home);
   return {
@@ -65,7 +65,7 @@ function fileOps({ stack = shared, home = os.homedir() } = {}) {
       if (fs.existsSync(dst) && fs.statSync(dst).isDirectory()) dst = path.join(dst, path.basename(src));
       if (fs.existsSync(dst)) throw new Error('Destination exists: ' + dst);
       fs.cpSync(src, dst, { recursive: true, errorOnExist: true });
-      // Nusxani o'chirish faqat u o'zgarmagan/bo'sh emas holda ham Trash orqali — hech qachon buzuvchi emas.
+      // Deleting a copy also goes through the Trash, even when unchanged or empty: never destructive.
       stack.push(`copy ${path.basename(src)}`, () => { fs.renameSync(dst, uniqueTrashPath(path.basename(dst), home)); });
       return `Copied to ${dst}`;
     },
@@ -95,7 +95,7 @@ function fileOps({ stack = shared, home = os.homedir() } = {}) {
 
 const osa = script => new Promise((resolve, reject) => execFile('/usr/bin/osascript', ['-e', script], { timeout: 4000, encoding: 'utf8' }, (e, out) => e ? reject(e) : resolve(String(out).trim())));
 
-// Sozlamalar: joriy qiymat AVVAL o'qiladi (taxmin emas); o'qib bo'lmasa — undo ro'yxatga olinmaydi.
+// Settings: the current value is READ first (never guessed); if it cannot be read, no undo is registered.
 async function captureSetting(actionId, { stack = shared, run = osa } = {}) {
   if (/^volume:/.test(actionId)) {
     try {

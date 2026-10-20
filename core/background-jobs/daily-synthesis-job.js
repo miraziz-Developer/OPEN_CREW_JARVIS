@@ -2,19 +2,19 @@
 
 const { ok, er } = require('../log');
 
-// Kunlik o'rganish: xom kuzatuvlardan barqaror naqshlarni ajratib,
-// profilga qo'shadi. Skill o'zi qaysi kunlar bajarilganini eslab qoladi,
-// shuning uchun tez-tez chaqirish xavfsiz (takror bajarilmaydi).
+// Daily learning: distils stable patterns from raw observations into the profile.
+// The skill remembers which days it already processed, so frequent calls are safe
+// (nothing runs twice).
 function createDailySynthesisJob({ sendTelegram }) {
   async function run() {
     try {
       const { synthesize, yesterday } = require('../../skills/daily-synthesis');
       const r = await synthesize(yesterday());
       if (r && r.learned && r.learned.length) {
-        ok('🧠 O\'rganildi (' + r.date + '): ' + r.learned.length + ' ta naqsh profilga qo\'shildi');
+        ok('🧠 Learned (' + r.date + '): ' + r.learned.length + ' patterns added to the profile');
         sendTelegram('🧠 Patterns learned from yesterday:\n' + r.learned.join('\n'));
       }
-    } catch (e) { er('Kunlik o\'rganish xatolik: ' + (e.message || e)); }
+    } catch (e) { er('Daily learning error: ' + (e.message || e)); }
   }
 
   return { run };

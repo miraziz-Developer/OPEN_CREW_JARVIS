@@ -39,13 +39,13 @@ function collectMacOSContext(options = {}) {
   try {
     const output = exec('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CONTEXT_SCRIPT], { encoding: 'utf8', timeout: options.timeout || 5000 }).trim();
     const parsed = parseJxaJson(output);
-    if (!parsed) throw new Error('JXA noto‘g‘ri JSON qaytardi');
+    if (!parsed) throw new Error('JXA returned invalid JSON');
     if (!parsed.app) throw new Error('Frontmost ilova aniqlanmadi');
     return parsed;
   } catch (error) {
     const message = String(error.stderr || error.message || error);
-    if (/assistive|not authorized|not allowed|-1743/i.test(message)) throw new Error('Accessibility yoki Automation ruxsati kerak');
-    throw new Error('macOS kontekstini olishda xato: ' + message.trim().slice(0, 300));
+    if (/assistive|not authorized|not allowed|-1743/i.test(message)) throw new Error('Accessibility or Automation permission required');
+    throw new Error('Could not read the macOS context: ' + message.trim().slice(0, 300));
   }
 }
 

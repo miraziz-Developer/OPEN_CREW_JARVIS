@@ -2,8 +2,8 @@
 
 const { execFile } = require('child_process');
 
-// O'zini-o'zi tiklash: har tekshiruv {name, ok, heal?} qaytaradi. Sog'lom bo'lmasa
-// heal() chaqiriladi (cooldown bilan), ko'p urinishdan keyin BIR marta xabar beriladi.
+// Self-healing: every check returns {name, ok, heal?}. When unhealthy, heal() is called
+// (with a cooldown), and after many attempts the user is notified ONCE.
 class HealthWatchdog {
   constructor({ checks = [], notify = () => {}, cooldownMs = 120000, maxHeals = 3, now = Date.now, intervalMs = 30000 } = {}) {
     this.checks = checks; this.notify = notify; this.cooldownMs = cooldownMs;

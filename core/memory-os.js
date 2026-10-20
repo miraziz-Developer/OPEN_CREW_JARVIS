@@ -109,7 +109,7 @@ class MemoryOS {
       const layer = LAYERS.has(input.layer) ? input.layer : 'episodic';
       const titleRedaction = redactSensitive(clean(input.title, 300));
       const contentRedaction = redactSensitive(clean(input.content, 8000));
-      if (!titleRedaction.text && !contentRedaction.text) throw new Error('Memory title yoki content kerak');
+      if (!titleRedaction.text && !contentRedaction.text) throw new Error('Memory title or content is required');
       const requestedId = clean(input.id, 300);
       const existingById = requestedId && this.state.records.find(record => record.id === requestedId);
       if (existingById) {

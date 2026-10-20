@@ -35,10 +35,9 @@ function getEnergy(pcm16leBuffer) {
   return Math.sqrt(sum / samples);
 }
 
-// Qarsak — juda qisqa (bir necha millisekund) zarba. getEnergy() (RMS)
-// butun 200ms oynani o'rtachalashtiradi, shuning uchun qisqa zarba tinch
-// fon bilan aralashib, "yumshab" ketadi va chegaradan pastda qolib
-// ketishi mumkin edi. Peak (eng baland cho'qqi) qarsakni yo'qotmaydi.
+// A clap is a very short impulse (a few milliseconds). getEnergy() (RMS) averages the
+// whole 200 ms window, so a short hit blends into the quiet background, "softens" and
+// could stay below the threshold. Peak (the highest spike) never loses the clap.
 function getPeakAmplitude(pcm16leBuffer) {
   let peak = 0;
   for (let i = 0; i < pcm16leBuffer.length; i += 2) {

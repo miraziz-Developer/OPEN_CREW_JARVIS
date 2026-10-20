@@ -13,13 +13,13 @@ function isPrivateFileMode(mode) {
 
 function evaluateRuntime(runtime, options = {}) {
   if (!runtime || typeof runtime !== 'object') {
-    return createCheck('runtime:owner', 'error', 'Runtime snapshot yo‘q yoki yaroqsiz', 'Supervisorni qayta ishga tushiring');
+    return createCheck('runtime:owner', 'error', 'Runtime snapshot missing or invalid', 'Restart the supervisor');
   }
   const owner = inspectRuntimeOwner(runtime, options);
   const detail = owner.pid
     ? `pid=${owner.pid}, alive=${owner.pidAlive}, command=${owner.commandMatches}, heartbeat=${owner.heartbeatFresh}, ownership=${owner.heartbeatOwnsSnapshot}`
-    : 'Runtime owner PID yo‘q';
-  return createCheck('runtime:owner', owner.healthy ? 'ok' : 'error', detail, owner.healthy ? null : 'npm run diagnose:voice orqali batafsil tekshiring');
+    : 'No runtime owner PID';
+  return createCheck('runtime:owner', owner.healthy ? 'ok' : 'error', detail, owner.healthy ? null : 'Run npm run diagnose:voice for details');
 }
 
 function summarize(checks, options = {}) {

@@ -106,9 +106,9 @@ function parseJson(output) {
 function accessibilityError(error) {
   const message = String(error?.stderr || error?.message || error || '').trim();
   if (/assistive|not authorized|not allowed|-1743|osascript is not allowed/i.test(message)) {
-    return new Error('Accessibility ruxsati kerak: System Settings → Privacy & Security → Accessibility');
+    return new Error('Accessibility permission required: System Settings → Privacy & Security → Accessibility');
   }
-  return new Error('macOS Accessibility xatosi: ' + message.slice(0, 500));
+  return new Error('macOS Accessibility error: ' + message.slice(0, 500));
 }
 
 function runJxa(script, input = {}, options = {}) {
@@ -119,7 +119,7 @@ function runJxa(script, input = {}, options = {}) {
       env: { ...process.env, JARVIS_AX_INPUT: JSON.stringify(input) }
     });
     const parsed = parseJson(output);
-    if (!parsed) throw new Error('JXA noto‘g‘ri JSON qaytardi');
+    if (!parsed) throw new Error('JXA returned invalid JSON');
     return parsed;
   } catch (error) { throw accessibilityError(error); }
 }
@@ -198,7 +198,7 @@ function hasMeaningfulQuery(query = {}) {
 }
 
 function findElements(elements, query = {}, options = {}) {
-  if (!hasMeaningfulQuery(query)) throw new Error('Element qidirish uchun name/title/role/identifier kerak');
+  if (!hasMeaningfulQuery(query)) throw new Error('Element search needs a name/title/role/identifier');
   const limit = Math.max(1, Math.min(50, Number(options.limit || query.limit || 10)));
   const minScore = Number(options.minScore ?? query.minScore ?? 20);
   return (Array.isArray(elements) ? elements : []).map(element => ({ element, score: scoreElement(element, query) }))

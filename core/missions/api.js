@@ -7,8 +7,8 @@ const { StandingApprovals, SCOPES } = require('./standing');
 const ACTIONS = new Set(['pause', 'resume', 'cancel', 'approve', 'reject', 'note']);
 
 /**
- * Ovozli sessiya uchun missiya API'si: har chaqiruv millisekundlarda qaytadi (fayl yozish), shuning uchun
- * ovozli suhbat hech qachon uzoq missiyani kutib qolmaydi.
+ * Mission API for the voice session: every call returns in milliseconds (a file write), so the voice
+ * conversation never waits on a long mission.
  */
 function createMissionApi(store, options = {}) {
   const standing = options.standing || new StandingApprovals({ file: path.join(store.dir, 'standing-approvals.json') });
@@ -55,7 +55,7 @@ function createMissionApi(store, options = {}) {
       if (!ACTIONS.has(action)) return `Unknown action "${action}".`;
       let mission = idOrNumber ? store.get(idOrNumber) : null;
       if (!mission) {
-        // Raqam aytilmasa: bitta ochiq missiya bo'lsa (yoki tasdiq kutayotgan bitta bo'lsa) shuni tanlaymiz.
+        // No number given: pick the single open mission (or the single one awaiting approval).
         const open = store.list({ open: true });
         const waiting = open.filter(m => m.status === 'awaiting_approval');
         const candidates = ['approve', 'reject'].includes(action) ? waiting : open;

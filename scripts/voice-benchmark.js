@@ -13,14 +13,14 @@ corpus.version = 1; corpus.samples ||= [];
 
 if (args.hours !== undefined) corpus.observationHours = Number(args.hours);
 if (flags.has('--stt')) {
-  if (!args.expected || args.recognized === undefined) throw new Error('--stt uchun --expected="..." va --recognized="..." kerak');
+  if (!args.expected || args.recognized === undefined) throw new Error('--stt needs --expected="..." and --recognized="..."');
   corpus.samples.push({ kind: 'stt', expected: args.expected, recognized: args.recognized, at: new Date().toISOString() });
 }
 if (flags.has('--wake')) {
-  if (!['true', 'false'].includes(args.expected) || !['true', 'false'].includes(args.detected)) throw new Error('--wake uchun --expected=true|false va --detected=true|false kerak');
+  if (!['true', 'false'].includes(args.expected) || !['true', 'false'].includes(args.detected)) throw new Error('--wake needs --expected=true|false and --detected=true|false');
   corpus.samples.push({ kind: 'wake', expectedWake: args.expected === 'true', detected: args.detected === 'true', at: new Date().toISOString() });
 }
 if (flags.has('--clear')) { corpus.samples = []; corpus.observationHours = 0; }
 saveCorpus(FILE, corpus);
-console.log('Private corpus: ' + FILE + ' (raw audio yo‘q, Git ignored, mode 0600)');
+console.log('Private corpus: ' + FILE + ' (no raw audio, git-ignored, mode 0600)');
 console.log(JSON.stringify(summarizeCorpus(corpus), null, 2));

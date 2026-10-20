@@ -19,7 +19,7 @@ Ixtiyoriy maydonlar (stdin JSON):
 - `prompt` (string): extra instruction about what to focus on.
 - `action: "locate_elements"`, `query`: locates elements that Accessibility cannot find, as a vision fallback.
 
-Oddiy chiqish: `{ "status": "ok", "description": "...", "imagePath": "..." }`.
+Plain output: `{ "status": "ok", "description": "...", "imagePath": "..." }`.
 
 Structured output: `{ "status":"ok", "description":"...", "elements":[{"name":"Save","role":"button","confidence":0.96,"bounds":{"x":10,"y":20,"width":80,"height":30},"center":{"x":50,"y":35}}] }`. Coordinates are in the screenshot's raw pixel space; `desktop-control.click_at` adjusts for Retina scaling itself. With low confidence or several equal matches, do not click: observe the UI again or refine the query.
 

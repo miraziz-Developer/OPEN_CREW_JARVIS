@@ -22,7 +22,7 @@ function readProjectEnv(projectDir) {
 
 function requiredValue(name, value) {
   if (String(value || '').trim()) return value;
-  throw new Error(`OpenClaw credential configuration error: ${name} topilmadi (.env yoki process environment orqali bering)`);
+  throw new Error(`OpenClaw credential configuration error: ${name} not found (set it in .env or the process environment)`);
 }
 
 function resolveOpenClawEnvironment({ projectDir, env = process.env } = {}) {

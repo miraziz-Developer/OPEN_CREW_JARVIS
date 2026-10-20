@@ -11,8 +11,8 @@
     <string>__PROJECT_DIR__/scripts/pause-sentinel.js</string>
   </array>
 
-  <!-- Kompyuter yonganda avtomatik ishga tushsin — Jarvis o'zi to'xtatilgan
-       bo'lsa ham, shu tinglovchi doim ishlab turishi kerak -->
+  <!-- Start automatically when the Mac boots: even when JARVIS itself is paused,
+       this listener must always be running -->
   <key>RunAtLoad</key>
   <true/>
 

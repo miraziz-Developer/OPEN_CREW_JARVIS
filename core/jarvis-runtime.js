@@ -160,7 +160,7 @@ class JarvisRuntime extends EventEmitter {
     if (task.state === nextState) return task;
     const allowed = ALLOWED_TASK_TRANSITIONS[task.state];
     if (!allowed || !allowed.has(nextState)) {
-      throw new Error('Noto\'g\'ri task transition: ' + task.state + ' -> ' + nextState);
+      throw new Error('Invalid task transition: ' + task.state + ' -> ' + nextState);
     }
     const now = this.now();
     task.state = nextState;
@@ -174,7 +174,7 @@ class JarvisRuntime extends EventEmitter {
     }
     if (nextState === 'failed') {
       task.completedAt = now;
-      task.error = String(details.error || 'Noma\'lum xatolik');
+      task.error = String(details.error || 'Unknown error');
     }
     if (nextState === 'cancelled') task.completedAt = now;
     if (Object.prototype.hasOwnProperty.call(details, 'result')) task.result = details.result;
@@ -192,7 +192,7 @@ class JarvisRuntime extends EventEmitter {
     }
     const text = String(result || '').trim();
     const failed = !text || /(^|\b)(error|xatolik|failed|bajarilmadi|muvaffaqiyatsiz)(\b|:)/i.test(text);
-    if (failed) return this.transitionTask(id, 'failed', { result: text, error: text || 'Bo\'sh natija' });
+    if (failed) return this.transitionTask(id, 'failed', { result: text, error: text || 'Empty result' });
     return this.transitionTask(id, 'verified', {
       result: text,
       verification: verification || { method: 'executor-result', ok: true }

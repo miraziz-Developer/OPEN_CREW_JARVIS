@@ -26,7 +26,7 @@ async function embeddingCount(options = {}) {
     const result = await client.query('SELECT count(*)::int AS count FROM jarvis.memory_embeddings');
     return result.rows[0].count;
   } catch (_) {
-    return 0; // Postgres yo'q yoki jadval hali yaratilmagan (toza o'rnatish) — xato emas
+    return 0; // no Postgres, or the table does not exist yet (fresh install): not an error
   } finally { await client.end().catch(() => {}); }
 }
 

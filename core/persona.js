@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * JARVIS xarakteri: chuqur, viqorli ovozga mos "qirrali" shaxsiyat. Realtime ko'rsatmalariga qo'shiladi.
- * `.env`: JARVIS_PERSONA=plain — xarakterni o'chiradi (neytral yordamchi).
+ * JARVIS character: an "edgy" personality that fits a deep, composed voice. Added to the realtime instructions.
+ * `.env`: JARVIS_PERSONA=plain disables the character (a neutral assistant).
  */
 const BREVITY_INSTRUCTIONS =
   "BREVITY (always, regardless of character mode): the shortest complete answer wins — usually ONE short sentence, at most two; a single word ('Done.', 'Online.') is often correct. " +

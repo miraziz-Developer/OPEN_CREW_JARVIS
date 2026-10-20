@@ -204,7 +204,7 @@ async function show(input = {}) {
     url = `https://earth.google.com/web/@${place.latitude.toFixed(6)},${place.longitude.toFixed(6)},12000a,35y,0t,0d`;
   }
   await openBrowser(url);
-  return { status: 'ok', started, place, url, message: `${place.name} God's Eye View / 3D Globe oynasida ochildi.` };
+  return { status: 'ok', started, place, url, message: `${place.name} opened in God's Eye View / 3D Globe.` };
 }
 
 async function status() {

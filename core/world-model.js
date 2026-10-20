@@ -147,9 +147,9 @@ class WorldModel {
   }
 
   observe(snapshot, metadata = {}) {
-    // Screen monitor va desktop-control alohida processlarda ishlaydi.
-    // Har mutatsiyadan oldin diskdagi eng yangi eventlarni qayta yuklash
-    // stale process boshqa process yozgan tarixni bosib yubormasligi uchun.
+    // The screen monitor and desktop-control run in separate processes. Reloading the
+    // newest events from disk before every mutation keeps a stale process from
+    // overwriting history another process wrote.
     return this._withLock(() => {
       this._load();
       const next = normalizeSnapshot(snapshot, this.now());

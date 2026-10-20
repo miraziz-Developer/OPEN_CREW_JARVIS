@@ -12,7 +12,7 @@ function clean(value, max = 500) {
 }
 
 function envValue(key, projectDir = PROJECT_DIR) {
-  // Jarayon muhiti .env dan ustun (testlar Telegram'ni bo'sh qiymat bilan o'chiradi — haqiqiy chatga xabar ketmasin).
+  // The process environment overrides .env (tests disable Telegram with an empty value so nothing reaches a real chat).
   if (process.env[key] !== undefined) return String(process.env[key]).trim();
   try {
     const contents = fs.readFileSync(path.join(projectDir, '.env'), 'utf8');
@@ -53,7 +53,7 @@ async function recordHighRiskCompletion(action, context = {}, options = {}) {
     try { fs.chmodSync(file, 0o600); } catch (_) {}
   } catch (_) {}
   const notify = options.notifyTelegram || sendTelegramNotification;
-  try { await notify('✅ Bajarildi: ' + description, options); } catch (_) {}
+  try { await notify('✅ Done: ' + description, options); } catch (_) {}
   return event;
 }
 

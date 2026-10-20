@@ -1,5 +1,5 @@
 'use strict';
-// Yengil .env o'quvchi (llm.js va grok.js orasida aylanma bog'liqlikdan qochish uchun).
+// Lightweight .env reader (avoids a circular dependency between llm.js and grok.js).
 const fs = require('fs');
 const path = require('path');
 const { PROJECT_DIR } = require('./paths');

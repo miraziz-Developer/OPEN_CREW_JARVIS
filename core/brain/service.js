@@ -7,10 +7,10 @@ const { routeTask, MODELS } = require('./router');
 const HEAVY_OLLAMA = new Set(['/api/chat', '/api/generate', '/api/embed', '/api/embeddings']);
 
 /**
- * JARVIS Brain: barcha lokal model chaqiruvlari shu yerdan o'tadi (RAM'da bir vaqtda bitta model).
+ * JARVIS Brain: every local model call goes through here (one model in RAM at a time).
  *   POST /brain/think   { system, user, images[], audio[], hard, maxTokens, format, think }
  *   GET  /brain/status
- *   /api/*              → Ollama (OpenClaw agenti uchun shaffof o'tkazgich, hakam orqali)
+ *   /api/*              → Ollama (transparent pass-through for the OpenClaw agent, via the arbiter)
  */
 function createBrainService({ ollama, bonsai, gemini, availableBytes, bonsaiNeedBytes = 9 * 2 ** 30, bonsaiIdleMs = 180000, log = () => {}, now = Date.now } = {}) {
   const arbiter = new BrainArbiter({ backends: { ollama, bonsai, gemini }, availableBytes, requirements: { bonsai: bonsaiNeedBytes }, log });
@@ -52,7 +52,7 @@ function createBrainService({ ollama, bonsai, gemini, availableBytes, bonsaiNeed
     };
   }
 
-  // Bo'sh turgan Bonsai'ni to'xtatamiz — RAM darhol qaytadi.
+  // Stop an idle Bonsai: RAM is returned immediately.
   async function idleSweep() {
     const s = arbiter.status();
     if (bonsai.running() && s.resident === 'bonsai' && s.inFlight === 0 && now() - lastBonsaiUse > bonsaiIdleMs) {

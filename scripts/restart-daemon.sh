@@ -17,9 +17,9 @@ if [[ -f "${PROJECT_DIR}/.jarvis-paused" ]]; then
   exit 0
 fi
 
-# LaunchAgent o'rnatilgan bo'lsa, yangi qo'lda nusxa yaratmaymiz. Avvalgi
-# skript launchd jarayonini o'ldirib, launchd avtomatik qayta ko'targach yana
-# nohup nusxasini ham boshlardi — natijada 2 daemon/2 mikrofon oqimi ishlardi.
+# When the LaunchAgent is installed, do not start an extra manual copy. The old script killed
+# the launchd process and, after launchd brought it back, also started a nohup copy, which
+# left 2 daemons and 2 microphone streams running.
 LABEL="com.jarvis.openclaw"
 DOMAIN="gui/$(id -u)"
 if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then

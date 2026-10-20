@@ -9,9 +9,9 @@ const { PROJECT_DIR } = require('./paths');
 const DEFAULT_BINARY = path.join(PROJECT_DIR, '.run', 'bin', 'jarvis-voice-io');
 
 /**
- * macOS Voice Processing (AEC + shovqin bostirish) mikrofon oqimi.
- * jarvis-voice-io yordamchisi 16 kHz mono PCM16 beradi. Yordamchi yo'q, ruxsat berilmagan yoki
- * ishlamay qolsa 'unavailable'/'exit' hodisasi chiqadi va chaqiruvchi oddiy mikrofon yo'liga qaytadi.
+ * macOS Voice Processing (AEC + noise suppression) microphone stream.
+ * The jarvis-voice-io helper provides 16 kHz mono PCM16. If the helper is missing, not permitted or
+ * fails, an 'unavailable'/'exit' event is emitted and the caller falls back to the plain microphone path.
  */
 class NativeMic extends EventEmitter {
   constructor(options = {}) {

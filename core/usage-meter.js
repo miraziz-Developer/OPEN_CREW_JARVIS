@@ -5,8 +5,8 @@ const path = require('path');
 const { PROJECT_DIR } = require('./paths');
 
 /**
- * Kunlik sarf hisoblagichi (LLM tokenlari, ovoz sekundlari). Bir nechta jarayon (daemon, runner) yozadi, shuning uchun
- * har kun uchun append-only JSONL: kichik qatorlar atomik qo'shiladi, yig'indi o'qishda hisoblanadi.
+ * Daily usage meter (LLM tokens, voice seconds). Several processes (daemon, runner) write to it, so each
+ * day is an append-only JSONL: small lines are appended atomically and totals are computed on read.
  */
 function dayKey(now = Date.now()) {
   const d = new Date(now);
@@ -41,7 +41,7 @@ class UsageMeter {
     return totals;
   }
 
-  // Bir kunda bir marta ogohlantirish: true faqat birinchi chaqiruvda.
+  // Warn once a day: true only on the first call.
   once(key) {
     const marker = path.join(this.dir, `${dayKey(this.now())}.${String(key).replace(/[^\w.-]/g, '_')}.flag`);
     if (fs.existsSync(marker)) return false;

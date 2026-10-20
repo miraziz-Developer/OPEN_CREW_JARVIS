@@ -13,7 +13,7 @@ async function locateVisual(name) {
   const imagePath = vision.takeScreenshot();
   try {
     const context = collectMacOSContext();
-    const prompt = vision.LOCATE_PROMPT + '\nSo‘rov: ' + name;
+    const prompt = vision.LOCATE_PROMPT + '\nRequest: ' + name;
     const raw = await vision.describeImage(imagePath, vision.buildGroundedPrompt(prompt, context), { structured: true });
     return vision.normalizeVisionResult(vision.extractJson(raw)).elements;
   } finally { try { fs.unlinkSync(imagePath); } catch (_) {} }

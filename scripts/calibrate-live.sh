@@ -23,7 +23,7 @@ if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
   launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
 fi
 
-# Faqat shu loyihaning exact script argv'iga ega voice owner jarayonlarini yopamiz.
+# Only stop voice owner processes whose argv is exactly this project's script.
 PROJECT_DIR="$PROJECT_DIR" node <<'NODE'
 const path = require('path');
 const { findMatchingProcesses } = require(path.join(process.env.PROJECT_DIR, 'core', 'runtime-health'));
@@ -35,7 +35,7 @@ for (const script of ['jarvis_daemon.js', path.join('core', 'openwakeword-worker
 NODE
 sleep 2
 
-printf '\n3 soniyadan keyin calibration boshlanadi...\n3...\n'
+printf '\nCalibration starts in 3 seconds...\n3...\n'
 sleep 1
 printf '2...\n'
 sleep 1

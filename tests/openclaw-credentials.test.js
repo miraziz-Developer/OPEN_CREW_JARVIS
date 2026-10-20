@@ -26,7 +26,7 @@ test('resolver reports a missing gateway token before OpenClaw is spawned', () =
 
   assert.throws(
     () => resolveOpenClawEnvironment({ projectDir, env: {} }),
-    /OPENCLAW_GATEWAY_TOKEN topilmadi/
+    /OPENCLAW_GATEWAY_TOKEN not found/
   );
 });
 

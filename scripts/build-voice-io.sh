@@ -1,5 +1,5 @@
 #!/bin/bash
-# macOS Voice Processing yordamchisini kompilyatsiya qiladi (.run/bin/jarvis-voice-io).
+# Compiles the macOS Voice Processing helper (.run/bin/jarvis-voice-io).
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$PROJECT_DIR/.run/bin"

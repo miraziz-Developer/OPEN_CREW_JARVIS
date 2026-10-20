@@ -5,9 +5,9 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Telegram egasini xavfsiz ulash: TELEGRAM_CHAT_ID yo'q bo'lsa bot bir martalik 6 xonali kod hosil qiladi
- * (faqat mahalliy faylga yoziladi). Egasi Telegramdan shaxsiy chatda `/pair KOD` yozadi. Kod muddatli, noto'g'ri
- * urinishlar cheklangan, guruh/bot xabarlari hisobga olinmaydi.
+ * Pairs the Telegram owner safely: without TELEGRAM_CHAT_ID the bot generates a one-time 6-digit code
+ * (written only to a local file). The owner sends `/pair CODE` in a private chat. The code expires, wrong
+ * attempts are limited, and group/bot messages are ignored.
  */
 function createPairing({ file, envFile, now = Date.now, ttlMs = 15 * 60 * 1000, maxAttempts = 5, lockMs = 10 * 60 * 1000 } = {}) {
   function read() { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }

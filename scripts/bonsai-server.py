@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""JARVIS: Ternary Bonsai 2 27B (MLX) uchun lokal HTTP server.
+"""JARVIS: local HTTP server for Ternary Bonsai 2 27B (MLX).
 
-Model paketning o'z runtime'i orqali yuklanadi (oddiy MLX yuklovchisi og'irliklarni noto'g'ri o'qiydi).
+The model loads through the package's own runtime (the plain MLX loader reads the weights incorrectly).
 Endpointlar:
   GET  /health                  → {"ok": true}
-  POST /v1/chat/completions     → OpenAI uslubidagi javob (matn; rasm: content ichida image_url data:base64)
-Jarayon to'xtatilsa model RAM'dan to'liq bo'shaydi — JARVIS Brain uni faqat kerak paytda ishga tushiradi.
+  POST /v1/chat/completions     → OpenAI-style response (text; images: image_url data:base64 inside content)
+Stopping the process frees the model from RAM completely; the JARVIS brain starts it only when needed.
 """
 import argparse
 import base64
@@ -87,7 +87,7 @@ def complete(body):
     max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 1024)
     thinking = bool(body.get("thinking", False))
     if images:
-        # Rasm bilan: mlx-vlm shabloni rasm belgilarini to'g'ri qo'yadi (oxirgi foydalanuvchi matni bilan).
+        # With an image: the mlx-vlm template places the image tokens correctly (with the last user text).
         last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
         system = "\n".join(m["content"] for m in messages if m["role"] == "system")
         prompt = apply_chat_template(PROCESSOR, chat_config(CONFIG), (system + "\n\n" if system else "") + last_user, num_images=len(images))

@@ -2,8 +2,8 @@
 
 const { execFile } = require('child_process');
 
-// macOS'da os.freemem() keshni "band" deb hisoblaydi va juda kam ko'rsatadi. vm_stat bo'yicha haqiqatan
-// qaytarib olinadigan xotira: free + inactive + speculative + purgeable sahifalar.
+// On macOS os.freemem() counts cache as "used" and reports far too little. Per vm_stat, truly
+// reclaimable memory is free + inactive + speculative + purgeable pages.
 function parseVmStat(text) {
   const pageSize = Number((String(text).match(/page size of (\d+) bytes/) || [])[1]) || 16384;
   const pages = name => Number((String(text).match(new RegExp(`Pages ${name}:\\s+(\\d+)`)) || [])[1]) || 0;
@@ -15,7 +15,7 @@ function parseMemoryPressure(text, totalBytes = require('os').totalmem()) {
   return Number.isFinite(pct) ? totalBytes * pct / 100 : null;
 }
 
-// macOS'ning o'z baholashi (qaytarib olinadigan kesh bilan) — vm_stat'dan aniqroq; bo'lmasa vm_stat.
+// macOS's own estimate (including reclaimable cache) is more accurate than vm_stat; otherwise vm_stat.
 function availableBytes({ exec = execFile } = {}) {
   return new Promise(resolve => exec('/usr/bin/memory_pressure', { timeout: 5000 }, (err, stdout) => {
     const fromPressure = err ? null : parseMemoryPressure(stdout);

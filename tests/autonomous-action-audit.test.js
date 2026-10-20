@@ -22,5 +22,5 @@ test('audit records successful high-risk action and reports it after completion'
   assert.equal(saved.context.source, 'voice');
   assert.doesNotMatch(saved.action.description, /super-secret-value/);
   assert.equal(notices.length, 1);
-  assert.match(notices[0], /^✅ Bajarildi:/);
+  assert.match(notices[0], /^✅ Done:/);
 });

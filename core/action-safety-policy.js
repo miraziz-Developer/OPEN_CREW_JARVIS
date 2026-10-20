@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { PROJECT_DIR } = require('./paths');
 
-// "confirm", "I confirm", "yes, confirm it", "ha" — qisqa gap ichida tasdiq so'zi bo'lsa yetarli (rad so'zi bo'lmasa).
+// "confirm", "I confirm", "yes, confirm it", "ha": a confirmation word in a short utterance is enough (if there is no rejection word).
 const CONFIRM_WORD = /\b(?:yes|confirm(?:ed)?|proceed|do it|go ahead|ha|tasdiqlayman|davom et|bajar)\b/i;
 const CONFIRM = { test: v => String(v).length <= 40 && CONFIRM_WORD.test(v) && !/\b(?:no|not|don['‘’]?t|cancel|stop|yo['‘’]?q|bekor)\b/i.test(v) };
 const REJECT = /^(?:no|cancel|stop|don't|do not|yo['‘’]?q|bekor|to['‘’]?xta|qilma)$/i;
@@ -26,7 +26,7 @@ function fingerprint(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 24);
 }
 
-// JARVIS_CONFIRM_MODE: off (standart — hech qanday tasdiq so'ralmaydi) | payments (faqat pul/to'lov) | strict (eski keng qoidalar).
+// JARVIS_CONFIRM_MODE: off (default: no confirmation at all) | payments (money only) | strict (the old broad rules).
 const PAYMENT = /\b(?:purchase|buy|pay(?:ment)?|checkout|subscribe|subscription|donate|invoice|wire\s+(?:money|funds)|(?:send|transfer)\s+(?:money|funds|\$|usd|cash)|credit\s+card|debit\s+card|card\s+number|cvv|iban|bank\s+account|sotib\s+ol|to['‘’]?la(?:sh|ng|yman)?)\b/i;
 function confirmMode() {
   let value = process.env.JARVIS_CONFIRM_MODE; // jarayon muhiti (testlar) .env dan ustun

@@ -1,7 +1,7 @@
 'use strict';
 
-// Telegram'da agentsiz darhol bajariladigan so'rovlarni aniqlash. Tor bo'lishi shart: boshqa amal bilan birga
-// kelgan so'rov ("Claude'ni och, keyin skrinshot yubor") agentga borishi kerak.
+// Detects Telegram requests that run immediately without the agent. It must stay narrow: a request combined
+// with another action ("open Claude, then send a screenshot") must go to the agent.
 function isPlainScreenshotRequest(text) {
   const value = String(text || '').trim();
   if (!/\b(?:skrinshot|screenshot|screen ?shot)\b/i.test(value)) return false;

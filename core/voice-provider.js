@@ -15,8 +15,8 @@ function configured(value) {
 
 const REALTIME_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
 
-// Realtime WS faqat oddiy OpenAI ovozlarini qabul qiladi; Azure Neural nomlari
-// (en-US-Adam:DragonHDLatestNeural va h.k.) faqat Voice Live / TTS uchun.
+// The Realtime WS accepts only plain OpenAI voices; Azure Neural names
+// (en-US-Adam:DragonHDLatestNeural, etc.) are only for Voice Live / TTS.
 function getRealtimeVoice(...candidates) {
   for (const candidate of candidates) {
     const v = String(candidate || '').trim().toLowerCase();
@@ -25,8 +25,8 @@ function getRealtimeVoice(...candidates) {
   return 'cedar';
 }
 
-// Azure neural ovoz: pitch/rate .env dagi AZURE_SPEECH_PITCH_PERCENT / AZURE_SPEECH_RATE_PERCENT dan
-// (Fn+Shift xabarlarini aytadigan azure-tts skill bilan bir xil "viqorli" ohang). 0/bo'sh — o'zgarishsiz.
+// Azure neural voice: pitch/rate from AZURE_SPEECH_PITCH_PERCENT / AZURE_SPEECH_RATE_PERCENT in .env
+// (the same "composed" tone as the azure-tts skill that speaks the Fn+Shift messages). 0/empty = unchanged.
 function percent(value) {
   const number = Number(value);
   return Number.isFinite(number) && number !== 0 ? `${number > 0 ? '+' : ''}${number}%` : undefined;
@@ -47,7 +47,7 @@ function buildVoiceProviders(env) {
   const realtimeKey = env('AZURE_REALTIME_KEY');
   const voiceLiveEndpoint = env('AZURE_VOICELIVE_ENDPOINT');
   const voiceLiveKey = env('AZURE_VOICELIVE_KEY');
-  // Bitta ovoz hamma joyda (Voice Live + TTS) — "ikki xil ovoz" xatosini oldini oladi.
+  // One voice everywhere (Voice Live + TTS) avoids the "two different voices" bug.
   const unifiedVoice = env('JARVIS_VOICE') || env('AZURE_VOICELIVE_VOICE') || env('AZURE_SPEECH_VOICE') || 'en-US-OnyxTurboMultilingualNeural';
 
   // Voice Live is primary so the Azure Neural Onyx voice remains consistent
@@ -62,7 +62,7 @@ function buildVoiceProviders(env) {
       id: 'voice-live',
       url: `${base}/voice-live/realtime?api-version=${encodeURIComponent(apiVersion)}&model=${encodeURIComponent(model)}`,
       headers: { 'api-key': voiceLiveKey },
-      // OpenAI ovozlari (alloy, ...) Voice Live ichida native ~0.3 s; Azure neural ovozlar alohida TTS bosqichi bilan ~0.9 s.
+      // OpenAI voices (alloy, ...) are native inside Voice Live (~0.3 s); Azure neural voices add a separate TTS stage (~0.9 s).
       voice: REALTIME_VOICES.includes(String(unifiedVoice).trim().toLowerCase())
         ? String(unifiedVoice).trim().toLowerCase()
         : azureVoice(unifiedVoice, env)

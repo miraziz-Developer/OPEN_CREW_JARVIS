@@ -20,10 +20,10 @@ if (require.main === module) {
   const missing = missingDependencies();
   if (missing.length) {
     console.error(`❌ Runtime dependency yetishmaydi: ${missing.join(', ')}`);
-    console.error('Loyiha ildizida `npm ci` bajaring. Supervisor ishga tushirilmadi.');
+    console.error('Run `npm ci` in the project root. The supervisor was not started.');
     process.exitCode = 1;
   } else {
-    console.log(`✅ ${REQUIRED.length} ta runtime dependency mavjud.`);
+    console.log(`✅ ${REQUIRED.length} runtime dependencies present.`);
   }
 }
 
