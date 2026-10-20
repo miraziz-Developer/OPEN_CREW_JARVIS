@@ -2,12 +2,12 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # JARVIS Production Supervisor (macOS launchd)
 # ─────────────────────────────────────────────────────────────────────────
-# Vazifalar:
-#   1. .env dan kerakli kalitlarni xavfsiz o'qish
-#   2. Gateway (openclaw managed), Telegram Bot, Voice Daemon ni boshqarish
-#   3. Doimiy health-check va avtomatik tiklash
-#   4. Log-rotatsiya va tozalash
-#   5. Gateway sog'lom bo'lgandaovozli salom (bir marta/30 daqiqa)
+# Responsibilities:
+#   1. Safely read the required keys from .env
+#   2. Manage the gateway (openclaw-managed), Telegram bot and voice daemon
+#   3. Continuous health checks and automatic recovery
+#   4. Log rotation and cleanup
+#   5. Spoken greeting once the gateway is healthy (at most once per 30 minutes)
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -uo pipefail
@@ -29,9 +29,9 @@ pid_owns_supervisor() {
   [[ " ${command} " == *" ${PROJECT_DIR}/scripts/jarvis.sh "* || "${command}" == *"/bash ${PROJECT_DIR}/scripts/jarvis.sh"* ]]
 }
 
-# launchd nusxasi ishlayotgan paytda skriptni qo'lda yana ishga tushirish
-# ikkinchi bot/daemon/dashboard yaratardi. macOS'ning standart bash'ida
-# `flock` yo'q, shu sabab atomik mkdir bilan singleton lock ishlatiladi.
+# Running the script by hand while the launchd copy is running would create a
+# second bot/daemon/dashboard. macOS's stock bash has no `flock`, so an atomic
+# mkdir is used as the singleton lock.
 acquire_supervisor_lock() {
   local owner=""
   if mkdir "${SUPERVISOR_LOCK}" 2>/dev/null; then
@@ -41,7 +41,7 @@ acquire_supervisor_lock() {
 
   [[ -f "${SUPERVISOR_LOCK}/pid" ]] && owner=$(cat "${SUPERVISOR_LOCK}/pid" 2>/dev/null || true)
   if [[ -n "${owner}" ]] && pid_owns_supervisor "${owner}"; then
-    echo "JARVIS supervisor allaqachon ishlayapti (PID=${owner})." >&2
+    echo "JARVIS supervisor is already running (PID=${owner})." >&2
     exit 0
   fi
 
@@ -55,8 +55,8 @@ acquire_supervisor_lock() {
 
 acquire_supervisor_lock
 
-# Child jarayonlar dependency yo'q holatda crash-loopga tushmasin. launchd aniq
-# xatoni ko'rsatadi va installer `npm ci` muvaffaqiyatidan keyingina qayta yuklaydi.
+# Keep children from crash-looping when dependencies are missing. launchd shows the
+# exact error, and the installer reloads only after `npm ci` succeeds.
 if ! node "${PROJECT_DIR}/scripts/check-runtime-deps.js"; then
   rm -rf "${SUPERVISOR_LOCK}" 2>/dev/null || true
   exit 1
@@ -70,7 +70,7 @@ LOG_MAIN="${LOG_DIR}/jarvis-$(date +%Y%m%d).log"
 exec >> >(tee -a "${LOG_MAIN}")
 exec 2>> >(tee -a "${LOG_MAIN}" >&2)
 
-# ── Log rotatsiya: 7 kundan eski fayllarni o'chirish ──
+# ── Log rotation: delete files older than 7 days ──
 find "${LOG_DIR}" -name '*.log' -mtime +7 -delete 2>/dev/null || true
 
 log() { echo "[$(now)] [INFO]  $*"; }
@@ -78,17 +78,17 @@ warn() { echo "[$(now)] [WARN]  $*"; }
 err()  { echo "[$(now)] [ERROR] $*"; }
 
 log "═══════════════════════════════════════════════════════════"
-log "JARVIS SUPERVISOR ishga tushdi — PID $$"
+log "JARVIS SUPERVISOR started — PID $$"
 log "═══════════════════════════════════════════════════════════"
 
-# ── .env tekshir ──
+# ── Check .env ──
 if [[ ! -f "${DOTENV}" ]]; then
-  err ".env topilmadi: ${DOTENV}"
+  err ".env not found: ${DOTENV}"
   sleep 30
   exit 1
 fi
 
-# ── .env dan faqat kerakli kalitlarni o'qish ──
+# ── Read only the required keys from .env ──
 import_env() {
   local key="$1"
   local val
@@ -106,10 +106,10 @@ import_env OPENCLAW_GATEWAY_TOKEN
 
 log "ENV: AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-?}, KEY set=${AZURE_SPEECH_KEY:+yes}"
 
-# Telegram token noto'g'ri/revoke qilingan bo'lsa node-telegram-bot-api polling
-# cheksiz 401 loopga tushadi. Bunday jarayon foyda bermaydi va log/diskni
-# to'ldiradi. Startup'da bir marta tekshirib, token tuzatilguncha botni
-# o'chirilgan holatda qoldiramiz; voice/dashboard qolganicha ishlayveradi.
+# With a wrong or revoked Telegram token, node-telegram-bot-api polling falls into
+# an endless 401 loop that does nothing but fill the logs and disk. Check once at
+# startup and keep the bot disabled until the token is fixed; voice and dashboard
+# keep running.
 TELEGRAM_ENABLED=1
 validate_telegram() {
   local response
@@ -120,15 +120,14 @@ validate_telegram() {
 
 if ! validate_telegram; then
   TELEGRAM_ENABLED=0
-  warn "[BOT] Telegram token yaroqsiz yoki API mavjud emas — polling vaqtincha o'chirildi."
+  warn "[BOT] Telegram token is invalid or the API is unreachable; polling temporarily disabled."
 fi
 
-# ── Foydalanuvchini xabardor qilish ──────────────────────────────────
-# Supervisor allaqachon qulagan komponentlarni o'zi qayta tiklardi, lekin
-# buni FAQAT logga yozardi — foydalanuvchi tizim qulab-tiklanayotganini
-# umuman bilmasdi. Endi jiddiy holatlar Telegram'ga ham yuboriladi.
-# Eslatma: bot jarayonining o'zi qulagan bo'lishi mumkin, shuning uchun
-# xabar bot orqali emas, to'g'ridan-to'g'ri Telegram API'ga yuboriladi.
+# ── Notify the user ──────────────────────────────────────────────────
+# The supervisor already restarted crashed components on its own, but only logged
+# it, so the user never knew the system was crashing and recovering. Serious
+# events are now also sent to Telegram. The bot process itself may be the one that
+# crashed, so the message goes straight to the Telegram API, not through the bot.
 notify_owner() {
   local text="$1"
   [[ -z "${TELEGRAM_BOT_TOKEN}" || -z "${JARVIS_CHAT_ID}" ]] && return 0
@@ -137,18 +136,15 @@ notify_owner() {
     --data-urlencode "text=${text}" >/dev/null 2>&1 || true
 }
 
-# Bir xil xabar bilan bosib ketmaslik uchun: har bir komponent haqida
-# ko'pi bilan NOTIFY_COOLDOWN sekundda bir marta xabar beriladi.
-# Eslatma: macOS'dagi /bin/bash — 3.2 versiyasi, unda assotsiativ massiv
-# (declare -A) YO'Q (sinab tasdiqlangan: "declare: -A: invalid option").
-# Shuning uchun fayldagi mavjud uslub qo'llaniladi — har bir komponent
-# uchun alohida o'zgaruvchi nomi yasab, printf -v orqali yoziladi
-# (restart_with_backoff ham aynan shunday ishlaydi).
+# To avoid spamming the same message, each component notifies at most once per
+# NOTIFY_COOLDOWN seconds. macOS ships /bin/bash 3.2, which has NO associative
+# arrays (verified: "declare: -A: invalid option"), so, like restart_with_backoff,
+# a separate variable name is built per component and written with printf -v.
 NOTIFY_COOLDOWN=1800
 notify_component() {
   local name="$1" text="$2" now_ts last var
   now_ts=$(date +%s)
-  # o'zgaruvchi nomiga yaramaydigan belgilarni almashtiramiz (masalan "-")
+  # replace characters that are not valid in variable names (e.g. "-")
   var="LAST_NOTIFY_$(echo "${name}" | tr -c 'a-zA-Z0-9' '_')"
   eval "last=\${${var}:-0}"
   if (( now_ts - last >= NOTIFY_COOLDOWN )); then
@@ -157,15 +153,15 @@ notify_component() {
   fi
 }
 
-# ── Child PID'lar (faqat biz to'g'ridan-to'g'ri ishga tushirgan jarayonlar) ──
+# ── Child PIDs (only processes we started directly) ──
 BOT_PID=""
 DAEMON_PID=""
 MONITOR_PID=""
 DASHBOARD_PID=""
 
-# ── Cleanup: faqat o'zimiz ishga tushirgan jarayonlarni to'xtatish ──
+# ── Cleanup: stop only the processes we started ──
 cleanup() {
-  warn "Cleanup chaqirildi — child jarayonlar to'xtatilmoqda..."
+  warn "Cleanup called; stopping child processes..."
   [[ -n "${BOT_PID}"    ]] && kill "${BOT_PID}"    2>/dev/null || true
   [[ -n "${DAEMON_PID}" ]] && kill "${DAEMON_PID}" 2>/dev/null || true
   [[ -n "${MONITOR_PID}" ]] && kill "${MONITOR_PID}" 2>/dev/null || true
@@ -177,35 +173,35 @@ cleanup() {
 }
 trap cleanup EXIT TERM INT
 
-# ── Gateway health-check: port 18789 javob beradimi? ──
+# ── Gateway health check: does port 18789 respond? ──
 gateway_healthy() {
   curl -sf http://127.0.0.1:18789/health >/dev/null 2>&1
 }
 
-# ── Gateway ishga tushirish (openclaw orqali, launchd managing) ──
+# ── Start the gateway (via openclaw; launchd-managed) ──
 start_gateway() {
-  log "[GATEWAY] Ishga tushirish..."
-  # Port/bind/auth openclaw.json'da saqlanadi. OpenClaw 2026.7 dan boshlab
-  # `gateway start` bu flaglarni qabul qilmaydi; eski flaglar service'ni
-  # umuman start qilmasdan usage xatosi bilan chiqib ketardi.
+  log "[GATEWAY] Starting..."
+  # Port/bind/auth live in openclaw.json. Since OpenClaw 2026.7, `gateway start`
+  # no longer accepts these flags; the old flags made it exit with a usage error
+  # without starting the service at all.
   if ! openclaw gateway start 2>&1; then
-    err "[GATEWAY] Start so'rovi muvaffaqiyatsiz."
+    err "[GATEWAY] Start request failed."
     return 1
   fi
-  log "[GATEWAY] So'rov yuborildi."
+  log "[GATEWAY] Request sent."
 }
 
-# ── Gateway qayta ishga tushirish ──
+# ── Restart the gateway ──
 restart_gateway() {
-  log "[GATEWAY] Qayta ishga tushirish..."
+  log "[GATEWAY] Restarting..."
   if ! openclaw gateway restart 2>&1; then
-    err "[GATEWAY] Restart so'rovi muvaffaqiyatsiz."
+    err "[GATEWAY] Restart request failed."
     return 1
   fi
-  log "[GATEWAY] Restart so'rovi yuborildi."
+  log "[GATEWAY] Restart request sent."
 }
 
-# ── Gateway sog'lom bo'lguncha kutish ──
+# ── Wait until the gateway is healthy ──
 wait_gateway() {
   local timeout=$1
   local waited=0
@@ -214,58 +210,58 @@ wait_gateway() {
     sleep 1
     waited=$((waited + 1))
     if [[ ${waited} -ge ${timeout} ]]; then
-      err "[GATEWAY] ❌ ${timeout}s ichida javob bermadi."
+      err "[GATEWAY] ❌ No response within ${timeout}s."
       return 1
     fi
-    # Har 5 soniyada bir bor log chiqarish
+    # Log once every 5 seconds
     if [[ $((waited % 5)) -eq 0 ]]; then
-      log "[GATEWAY] Hali kutish: ${waited}/${timeout}s..."
+      log "[GATEWAY] Still waiting: ${waited}/${timeout}s..."
     fi
   done
-  log "[GATEWAY] ✅ Sog'lom (${waited}s)"
+  log "[GATEWAY] ✅ Healthy (${waited}s)"
   return 0
 }
 
-# ── Telegram Bot ishga tushirish ──
+# ── Start the Telegram bot ──
 start_bot() {
   if [[ "${TELEGRAM_ENABLED}" != "1" ]]; then
     BOT_PID=""
     return 0
   fi
-  log "[BOT] Telegram Bot ishga tushirilmoqda..."
+  log "[BOT] Starting the Telegram bot..."
   node "${PROJECT_DIR}/telegram-bot.js" >>"${LOG_DIR}/bot-$(date +%Y%m%d).log" 2>&1 &
   BOT_PID=$!
   log "[BOT] PID=${BOT_PID}"
 }
 
-# ── Voice Daemon ishga tushirish ──
+# ── Start the voice daemon ──
 start_daemon() {
-  log "[DAEMON] Voice Daemon ishga tushirilmoqda..."
+  log "[DAEMON] Starting the voice daemon..."
   node "${PROJECT_DIR}/jarvis_daemon.js" >>"${LOG_DIR}/daemon-$(date +%Y%m%d).log" 2>&1 &
   DAEMON_PID=$!
   log "[DAEMON] PID=${DAEMON_PID}"
 }
 
-# ── Ekran kuzatuvchi ishga tushirish (doimiy fon kuzatuvi) ──
+# ── Start the screen monitor (continuous background observation) ──
 start_monitor() {
-  log "[MONITOR] Ekran kuzatuvchi ishga tushirilmoqda..."
+  log "[MONITOR] Starting the screen monitor..."
   echo '{"action":"start"}' | node "${PROJECT_DIR}/skills/screen-monitor/index.js" \
     >>"${LOG_DIR}/screen-monitor-$(date +%Y%m%d).log" 2>&1 &
   MONITOR_PID=$!
   log "[MONITOR] PID=${MONITOR_PID}"
 }
 
-# ── Dashboard (localhost veb-HUD) ishga tushirish ──
+# ── Start the dashboard (localhost web HUD) ──
 start_dashboard() {
   local existing_pid=""
   if dashboard_healthy; then
     existing_pid=$(dashboard_pid_from_port)
     DASHBOARD_PID="${existing_pid}"
-    log "[DASHBOARD] Mavjud sog'lom jarayon qabul qilindi — PID=${DASHBOARD_PID:-?}"
+    log "[DASHBOARD] Adopted the existing healthy process — PID=${DASHBOARD_PID:-?}"
     return 0
   fi
 
-  log "[DASHBOARD] Ishga tushirilmoqda..."
+  log "[DASHBOARD] Starting..."
   node "${PROJECT_DIR}/dashboard/server.js" >>"${LOG_DIR}/dashboard-$(date +%Y%m%d).log" 2>&1 &
   DASHBOARD_PID=$!
   log "[DASHBOARD] PID=${DASHBOARD_PID} — http://localhost:7890"
@@ -284,8 +280,8 @@ stop_dashboard() {
   [[ -z "${pid}" ]] && pid=$(dashboard_pid_from_port)
   [[ -n "${pid}" ]] && kill "${pid}" 2>/dev/null || true
 
-  # SIGTERM asinxron: eski Node portni qo'yib ulgurmasdan yangi nusxa ochilsa
-  # EADDRINUSE bo'ladi. Port ko'pi bilan 5 soniya bo'shashishini kutamiz.
+  # SIGTERM is asynchronous: if the new copy starts before the old Node process
+  # releases the port, it gets EADDRINUSE. Wait up to 5 seconds for the port.
   local waited=0
   while [[ -n "$(dashboard_pid_from_port)" ]] && [[ ${waited} -lt 50 ]]; do
     sleep 0.1
@@ -294,10 +290,10 @@ stop_dashboard() {
   DASHBOARD_PID=""
 }
 
-# ── Ovozli salom ──
-# Autostart rejimida bir login/boot sessiyasida faqat bir marta aytiladi.
-# Supervisor crash/restart yoki Fn+Shift resume bir boot ichida salomni qayta
-# takrorlamaydi. Qo'lda ishga tushirilganda esa eski 30 daqiqalik limit qoladi.
+# ── Spoken greeting ──
+# In autostart mode it is spoken only once per login/boot session. Supervisor
+# crashes/restarts or an Fn+Shift resume do not repeat it within one boot. When
+# started by hand, the old 30-minute limit still applies.
 greeting() {
   local now_ts last_ts diff_min boot_id last_boot
   now_ts=$(date +%s)
@@ -309,7 +305,7 @@ greeting() {
     if [[ -f "${LAST_GREETING}" ]]; then
       read -r last_boot last_ts <"${LAST_GREETING}" || true
       if [[ "${last_boot:-}" == "${boot_id}" ]]; then
-        log "[GREETING] Ushbu boot sessiyasida salom allaqachon aytilgan."
+        log "[GREETING] Already greeted in this boot session."
         return
       fi
     fi
@@ -319,7 +315,7 @@ greeting() {
     last_ts=$(awk '{print $NF}' "${LAST_GREETING}" 2>/dev/null || echo 0)
     diff_min=$(((now_ts - last_ts) / 60))
     if [[ ${diff_min} -lt 30 ]]; then
-      log "[GREETING] Cheklangan: oxirgi salomdan ${diff_min} daqiqa o'tgan."
+        log "[GREETING] Skipped: only ${diff_min} minutes since the last greeting."
       return
     fi
   fi
@@ -328,7 +324,7 @@ greeting() {
     local tmp_json tmp_out
     tmp_json="/tmp/jarvis_greet_$$.json"
     tmp_out="/tmp/jarvis_greet_$$.out"
-    log "[GREETING] TTS salom yuborilmoqda..."
+    log "[GREETING] Sending TTS greeting..."
 
     printf '{"text":"Online. All systems ready."}\n' >"${tmp_json}"
     if node "${PROJECT_DIR}/skills/azure-tts/index.js" <"${tmp_json}" >"${tmp_out}" 2>/dev/null; then
@@ -341,20 +337,20 @@ greeting() {
         else
           echo "manual ${now_ts}" >"${LAST_GREETING}"
         fi
-        log "[GREETING] ✅ Salom yuborildi."
+        log "[GREETING] ✅ Greeting played."
       else
-        warn "[GREETING] audioFile topilmadi."
+        warn "[GREETING] audioFile not found."
       fi
     else
-      warn "[GREETING] TTS skill muvaffaqiyatsiz."
+        warn "[GREETING] TTS skill failed."
     fi
     rm -f "${tmp_json}" "${tmp_out}"
   else
-    log "[GREETING] TTS yo'q (afplay yoki kalit yo'q)"
+    log "[GREETING] No TTS (afplay or key missing)"
   fi
 }
 
-# ── Child jarayon tekshirish ──
+# ── Check child processes ──
 check_child() {
   local pid="$1"
   [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
@@ -364,12 +360,12 @@ check_child() {
 #  ASOSIY SUPERVISOR LOOP
 # ═══════════════════════════════════════════════════════════════════════
 
-# 1) Gateway ishga tushirish (agar hali ishlamayotgan bo'lsa)
+# 1) Start the gateway (if it is not running yet)
 if ! gateway_healthy; then
   start_gateway
 fi
 
-# 2) Gateway javob berishini kutish
+# 2) Wait for the gateway to respond
 if wait_gateway 60; then
   start_bot
   start_daemon
@@ -379,10 +375,10 @@ if wait_gateway 60; then
   ( sleep 3; open "http://localhost:7890" 2>/dev/null || true ) &
   greeting
   log "═══════════════════════════════════════════════════════════"
-  log "🤖 JARVIS BARCHA JARAYONLAR TAYYOR"
+  log "🤖 JARVIS: ALL PROCESSES READY"
   log "═══════════════════════════════════════════════════════════"
 else
-  err "Gateway ishga tushmadi — davom etishdan oldin tiklanish kutilyapti..."
+  err "Gateway did not start; waiting for recovery before continuing..."
 fi
 
 # 3) Doimiy monitoring loop
@@ -393,9 +389,9 @@ RESTART_WINDOW=300
 RESTART_LIMIT=5
 RESTART_COOLDOWN=120
 
-# Child ketma-ket qulab qolsa har 15 soniyada cheksiz nusxa ochmaymiz.
-# Bash 3.2 bilan mos bo'lishi uchun har komponent holati oddiy dinamik
-# o'zgaruvchilarda saqlanadi (assotsiativ massiv ishlatilmaydi).
+# If a child keeps crashing, do not spawn copies every 15 seconds forever.
+# For Bash 3.2 compatibility each component's state lives in plain dynamic
+# variables (no associative arrays).
 restart_allowed() {
   local name="$1" now_ts window_var count_var blocked_var window_start count blocked_until
   now_ts=$(date +%s)
@@ -417,8 +413,8 @@ restart_allowed() {
     printf -v "${blocked_var}" '%s' "${blocked_until}"
     printf -v "${window_var}" '%s' "${now_ts}"
     printf -v "${count_var}" '%s' '0'
-    err "[${name}] Crash-loop to'xtatildi — ${RESTART_COOLDOWN}s cooldown."
-    notify_component "${name}-crash-loop" "⚠️ JARVIS ${name}: crash-loop sabab ${RESTART_COOLDOWN}s to'xtatildi."
+    err "[${name}] Crash loop stopped; ${RESTART_COOLDOWN}s cooldown."
+    notify_component "${name}-crash-loop" "⚠️ JARVIS ${name}: paused for ${RESTART_COOLDOWN}s after a crash loop."
     return 1
   fi
   printf -v "${window_var}" '%s' "${window_start}"
@@ -427,68 +423,67 @@ restart_allowed() {
 }
 
 while true; do
-  # ── Gateway tekshirish (curl health) ──
+  # ── Check the gateway (curl health) ──
   if ! gateway_healthy; then
     GATEWAY_FAIL_COUNT=$((GATEWAY_FAIL_COUNT + 1))
-    warn "[GATEWAY] ❌ Health-check muvaffaqiyatsiz (${GATEWAY_FAIL_COUNT}/${MAX_GW_FAIL})"
+    warn "[GATEWAY] ❌ Health check failed (${GATEWAY_FAIL_COUNT}/${MAX_GW_FAIL})"
 
     if [[ ${GATEWAY_FAIL_COUNT} -ge ${MAX_GW_FAIL} ]]; then
-      err "[GATEWAY] ${MAX_GW_FAIL} marta ketma-ket muvaffaqiyatsiz. Restart..."
+      err "[GATEWAY] ${MAX_GW_FAIL} consecutive failures. Restarting..."
       restart_gateway
       if wait_gateway 60; then
         GATEWAY_FAIL_COUNT=0
         log "[GATEWAY] ✅ Qayta tiklandi."
       else
-        warn "[GATEWAY] Restart ham muvaffaqiyatsiz. Keyingi siklga qadar kutish..."
+        warn "[GATEWAY] Restart failed too. Waiting for the next cycle..."
       fi
     fi
   else
     if [[ ${GATEWAY_FAIL_COUNT} -gt 0 ]]; then
-      log "[GATEWAY] ✅ Sog'lom (avvalgi xatolar tiklandi)"
+      log "[GATEWAY] ✅ Healthy (recovered from earlier errors)"
     fi
     GATEWAY_FAIL_COUNT=0
   fi
 
-  # ── Bot tekshirish ──
+  # ── Check the bot ──
   if [[ "${TELEGRAM_ENABLED}" != "1" ]] && validate_telegram; then
-    log "[BOT] Tarmoq tiklandi, Telegram bot yoqilmoqda..."
+    log "[BOT] Network restored; enabling the Telegram bot..."
     TELEGRAM_ENABLED=1
   fi
   if [[ "${TELEGRAM_ENABLED}" == "1" ]] && ! check_child "${BOT_PID}"; then
     if restart_allowed BOT; then
-      warn "[BOT] To'xtagan — qayta ishga tushirish..."
+      warn "[BOT] Stopped; restarting..."
       start_bot
     fi
   fi
 
-  # ── Daemon tekshirish ──
+  # ── Check the daemon ──
   if ! check_child "${DAEMON_PID}"; then
     if restart_allowed DAEMON; then
-      warn "[DAEMON] To'xtagan — qayta ishga tushirish..."
+      warn "[DAEMON] Stopped; restarting..."
       start_daemon
     fi
   fi
 
-  # ── Monitor tekshirish ──
+  # ── Check the monitor ──
   if ! check_child "${MONITOR_PID}"; then
     if restart_allowed MONITOR; then
-      warn "[MONITOR] To'xtagan — qayta ishga tushirish..."
+      warn "[MONITOR] Stopped; restarting..."
       start_monitor
     fi
   fi
 
-  # ── Dashboard tekshirish ──
+  # ── Check the dashboard ──
   if dashboard_healthy; then
-    # Supervisor restartidan qolgan, ammo sog'lom dashboard bo'lsa uning
-    # haqiqiy PID'ini qabul qilamiz; PID stale bo'lgani uchun sog'lom servisni
-    # cheksiz restart qilish kerak emas.
+    # If a healthy dashboard survived a supervisor restart, adopt its real PID;
+    # a stale PID must not cause endless restarts of a healthy service.
     if ! check_child "${DASHBOARD_PID}"; then
       DASHBOARD_PID=$(dashboard_pid_from_port)
-      log "[DASHBOARD] Sog'lom jarayon PID'i yangilandi: ${DASHBOARD_PID:-?}"
+      log "[DASHBOARD] Updated the healthy process PID: ${DASHBOARD_PID:-?}"
     fi
   else
     if restart_allowed DASHBOARD; then
-      warn "[DASHBOARD] To'xtagan — qayta ishga tushirish..."
+      warn "[DASHBOARD] Stopped; restarting..."
       stop_dashboard
       start_dashboard
     fi

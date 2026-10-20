@@ -52,10 +52,10 @@ const runtimeTelemetry = new RuntimeTelemetry({ file: path.join(PROJECT_DIR, '.r
 const messageQueue = createKeyedTaskQueue();
 const updateTasks = new WeakMap();
 
-console.log('Jarvis Telegram Bot ishga tushmoqda (v8)...');
-// node-telegram-bot-api@1.2.0 ning fetch asosidagi getUpdates transporti shu
-// hostda muntazam EFATAL bilan uziladi. Handler va media metodlarini libraryda
-// qoldiramiz, incoming update'larni esa barqaror native HTTPS poller olib keladi.
+console.log('Jarvis Telegram bot starting (v8)...');
+// node-telegram-bot-api@1.2.0's fetch-based getUpdates transport regularly drops
+// with EFATAL on this host. Handlers and media methods stay in the library, while
+// incoming updates come from a stable native HTTPS poller.
 const bot = new TelegramBot(TOKEN, { polling: false });
 const { createOwnerUpdateHandler, createOwnerTaskCommands } = require('./core/telegram-owner');
 const { createGmailTaskNotifier } = require('./core/gmail-task-notifier');
@@ -90,19 +90,19 @@ const telegramPoller = createTelegramPoller({
           ownerId = ownerIds[0];
           ownerHandler = buildOwnerHandler(ownerIds);
           console.log('Telegram owner paired:', ownerId);
-          bot.sendMessage(ownerId, '✅ Ulash muvaffaqiyatli bajarildi! Ushbu Telegram chat endi JARVIS bilan to\'liq bog\'landi. Barcha xizmatlar yangilanmoqda...').catch(() => {});
+          bot.sendMessage(ownerId, '✅ Pairing complete. This Telegram chat is now fully linked to JARVIS. Restarting services...').catch(() => {});
           setTimeout(() => {
             if (process.platform !== 'darwin') { process.exit(0); return; }
             try { require('child_process').spawn('bash', [path.join(__dirname, 'scripts', 'restart-daemon.sh')], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
             try { require('child_process').spawn('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/com.jarvis.mission-runner`], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
           }, 2500);
         } else if (result.reason === 'bad-code') {
-          bot.sendMessage(msg.chat.id, '❌ Noto\'g\'ri kod kiritildi. Qaytadan tekshirib yuboring: /pair <KOD>').catch(() => {});
+          bot.sendMessage(msg.chat.id, '❌ Wrong code. Check it and send again: /pair <CODE>').catch(() => {});
         } else if (result.reason === 'locked') {
-          bot.sendMessage(msg.chat.id, '⏳ Ko\'p xato urinishlar tufayli ulanish vaqtincha bloklandi. Biroz kuting.').catch(() => {});
+          bot.sendMessage(msg.chat.id, '⏳ Pairing is temporarily locked after too many failed attempts. Please wait a bit.').catch(() => {});
         } else {
           const currentPair = pairing.ensureCode();
-          bot.sendMessage(msg.chat.id, `🔒 JARVIS ulanish kutmoqda.\n\nEgalikni tasdiqlash va masofaviy boshqaruvni faollashtirish uchun quyidagi buyruqni yuboring:\n/pair ${currentPair.code}`).catch(() => {});
+          bot.sendMessage(msg.chat.id, `🔒 JARVIS is waiting to be paired.\n\nTo confirm ownership and enable remote control, send:\n/pair ${currentPair.code}`).catch(() => {});
         }
       }
       return false;
@@ -182,7 +182,7 @@ const ownerTaskCommands = createOwnerTaskCommands({
 function askAgent(message, chatId, routeText) {
   return telegramAgentBridge.askAgent(message, 'agent:main:telegram', {
     source: 'telegram', routeText,
-    // Har bosqich uchun "⏳" xabari yuborilmaydi — faqat natija. Uzoq ish bo'lsa bir marta qisqa eslatma.
+    // No "⏳" message per step, only the result. For long work, one short notice.
     onProgress: () => {},
     onLongRunning: (() => { let told = false; return () => { if (!told) { told = true; bot.sendMessage(chatId, '⏳ Still working on it.').catch(() => {}); } }; })()
   });
@@ -291,7 +291,7 @@ async function handleVideoNote(msg) {
     await bot.sendMessage(chatId, answer);
     try {
       writeMemory('Telegram video tahlili',
-        'Caption: ' + (msg.caption || '(yo\'q)') + '\nTranskript: ' + (result.transcript || '(aniq eshitilmadi)') + '\nJarvis: ' + answer,
+        'Caption: ' + (msg.caption || '(none)') + '\nTranscript: ' + (result.transcript || '(not clearly heard)') + '\nJarvis: ' + answer,
         ['telegram', 'video', 'vision']);
     } catch (error) {}
     if (!chatHistory[chatId]) chatHistory[chatId] = [];
@@ -325,7 +325,7 @@ async function takeScreenshot(chatId, analyzePrompt = null) {
   try {
     execSync('screencapture -x -t jpg "' + p + '"', { timeout: 10000 });
     if (fs.existsSync(p)) {
-      await bot.sendPhoto(chatId, p, { caption: '🖥 Mac ekrani holati' });
+      await bot.sendPhoto(chatId, p, { caption: '🖥 Mac screen' });
       if (analyzePrompt) {
         await bot.sendChatAction(chatId, 'typing');
         const gemini = require('./core/gemini');
@@ -341,7 +341,7 @@ async function takeScreenshot(chatId, analyzePrompt = null) {
 }
 
 function extractSearchTerm(text) {
-  // 1. Aniq nom qo'shtirnoqda
+  // 1. An exact name in quotes
   const q = text.match(/"([^"]+)"/);
   if (q) return q[1].trim();
   // 2. Fayl nomi formatida
@@ -361,7 +361,7 @@ function extractSearchTerm(text) {
       hujjat:1,hujjatlar:1,document:1,documents:1,computer:1,kompyuter:1,men:1
     }[w]);
   const result = words.slice(0, 3).join(' ');
-  // 4. Hech narsa topilmasa, eng uzun so'zni qaytarish
+  // 4. If nothing was found, return the longest word
   if (!result) {
     const longest = text.toLowerCase().replace(/[.,!?;\-'"]/g, ' ').split(/\s+/)
       .filter(w => w.length > 2 && !['va','men','sen','siz','uchun','bilan','desktop'].includes(w))
@@ -371,7 +371,7 @@ function extractSearchTerm(text) {
   return result;
 }
 
-// Agent javobigacha fayl yo'llarini chiqarish
+// Extract file paths from the agent reply
 function extractFilePaths(text) {
   if (!text) return [];
   const paths = [];
@@ -394,11 +394,11 @@ async function handleMessage(chatId, userText, isVoice) {
   console.log('[' + chatId + '] ' + (isVoice ? 'VOICE→' : '') + 'TEXT: "' + userText.substring(0, 60) + '"');
   await bot.sendChatAction(chatId, 'typing');
 
-  // 1. Faqat "skrinshot yubor" kabi sof so'rov — darhol. Boshqa amal bilan birga bo'lsa ("Claude'ni och, keyin
-  //    skrinshot yubor") agentga boradi: avval u holda Claude ochilmasdan darhol skrinshot olinar edi.
+  // 1. A pure request like "send a screenshot" is handled at once. Combined with another action ("open Claude, then
+  //    send a screenshot") it goes to the agent; before, the screenshot was taken immediately without opening Claude.
   if (isPlainScreenshotRequest(userText)) {
     const r = await takeScreenshot(chatId);
-    if (!/sent/i.test(r)) await bot.sendMessage(chatId, r);   // rasmning o'zi javob; muvaffaqiyatda qo'shimcha matn yo'q
+    if (!/sent/i.test(r)) await bot.sendMessage(chatId, r);   // the image is the answer; no extra text on success
     return;
   }
 
@@ -424,7 +424,7 @@ async function handleMessage(chatId, userText, isVoice) {
     return;
   }
 
-  // 3b. PROFIL: profil so'rov
+  // 3b. PROFILE: profile request
   if (/profilim|men haqimda|o'zim haqimda/i.test(userText)) {
     const pr = readProfile();
     if (pr.status === 'ok' && pr.content) {
@@ -435,7 +435,7 @@ async function handleMessage(chatId, userText, isVoice) {
     return;
   }
 
-  // 3c. MEMORY QIDIRUV: har qanday oddiy savoldan oldin
+  // 3c. MEMORY SEARCH: before any ordinary question
   let memoryContext = '';
   const searchQuery = userText.split(/\s+/).filter(w => w.length > 3 && !['qanday','nima','kim','qaerga','nega','nechun','uchun'].includes(w.toLowerCase())).slice(0, 3).join(' ');
   if (searchQuery.length > 2) {
@@ -443,24 +443,24 @@ async function handleMessage(chatId, userText, isVoice) {
       const found = searchMemory(searchQuery, 3);
       if (found.status === 'ok' && found.results.length > 0) {
         const lines = found.results.map(r => '【' + r.date + '】 ' + r.matches.map(m => m.text).join(' | ')).join('\n');
-        memoryContext = '\n[Obsidian Xotira]:\n' + lines + '\n[Endi javob bering]:\n';
+        memoryContext = '\n[Obsidian memory]:\n' + lines + '\n[Now answer]:\n';
       }
     } catch (e) {}
   }
 
-  // 3d. UNIVERSAL: AI agentga yuborish
+  // 3d. UNIVERSAL: send to the AI agent
   const isCodeOrComplex = isComplexTask(userText) || /\b(yoz|kod|dastur|skript|tushuntir|misol|qanday|loyiham|tuzat|tekshir|how|write|code|script|create|implement|fix|explain)\b/i.test(userText);
   const modeInstruction = isCodeOrComplex
     ? '[Mode: Full expert assistance. Provide clear, accurate, complete code and explanation in the same language as the user\'s request. Format cleanly with markdown.]'
     : '[Mode: Quick conversational assistance. Reply naturally in 1-3 clear sentences in the language of the request.]';
   let enrichedMessage = modeInstruction + '\n' + memoryContext + userText;
   
-  // Agar avvalgi suhbat bosa — kontekst bilan
+  // Include context if there was an earlier conversation
   const history = chatHistory[chatId];
   if (history && history.length > 0) {
-    // Faqat kontekst uchun: eski javoblar qisqartiriladi (to'liq javoblar so'rovni o'nlab ming belgiga cho'zardi).
+    // Context only: older replies are shortened (full replies stretched requests to tens of thousands of characters).
     const lastMsgs = history.slice(-3).map(h => 'F: ' + String(h.user).slice(0, 300) + '\nJ: ' + String(h.agent).slice(0, 300)).join('\n---\n');
-    enrichedMessage = 'Oldingi suhbat:\n' + lastMsgs + '\n---\n' + enrichedMessage;
+    enrichedMessage = 'Earlier conversation:\n' + lastMsgs + '\n---\n' + enrichedMessage;
   }
 
   const reply = await askAgent(enrichedMessage, chatId, userText);
@@ -470,17 +470,16 @@ async function handleMessage(chatId, userText, isVoice) {
     return;
   }
 
-  // 3e. Har bir suhbatni xotiraga yozish — xatolardan o'rganish va
-  // kunlik sintez uchun xom material sifatida (faqat "eslab qol" emas,
-  // BARCHA suhbat).
-  try { writeMemory('Telegram suhbat', 'Foydalanuvchi: ' + userText + '\nJarvis: ' + reply.substring(0, 500), ['telegram', 'suhbat']); } catch (e) {}
+  // 3e. Write every conversation to memory, as raw material for learning from
+  // mistakes and for the daily synthesis (ALL conversations, not just "remember this").
+  try { writeMemory('Telegram chat', 'User: ' + userText + '\nJarvis: ' + reply.substring(0, 500), ['telegram', 'chat']); } catch (e) {}
 
-  // 4. Agent javobidan fayl yo'llarini chiqarish
+  // 4. Extract file paths from the agent reply
   const filePaths = extractFilePaths(reply);
   const hasPaths = filePaths.length > 0;
   const realFiles = filePaths.filter(fp => fs.existsSync(fp));
 
-  // 5. Matnli javob (fayl yo'llarini tozalab qisqa yuborish)
+  // 5. Text reply (file paths stripped, kept short)
   let displayReply = reply;
   if (realFiles.length > 2) {
     displayReply = reply.split('\n').filter(l => !l.includes('/Users/') && !l.startsWith('Desktop/')).join('\n').trim();
@@ -491,7 +490,7 @@ async function handleMessage(chatId, userText, isVoice) {
     console.log('[' + chatId + '] Text reply sent: message_id=' + (sent?.message_id || 'unknown'));
   }
 
-  // 6. Topilgan fayllarni yuborish
+  // 6. Send the files that were found
   if (realFiles.length > 0) {
     await bot.sendChatAction(chatId, 'upload_document');
     let sentCount = 0;
@@ -504,12 +503,12 @@ async function handleMessage(chatId, userText, isVoice) {
     }
   }
 
-  // 7. Ovozli nusxa: har matnli javobni yana ovozli xabar qilib yuborish ortiqcha edi — faqat so'ralsa (TELEGRAM_VOICE_REPLIES=true).
+  // 7. Voice copy: sending every text reply again as a voice note was redundant; only on request (TELEGRAM_VOICE_REPLIES=true).
   if (getEnv('TELEGRAM_VOICE_REPLIES') === 'true' && reply.length < 300 && !hasPaths) {
     await sendVoiceReply(chatId, reply);
   }
 
-  // 8. Kontekst saqlash
+  // 8. Save context
   if (!chatHistory[chatId]) chatHistory[chatId] = [];
   chatHistory[chatId].push({ user: userText, agent: reply, time: Date.now() });
   if (chatHistory[chatId].length > MAX_HISTORY) chatHistory[chatId].shift();
@@ -521,11 +520,28 @@ async function handleMessage(chatId, userText, isVoice) {
 
 // ── Remote Control & Keyboards ─────────────────────────────
 
+const BUTTONS = {
+  screenshot: '📸 Screenshot',
+  status: '📊 Status',
+  files: '📁 Files',
+  volume: '🔊 Volume',
+  help: '❓ Help'
+};
+// Labels from the earlier Uzbek keyboard, still shown in clients until the keyboard refreshes.
+const LEGACY_BUTTONS = {
+  screenshot: '📸 Skrinshot',
+  status: '📊 Holat',
+  files: '📁 Fayllar',
+  volume: '🔊 Ovoz',
+  help: '❓ Yordam'
+};
+const isButton = (text, name) => text === BUTTONS[name] || text === LEGACY_BUTTONS[name];
+
 const MAIN_KEYBOARD = {
   keyboard: [
-    [{ text: '📸 Skrinshot' }, { text: '📊 Holat' }],
-    [{ text: '📁 Fayllar' }, { text: '🔊 Ovoz' }],
-    [{ text: '❓ Yordam' }]
+    [{ text: BUTTONS.screenshot }, { text: BUTTONS.status }],
+    [{ text: BUTTONS.files }, { text: BUTTONS.volume }],
+    [{ text: BUTTONS.help }]
   ],
   resize_keyboard: true
 };
@@ -549,7 +565,7 @@ async function handlePhoto(chatId, msg) {
     await bot.sendMessage(chatId, `👁 *Rasm tahlili:*\n\n${visionReply}`, { parse_mode: 'Markdown' });
   } catch (err) {
     console.error('Photo error:', err);
-    await bot.sendMessage(chatId, `❌ Rasmni tahlil qilishda xatolik: ${err.message}`);
+    await bot.sendMessage(chatId, `❌ Image analysis failed: ${err.message}`);
   } finally {
     if (tmpPhoto) { try { fs.unlinkSync(tmpPhoto); } catch (_) {} }
   }
@@ -570,7 +586,7 @@ async function handleDocument(chatId, msg) {
     await bot.sendMessage(chatId, `📥 *Fayl yuklandi:*\n\`${targetPath}\`\n(Hajmi: ${(msg.document.file_size / 1024).toFixed(1)} KB)`, { parse_mode: 'Markdown' });
   } catch (err) {
     console.error('Document error:', err);
-    await bot.sendMessage(chatId, `❌ Faylni saqlashda xatolik: ${err.message}`);
+    await bot.sendMessage(chatId, `❌ Could not save the file: ${err.message}`);
   }
 }
 
@@ -580,8 +596,8 @@ async function handleRemoteCommand(chatId, text, msg) {
   const cmd = parts[0].toLowerCase().replace(/@\w+$/, '');
   const args = trimmed.substring(parts[0].length).trim();
 
-  // 1. /status yoki "📊 Holat"
-  if (cmd === '/status' || cmd === '/info' || trimmed === '📊 Holat') {
+  // 1. /status or the Status button
+  if (cmd === '/status' || cmd === '/info' || isButton(trimmed, 'status')) {
     let batt = 'N/A';
     try { batt = execSync('pmset -g batt 2>/dev/null | grep -o "[0-9]*%" | head -1', { encoding: 'utf8' }).trim() || 'AC Power'; } catch (_) {}
     let ram = 'N/A';
@@ -593,26 +609,29 @@ async function handleRemoteCommand(chatId, text, msg) {
     let vol = 'N/A';
     try { vol = execSync("osascript -e 'output volume of (get volume settings)' 2>/dev/null", { encoding: 'utf8' }).trim() + '%'; } catch (_) {}
 
-    const reply = `📊 *JARVIS Mac Holati*\n\n` +
-      `⚡️ *Batareya:* ${batt}\n` +
+    const realtimeVoice = String(getEnv('REALTIME_VOICE_PROVIDER') || '').toLowerCase() === 'gemini'
+      ? `Gemini Live (${getEnv('GEMINI_LIVE_VOICE') || 'Charon'})`
+      : 'Azure Voice Live';
+    const reply = `📊 *JARVIS Mac status*\n\n` +
+      `⚡️ *Battery:* ${batt}\n` +
       `🧠 *RAM:* ${ram.replace('PhysMem: ', '')}\n` +
       `💾 *Disk:* ${disk}\n` +
-      `🔊 *Ovoz:* ${vol}\n` +
+      `🔊 *Volume:* ${vol}\n` +
       `⏱ *Uptime:* ${upt}\n\n` +
-      `🤖 *Xizmatlar:* Active (http://localhost:7890)\n` +
-      `🎙 *Ovoz:* Ultron (American Rocko)`;
+      `🖥 *Dashboard:* http://localhost:7890\n` +
+      `🎙 *Realtime voice:* ${realtimeVoice}`;
     await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
     return true;
   }
 
-  // 2. /screen yoki /screenshot yoki "📸 Skrinshot"
-  if (cmd === '/screen' || cmd === '/screenshot' || trimmed === '📸 Skrinshot') {
+  // 2. /screen, /screenshot or the Screenshot button
+  if (cmd === '/screen' || cmd === '/screenshot' || isButton(trimmed, 'screenshot')) {
     await bot.sendChatAction(chatId, 'upload_photo');
     await takeScreenshot(chatId, args && args.toLowerCase() !== 'photo' ? args : null);
     return true;
   }
 
-  // 3. /sh <command> yoki /cmd <command> (Terminal buyrug'i)
+  // 3. /sh <command> or /cmd <command> (terminal command)
   if (cmd === '/sh' || cmd === '/cmd') {
     if (!args) {
       await bot.sendMessage(chatId, '⚠️ Buyruq kiritilmadi.\nMasalan: `/sh ls -la` yoki `/sh git status`', { parse_mode: 'Markdown' });
@@ -625,14 +644,14 @@ async function handleRemoteCommand(chatId, text, msg) {
       if (resText.length > 3500) {
         const outPath = path.join('/tmp', `sh_out_${Date.now()}.txt`);
         fs.writeFileSync(outPath, resText, 'utf8');
-        await bot.sendDocument(chatId, outPath, { caption: `💻 Buyruq natijasi: ${args}` });
+        await bot.sendDocument(chatId, outPath, { caption: `💻 Command output: ${args}` });
         try { fs.unlinkSync(outPath); } catch (_) {}
       } else {
-        await bot.sendMessage(chatId, `💻 *Natija:*\n\`\`\`\n${resText}\n\`\`\``, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `💻 *Output:*\n\`\`\`\n${resText}\n\`\`\``, { parse_mode: 'Markdown' });
       }
     } catch (err) {
       const errOut = (err.stdout || '') + (err.stderr || '') + (err.message || '');
-      await bot.sendMessage(chatId, `❌ *Xatolik:*\n\`\`\`\n${errOut.slice(0, 3000)}\n\`\`\``, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `❌ *Error:*\n\`\`\`\n${errOut.slice(0, 3000)}\n\`\`\``, { parse_mode: 'Markdown' });
     }
     return true;
   }
@@ -645,9 +664,9 @@ async function handleRemoteCommand(chatId, text, msg) {
     }
     try {
       execSync(`open -a "${args}"`, { timeout: 5000 });
-      await bot.sendMessage(chatId, `🚀 *${args}* ochildi.`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `🚀 *${args}* opened.`, { parse_mode: 'Markdown' });
     } catch (e) {
-      await bot.sendMessage(chatId, `❌ Dasturni ochib bo'lmadi: ${args}`);
+      await bot.sendMessage(chatId, `❌ Could not open the app: ${args}`);
     }
     return true;
   }
@@ -660,46 +679,46 @@ async function handleRemoteCommand(chatId, text, msg) {
     }
     try {
       execSync(`osascript -e 'quit app "${args}"'`, { timeout: 5000 });
-      await bot.sendMessage(chatId, `🛑 *${args}* yopildi.`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `🛑 *${args}* closed.`, { parse_mode: 'Markdown' });
     } catch (e) {
-      await bot.sendMessage(chatId, `❌ Dasturni yopib bo'lmadi: ${args}`);
+      await bot.sendMessage(chatId, `❌ Could not close the app: ${args}`);
     }
     return true;
   }
 
-  // 6. /volume <0-100> yoki /mute / /unmute
-  if (cmd === '/volume' || trimmed === '🔊 Ovoz') {
+  // 6. /volume <0-100>, /mute or /unmute
+  if (cmd === '/volume' || isButton(trimmed, 'volume')) {
     if (!args) {
       let cur = 'N/A';
       try { cur = execSync("osascript -e 'output volume of (get volume settings)'", { encoding: 'utf8' }).trim(); } catch(_) {}
-      await bot.sendMessage(chatId, `🔊 Joriy ovoz balandligi: *${cur}%*\nO'zgartirish uchun: \`/volume 50\``, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `🔊 Current volume: *${cur}%*\nTo change it: \`/volume 50\``, { parse_mode: 'Markdown' });
       return true;
     }
     const val = parseInt(args, 10);
     if (!isNaN(val) && val >= 0 && val <= 100) {
       execSync(`osascript -e 'set volume output volume ${val}'`);
-      await bot.sendMessage(chatId, `🔊 Ovoz balandligi: *${val}%* ga sozlandi.`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `🔊 Volume set to *${val}%*.`, { parse_mode: 'Markdown' });
     } else {
-      await bot.sendMessage(chatId, `⚠️ 0 dan 100 gacha raqam kiriting. Masalan: \`/volume 70\``, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `⚠️ Enter a number from 0 to 100, e.g. \`/volume 70\``, { parse_mode: 'Markdown' });
     }
     return true;
   }
 
   if (cmd === '/mute') {
     execSync("osascript -e 'set volume output muted true'");
-    await bot.sendMessage(chatId, '🔇 Mac ovozi o\'chirildi (Muted).');
+    await bot.sendMessage(chatId, '🔇 Mac sound muted.');
     return true;
   }
   if (cmd === '/unmute') {
     execSync("osascript -e 'set volume output muted false'");
-    await bot.sendMessage(chatId, '🔊 Mac ovozi yoqildi (Unmuted).');
+    await bot.sendMessage(chatId, '🔊 Mac sound unmuted.');
     return true;
   }
 
-  // 7. /say <text> (Ultron ovozida gapirtirish)
+  // 7. /say <text>: speak through the Mac speakers
   if (cmd === '/say') {
     if (!args) {
-      await bot.sendMessage(chatId, '⚠️ Gapirish kerak bo\'lgan matnni yozing.\nMasalan: `/say Hello master, I am online.`', { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, '⚠️ Write the text to speak, e.g. `/say Hello master, I am online.`', { parse_mode: 'Markdown' });
       return true;
     }
     try {
@@ -711,27 +730,27 @@ async function handleRemoteCommand(chatId, text, msg) {
             if (err) rej(err); else res();
           });
         });
-        await bot.sendMessage(chatId, `🗣 Ultron ovozida aytildi: "${args}"`);
+        await bot.sendMessage(chatId, `🗣 Spoken on the Mac: "${args}"`);
       }
     } catch (e) {
-      await bot.sendMessage(chatId, `❌ Gapirishda xatolik: ${e.message}`);
+      await bot.sendMessage(chatId, `❌ Could not speak: ${e.message}`);
     }
     return true;
   }
 
-  // 8. /find <name> yoki /search <name>
-  if (cmd === '/find' || cmd === '/search' || trimmed === '📁 Fayllar') {
+  // 8. /find <name> or /search <name>
+  if (cmd === '/find' || cmd === '/search' || isButton(trimmed, 'files')) {
     if (!args) {
-      await bot.sendMessage(chatId, '🔍 Fayl nomini kiriting.\nMasalan: `/find report.pdf` yoki `/find script.js`', { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, '🔍 Enter a file name, e.g. `/find report.pdf` or `/find script.js`', { parse_mode: 'Markdown' });
       return true;
     }
     await bot.sendChatAction(chatId, 'typing');
     const files = findFiles(args);
     if (!files || files.length === 0) {
-      await bot.sendMessage(chatId, `🔍 "${args}" bo'yicha hech qanday fayl topilmadi.`);
+      await bot.sendMessage(chatId, `🔍 No files found for "${args}".`);
       return true;
     }
-    const list = `📁 *Topilgan fayllar:*\n\n` + files.map((f, i) => `${i + 1}. \`${f}\``).join('\n') + `\n\nYuklab olish uchun: \`/get <fayl_yo'li>\``;
+    const list = `📁 *Files found:*\n\n` + files.map((f, i) => `${i + 1}. \`${f}\``).join('\n') + `\n\nTo download: \`/get <file_path>\``;
     await bot.sendMessage(chatId, list, { parse_mode: 'Markdown' });
     return true;
   }
@@ -739,7 +758,7 @@ async function handleRemoteCommand(chatId, text, msg) {
   // 9. /get <filepath> (Faylni Telegramga yuklab olish)
   if (cmd === '/get') {
     if (!args) {
-      await bot.sendMessage(chatId, '📥 Fayl yo\'lini kiriting.\nMasalan: `/get /Users/username/Desktop/doc.pdf`', { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, '📥 Enter a file path, e.g. `/get /Users/username/Desktop/doc.pdf`', { parse_mode: 'Markdown' });
       return true;
     }
     const cleanPath = args.replace(/^["']|["']$/g, '').trim();
@@ -747,31 +766,31 @@ async function handleRemoteCommand(chatId, text, msg) {
       await bot.sendChatAction(chatId, 'upload_document');
       await sendDocument(chatId, cleanPath, path.basename(cleanPath));
     } else {
-      await bot.sendMessage(chatId, `❌ Fayl topilmadi: \`${cleanPath}\``, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `❌ File not found: \`${cleanPath}\``, { parse_mode: 'Markdown' });
     }
     return true;
   }
 
-  // 10. /help yoki "❓ Yordam"
-  if (cmd === '/help' || trimmed === '❓ Yordam' || cmd === '/menu') {
-    const helpText = `🎛 *JARVIS Masofadan Boshqarish Menyusi*\n\n` +
-      `📊 */status* — Batareya, RAM, Disk, CPU va tizim holati\n` +
-      `📸 */screen* — Mac ekranidan oniy skrinshot olish\n` +
-      `🔍 */screen analyze* — Ekranda nima bo'layotganini AI tahlil qilishi\n` +
-      `💻 */sh <buyruq>* — Mac terminalida buyruq bajarish\n` +
-      `🚀 */open <dastur>* — Mac'da dasturni ochish (masalan: \`/open Chrome\`)\n` +
-      `🛑 */close <dastur>* — Dasturni yopish (masalan: \`/close Safari\`)\n` +
-      `🗣 */say <matn>* — Kompyuteringizda Ultron ovozida gapirish\n` +
-      `🔊 */volume <0-100>* — Ovoz balandligini sozlash\n` +
-      `🔇 */mute* / */unmute* — Ovozni o'chirish/yoqish\n` +
-      `🔍 */find <nom>* — Mac'dan fayl qidirish\n` +
-      `📥 */get <yo'l>* — Mac'dagi faylni Telegramga yuklab olish\n` +
-      `⚙️ */tasks* — Fondagi checkpointed vazifalar\n\n` +
-      `💡 *Qo'shimcha imkoniyatlar:*\n` +
-      `• *Rasm yuborsangiz:* Gemini Vision orqali darhol tahlil qilib beradi.\n` +
-      `• *Hujjat yuborsangiz:* Mac'ning ~/Downloads jildiga saqlaydi.\n` +
-      `• *Ovozli xabar yuborsangiz:* Gemini STT orqali tushunib, bajaradi.\n` +
-      `• *Har qanday vazifa yozsangiz:* Antigravity Pro orqali bajaradi.`;
+  // 10. /help or the Help button
+  if (cmd === '/help' || isButton(trimmed, 'help') || cmd === '/menu') {
+    const helpText = `🎛 *JARVIS remote control*\n\n` +
+      `📊 */status* — battery, RAM, disk and system status\n` +
+      `📸 */screen* — take a screenshot of the Mac\n` +
+      `🔍 */screen analyze* — let the AI describe what is on screen\n` +
+      `💻 */sh <command>* — run a command in the Mac terminal\n` +
+      `🚀 */open <app>* — open an app (e.g. \`/open Chrome\`)\n` +
+      `🛑 */close <app>* — close an app (e.g. \`/close Safari\`)\n` +
+      `🗣 */say <text>* — speak through the Mac speakers\n` +
+      `🔊 */volume <0-100>* — set the volume\n` +
+      `🔇 */mute* / */unmute* — mute or unmute\n` +
+      `🔍 */find <name>* — search for a file on the Mac\n` +
+      `📥 */get <path>* — download a file from the Mac\n` +
+      `⚙️ */tasks* — checkpointed background tasks\n\n` +
+      `💡 *Also:*\n` +
+      `• *Send a photo* and it is analysed right away.\n` +
+      `• *Send a document* and it is saved to ~/Downloads on the Mac.\n` +
+      `• *Send a voice message* and it is transcribed and carried out.\n` +
+      `• *Write any task* and the agent does it.`;
     await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
     return true;
   }
@@ -783,17 +802,17 @@ async function handleRemoteCommand(chatId, text, msg) {
 
 bot.onText(/\/start/, (msg) => {
   chatHistory[msg.chat.id] = [];
-  const welcome = '👋 *Assalomu alaykum, Xo\'jayin!*\n\n' +
-    'Men — *JARVIS*, sizning Mac kompyuteringizni masofadan to\'liq boshqaruvchi shaxsiy yordamchingizman.\n\n' +
-    '📱 *Quyidagi tugmalar orqali yoki to\'g\'ridan-to\'g\'ri buyruq bering:*\n' +
-    '• *📸 Skrinshot* — Mac ekranini rasm qilib ko\'rish\n' +
-    '• *📊 Holat* — Batareya, RAM, Disk, Uptime holati\n' +
-    '• */sh <buyruq>* — Mac terminalida buyruq bajarish\n' +
-    '• */open <dastur>* — Kompyuterda istalgan ilovani ochish\n' +
-    '• */say <matn>* — Mac dinamikidan Ultron ovozida gapirish\n' +
-    '• */find <nom>* — Fayllarni qidirish va yuklab olish\n' +
-    '• *Rasm / Ovoz:* Istalgan rasm yoki audio yuboring — darhol tahlil qilaman.\n' +
-    '• *Barcha buyruqlar uchun:* /help bosing.';
+  const welcome = '👋 *Hello, sir.*\n\n' +
+    'I am *JARVIS*, your personal assistant with full remote control of your Mac.\n\n' +
+    '📱 *Use the buttons below or send a command:*\n' +
+    '• *📸 Screenshot* — see the Mac screen\n' +
+    '• *📊 Status* — battery, RAM, disk, uptime\n' +
+    '• */sh <command>* — run a terminal command\n' +
+    '• */open <app>* — open any app\n' +
+    '• */say <text>* — speak through the Mac speakers\n' +
+    '• */find <name>* — find and download files\n' +
+    '• *Photo / voice:* send any image or audio and I will analyse it.\n' +
+    '• *All commands:* /help';
   bot.sendMessage(msg.chat.id, welcome, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
 });
 
@@ -814,7 +833,7 @@ bot.on('message', (msg) => {
       if (handled) return;
     }
 
-    // 2. Oddiy matnli xabar (AI agentga)
+    // 2. Plain text message (to the AI agent)
     if (msg.text && !msg.text.startsWith('/')) {
       await handleMessage(chatId, msg.text.trim(), false);
       return;
@@ -826,19 +845,19 @@ bot.on('message', (msg) => {
       return;
     }
 
-    // 4. Hujjat / Fayl (Mac ~/Downloads ga saqlash)
+    // 4. Document / file (saved to ~/Downloads on the Mac)
     if (msg.document) {
       await handleDocument(chatId, msg);
       return;
     }
 
-    // 5. Telegram dumaloq video (video_note): audio nutq + video kadrlari birga tahlil qilinadi.
+    // 5. Telegram round video (video_note): speech audio and video frames are analysed together.
     if (msg.video_note) {
       await enqueueVideoNote(msg);
       return;
     }
 
-    // 6. Ovozli xabar
+    // 6. Voice message
     if (msg.voice) {
       console.log('[' + chatId + '] VOICE received');
       await bot.sendChatAction(chatId, 'typing');
@@ -849,7 +868,7 @@ bot.on('message', (msg) => {
         const stt = await sttFromFile(media.wavPath, { source: 'telegram-voice' });
         if (stt && stt.status === 'ok' && stt.text) {
           const transcript = stt.text;
-          await bot.sendMessage(chatId, '🎙 Eshitdim: “' + transcript.substring(0, 200) + '”');
+          await bot.sendMessage(chatId, '🎙 Heard: “' + transcript.substring(0, 200) + '”');
           const handled = await handleRemoteCommand(chatId, transcript, msg);
           if (!handled) {
             await handleMessage(chatId, transcript, true);
@@ -885,5 +904,5 @@ process.once('SIGINT', () => shutdown(0));
 process.once('uncaughtException', error => shutdown(1, error));
 process.once('unhandledRejection', error => shutdown(1, error));
 
-console.log('Bot tayyor! v8 (Universal AI + Kontekst)');
+console.log('Bot ready! v8 (universal AI + context)');
 console.log('Ctrl+C bosib toxtatishingiz mumkin');
