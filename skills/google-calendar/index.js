@@ -12,7 +12,7 @@ const path = require('path');
 const { PROJECT_DIR } = require('../../core/paths');
 let ENV = ''; try { ENV = fs.readFileSync(path.join(PROJECT_DIR, '.env'), 'utf8'); } catch (_) {}
 function env(k, def) { const m = ENV.match(new RegExp('^' + k + '=(.*)$', 'm')); return m ? m[1].trim() : def; }
-const TIMEZONE = env('TIMEZONE', 'Asia/Kuala_Lumpur');
+const TIMEZONE = env('TIMEZONE') || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const { apiRequest, isConnected } = require(path.join(PROJECT_DIR, 'skills', 'google-auth'));
 

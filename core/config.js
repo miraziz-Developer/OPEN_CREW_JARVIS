@@ -268,7 +268,7 @@ function validateConfig(input, options = {}) {
   if (values.GMAIL_TASK_NOTIFICATIONS_ENABLED && !EMAIL.test(values.GMAIL_OWNER_RECIPIENT || '')) {
     errors.push({ key: 'GMAIL_OWNER_RECIPIENT', code: 'conditional', message: 'GMAIL_TASK_NOTIFICATIONS_ENABLED=true uchun owner email berilishi kerak' });
   }
-  if (values.REALTIME_ENABLED && !values.AZURE_VOICELIVE_ENDPOINT && !values.AZURE_REALTIME_ENDPOINT) {
+  if (values.REALTIME_ENABLED && !values.AZURE_VOICELIVE_ENDPOINT && !values.AZURE_REALTIME_ENDPOINT && !values.GEMINI_API_KEY) {
     warnings.push({ key: 'REALTIME_ENABLED', code: 'fallback', message: 'Voice provider sozlanmagan; Speech TTS fallback ishlatiladi' });
   }
   return { ok: errors.length === 0, values, errors, warnings };
