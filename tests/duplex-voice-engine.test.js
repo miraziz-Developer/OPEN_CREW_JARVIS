@@ -72,3 +72,39 @@ test('delayed inverted playback echo is aligned and suppressed', () => {
   const result = engine.process(inverted, { assistantSpeaking: true });
   assert.equal(result.reason, 'echo');
 });
+function speechLike(samples, seed) {
+  // Deterministic non-periodic signal: a periodic tone would correlate with any
+  // misaligned slice of itself and hide reference-alignment bugs.
+  const buffer = Buffer.alloc(samples * 2);
+  let state = seed >>> 0;
+  for (let i = 0; i < samples; i++) {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    buffer.writeInt16LE(Math.round(((state / 0xffffffff) * 2 - 1) * 6000), i * 2);
+  }
+  return buffer;
+}
+
+test('echo stays cancelled when a provider streams audio far ahead of real time', () => {
+  // Gemini Live delivers several seconds of reply audio in a burst. The reference
+  // must keep the part that is playing now, not only the newest few seconds.
+  const engine = new DuplexVoiceEngine({ bargeInResidual: 900 });
+  const chunk = 960; // 40 ms at 24 kHz
+  const reply = speechLike(24000 * 6, 7);
+  for (let i = 0; i < reply.length; i += chunk * 2) engine.queuePlayback(reply.subarray(i, i + chunk * 2));
+  for (let i = 0; i < chunk * 2 * 25; i += chunk * 2) {
+    const result = engine.process(Buffer.from(reply.subarray(i, i + chunk * 2)), { assistantSpeaking: true });
+    assert.equal(result.reason, 'echo', `chunk at ${i / 48} ms`);
+  }
+});
+
+test('reference does not advance while the speaker is paused', () => {
+  const engine = new DuplexVoiceEngine({ bargeInResidual: 900 });
+  const chunk = 960;
+  const reply = speechLike(24000, 11);
+  engine.queuePlayback(reply);
+  // Speaker is SIGSTOPped for 200 ms: the microphone hears silence and nothing
+  // has played, so the reference head must stay where it was.
+  for (let i = 0; i < 5; i++) engine.process(Buffer.alloc(chunk * 2), { assistantSpeaking: true, playbackPaused: true });
+  const result = engine.process(Buffer.from(reply.subarray(0, chunk * 2)), { assistantSpeaking: true });
+  assert.equal(result.reason, 'echo');
+});

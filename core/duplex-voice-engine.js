@@ -10,7 +10,11 @@ function rms(buffer) {
 
 class DuplexVoiceEngine {
   constructor(options = {}) {
-    this.maxReferenceMs = options.maxReferenceMs || 3000;
+    // Providers such as Gemini Live stream reply audio far ahead of real time, so
+    // the reference must hold the whole queued reply. Truncating it to the newest
+    // few seconds dropped the audio actually playing; echo then looked like a
+    // barge-in and paused JARVIS mid-sentence.
+    this.maxReferenceMs = options.maxReferenceMs || 120000;
     this.sampleRate = options.sampleRate || 24000;
     this.echoThreshold = options.echoThreshold || 0.72;
     this.bargeInResidual = options.bargeInResidual || 650;
@@ -22,7 +26,11 @@ class DuplexVoiceEngine {
     this.maxEchoLagMs = options.maxEchoLagMs || 180;
     this.targetRms = options.targetRms || 1800;
     this.maxGain = options.maxGain || 3;
+    // `reference` is the contiguous head being aligned with the microphone;
+    // `_pending` holds queued chunks so a long burst is not re-copied per chunk.
     this.reference = Buffer.alloc(0);
+    this._pending = [];
+    this._pendingBytes = 0;
     this.estimatedNoiseRms = this.noiseFloor;
     this._hangoverRemainingMs = 0;
   }
@@ -30,17 +38,36 @@ class DuplexVoiceEngine {
   queuePlayback(buffer) {
     if (!buffer?.length) return;
     const maxBytes = Math.floor(this.maxReferenceMs * this.sampleRate * 2 / 1000);
-    this.reference = Buffer.concat([this.reference, Buffer.from(buffer)]).slice(-maxBytes);
+    if (this.reference.length + this._pendingBytes + buffer.length > maxBytes) return;
+    this._pending.push(Buffer.from(buffer));
+    this._pendingBytes += buffer.length;
   }
 
-  clearPlayback() { this.reference = Buffer.alloc(0); }
+  clearPlayback() {
+    this.reference = Buffer.alloc(0);
+    this._pending = [];
+    this._pendingBytes = 0;
+  }
+
+  _fillReference(bytes) {
+    if (this.reference.length >= bytes || !this._pending.length) return;
+    const parts = [this.reference];
+    let total = this.reference.length;
+    while (total < bytes && this._pending.length) {
+      const next = this._pending.shift();
+      this._pendingBytes -= next.length;
+      parts.push(next);
+      total += next.length;
+    }
+    this.reference = Buffer.concat(parts, total);
+  }
 
   snapshot() {
     return {
       estimatedNoiseRms: Math.round(this.estimatedNoiseRms),
       speechThresholdRms: Math.round(this._speechThreshold()),
       hangoverRemainingMs: Math.round(this._hangoverRemainingMs),
-      referenceMs: Math.round(this.reference.length / (this.sampleRate * 2) * 1000)
+      referenceMs: Math.round((this.reference.length + this._pendingBytes) / (this.sampleRate * 2) * 1000)
     };
   }
 
@@ -79,6 +106,7 @@ class DuplexVoiceEngine {
   process(input, options = {}) {
     const source = Buffer.from(input || Buffer.alloc(0));
     if (!source.length) return { send: false, audio: source, reason: 'empty', residualRms: 0, correlation: 0 };
+    this._fillReference(source.length + Math.floor(this.maxEchoLagMs * this.sampleRate * 2 / 1000) + 2);
     const match = this._bestReference(source);
     const ref = match.ref;
     const usable = Math.min(source.length, ref.length) - (Math.min(source.length, ref.length) % 2);
@@ -90,7 +118,9 @@ class DuplexVoiceEngine {
       const y = i < usable ? ref.readInt16LE(i) : 0;
       residual.writeInt16LE(clamp16(x - coefficient * y), i);
     }
-    if (usable) this.reference = this.reference.slice(Math.min(this.reference.length, match.offset + usable));
+    // While the player is paused (barge-in verification) nothing has been played,
+    // so the reference must not advance or it runs ahead of the speaker.
+    if (usable && !options.playbackPaused) this.reference = this.reference.slice(Math.min(this.reference.length, match.offset + usable));
     const residualRms = rms(residual);
     const echoOnly = options.assistantSpeaking && Math.abs(correlation) >= this.echoThreshold && residualRms < this.bargeInResidual;
     if (echoOnly) return { send: false, audio: residual, reason: 'echo', residualRms, correlation, ...this.snapshot() };

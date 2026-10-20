@@ -2574,7 +2574,7 @@ class RealtimeSession extends EventEmitter {
     }
     const processed = this._nativeAec
       ? this._nativeGate(resampled)
-      : this.duplex.process(resampled, { assistantSpeaking: this.assistantSpeaking });
+      : this.duplex.process(resampled, { assistantSpeaking: this.assistantSpeaking, playbackPaused: Boolean(this._duck) });
     this._recordGateStats(processed, now);
     // While speaking, the adaptive AEC preserves barge-in. In the grace window
     // after speech the reference may already have ended, so remaining room echo
