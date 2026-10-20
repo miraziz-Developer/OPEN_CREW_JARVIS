@@ -26,11 +26,11 @@ function extractOutputText(response) {
     .map(item => item.text).join('\n').trim();
 }
 
-// Birinchi to'liq JSON obyektini (qavslarni sanab) ajratib oladi — model ba'zan atrofiga matn qo'shadi.
+// Extracts the first complete JSON object (by counting braces); models sometimes wrap it in text.
 function extractJson(text) {
   const source = String(text || '');
   const start = source.indexOf('{');
-  if (start < 0) throw new Error('JSON topilmadi');
+  if (start < 0) throw new Error('No JSON found');
   let depth = 0, inString = false, escaped = false;
   for (let i = start; i < source.length; i++) {
     const ch = source[i];
@@ -49,7 +49,7 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort, endp
   return new Promise((resolve, reject) => {
     const key = env('AZURE_OPENAI_KEY');
     const base = String(env('AZURE_OPENAI_ENDPOINT') || '').replace(/\/$/, '').replace(/\/api\/projects\/[^/]+$/, '').replace(/\/openai\/v1$/, '');
-    if (!key || !base) return reject(new Error('Azure OpenAI endpoint/key sozlanmagan'));
+    if (!key || !base) return reject(new Error('Azure OpenAI endpoint/key is not configured'));
     const useResponses = endpointPath === '/openai/v1/responses';
     const path = useResponses ? '/openai/v1/responses' : '/openai/v1/chat/completions';
     const body = useResponses ? {
@@ -76,12 +76,12 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort, endp
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(parsed.error.message || 'LLM xatosi'));
+          if (parsed.error) return reject(new Error(parsed.error.message || 'LLM error'));
           try { require('./usage-meter').sharedMeter().add('llm_tokens', parsed.usage?.total_tokens); } catch (_) {}
           const text = extractOutputText(parsed);
-          if (!text) return reject(new Error('bo\'sh LLM javobi'));
+          if (!text) return reject(new Error('Empty LLM reply'));
           resolve(text);
-        } catch (error) { reject(new Error('LLM javobi o\'qilmadi: ' + String(data).slice(0, 160))); }
+        } catch (error) { reject(new Error('Could not parse the LLM reply: ' + String(data).slice(0, 160))); }
       });
     });
     req.on('error', reject);
@@ -91,7 +91,7 @@ function request({ model, system, user, maxOutputTokens, timeoutMs, effort, endp
 }
 
 async function complete(options = {}) {
-  // Gemini rejimida yoki Gemini kaliti mavjud bo'lganda (0 yuklama, bepul va tez)
+  // In Gemini mode, or whenever a Gemini key exists (no local load, free and fast)
   const gemini = require('./gemini');
   const brainMode = String(env('JARVIS_BRAIN', '')).toLowerCase();
   const defaultModel = String(env('DEFAULT_MODEL', '')).toLowerCase();
@@ -112,16 +112,16 @@ async function complete(options = {}) {
       return text;
     } catch (geminiError) {
       if (!env('AZURE_OPENAI_KEY') && brainMode !== 'local') throw geminiError;
-      // Agar Azure yoki lokal mavjud bo'lsa, zaxiraga tushish
+      // Fall back if Azure or a local model is available
     }
   }
 
-  // Lokal "miya" rejimi (JARVIS_BRAIN=local): Qwen / Gemma / Bonsai — Brain xizmati orqali, RAM'da bittadan.
+  // Local "brain" mode (JARVIS_BRAIN=local): Qwen / Gemma / Bonsai via the brain service, one model in RAM at a time.
   if (brainMode === 'local') {
     const r = await require('./brain/client').think({
       system: options.system || '', user: String(options.user || '').slice(0, 60000),
-      // Bonsai faqat aniq "qiyin" deb belgilanganda (missiya rejasi). Uzunlik bo'yicha avtomatik emas — aks holda har
-      // vazifa tekshiruvida Qwen ↔ Bonsai almashib, RAM'ga qayta-qayta yuklanardi.
+      // Bonsai only when explicitly marked "hard" (mission planning), not automatically by length; otherwise every
+      // task check would swap Qwen ↔ Bonsai and reload RAM over and over.
       hard: options.hard === true, maxTokens: options.maxOutputTokens || 2048,
       format: options.json ? 'json' : undefined
     }, { timeoutMs: options.timeoutMs || 600000 });

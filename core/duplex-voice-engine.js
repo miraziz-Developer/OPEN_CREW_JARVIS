@@ -98,18 +98,17 @@ class DuplexVoiceEngine {
     const chunkMs = source.length / (this.sampleRate * 2) * 1000;
     const noiseCandidateCeiling = this.maxNoiseFloor / this.noiseMultiplier;
     if (!options.assistantSpeaking && residualRms <= noiseCandidateCeiling) {
-      // Past energiyali barqaror fonni boshlang'ich threshold noto'g'ri past
-      // bo'lsa ham o'rganadi. Ceiling odatiy nutqni profilga qo'shmaydi.
+      // Learns a steady low-energy background even if the initial threshold is wrongly
+      // low. The ceiling keeps ordinary speech out of the profile.
       this.estimatedNoiseRms = (1 - this.noiseAlpha) * this.estimatedNoiseRms +
         this.noiseAlpha * residualRms;
     }
     const threshold = this._speechThreshold();
-    // Playback vaqtida oddiy speech threshold yetarli emas: AEC reference
-    // bilan yaxshi mos kelmagan xona aks-sadosi ham shu chegaradan o'tishi
-    // mumkin. Barge-in faqat kalibratsiyadan olingan yuqoriroq residual
-    // chegarani ham bosib o'tganda serverga yuboriladi. Avval assistantSpeaking
-    // holatida `speech === false` bo'lsa ham chunk yuborilardi; server VAD uni
-    // yangi turn deb ko'rib, Jarvisning tayyor javobini o'rtasida bekor qilardi.
+    // During playback the plain speech threshold is not enough: room echo that the AEC
+    // reference does not match well can also pass it. Barge-in audio is sent to the
+    // server only when it also exceeds the higher residual threshold from calibration.
+    // Previously chunks were sent while assistantSpeaking even with `speech === false`;
+    // server VAD saw them as a new turn and cancelled JARVIS's finished reply mid-way.
     const activeSpeechThreshold = options.assistantSpeaking
       ? Math.max(threshold, this.bargeInResidual)
       : threshold;
@@ -125,9 +124,9 @@ class DuplexVoiceEngine {
       };
     }
     if (!options.assistantSpeaking && !speech) {
-      // Xona fonini faqat nutq bo'lmagan chunklarda sekin o'rganamiz. Yuqori
-      // chegara konditsioner/shamolni nutq deb qabul qilmaslikka yordam beradi,
-      // lekin haqiqiy past ovozni "noise floor" ichiga yutib yubormaydi.
+      // The room background is learned slowly, only from non-speech chunks. The upper
+      // limit keeps air conditioning/wind from counting as speech without swallowing
+      // genuinely quiet speech into the noise floor.
       if (this._hangoverRemainingMs <= 0) {
         return { send: false, audio: residual, reason: 'noise', residualRms, correlation, ...this.snapshot() };
       }

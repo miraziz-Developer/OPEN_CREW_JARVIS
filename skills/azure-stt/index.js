@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * JARVIS Azure STT Skill v2 — Azure Speech REST API bilan
- * Multi-request server mode (pool bilan ishlash uchun)
+ * JARVIS Azure STT skill v2: Azure Speech REST API
+ * Multi-request server mode (used by the STT pool)
  * Input: one JSON object per line → { audioBase64: "...", locale: "en-US" }
- * Chiqish: har qatorda JSON →  { status: "ok", text: "...", confidence: 0.95 }
+ * Output: one JSON object per line →  { status: "ok", text: "...", confidence: 0.95 }
  */
 
 const fs = require('fs');
@@ -31,21 +31,21 @@ const TRANSCRIBE_MODEL = env('AZURE_TRANSCRIBE_DEPLOYMENT', 'gpt-live-transcribe
 
 function ensureKey() {
   if (!KEY && (!gemini || !gemini.hasGemini())) {
-    throw new Error('AZURE_SPEECH_KEY yoki GEMINI_API_KEY muhit ozgaruvchisi topilmadi.');
+    throw new Error('Neither AZURE_SPEECH_KEY nor GEMINI_API_KEY is set.');
   }
 }
 
 function loadAudio(input) {
   if (input.audioFile) {
     if (!fs.existsSync(input.audioFile)) {
-      throw new Error('Fayl topilmadi: ' + input.audioFile);
+      throw new Error('File not found: ' + input.audioFile);
     }
     return fs.readFileSync(input.audioFile);
   }
   if (input.audioBase64) {
     return Buffer.from(input.audioBase64, 'base64');
   }
-  throw new Error('audioFile yoki audioBase64 maydoni kerak.');
+  throw new Error('An audioFile or audioBase64 field is required.');
 }
 
 async function sttRest(audioBuffer, locale) {
@@ -80,7 +80,7 @@ async function sttRest(audioBuffer, locale) {
             resolve({ text: '', confidence: 0 }); // silent fail
           }
         } catch (e) {
-          reject(new Error('JSON parse xatolik: ' + body.slice(0, 200)));
+          reject(new Error('JSON parse error: ' + body.slice(0, 200)));
         }
       });
     });
@@ -92,7 +92,7 @@ async function sttRest(audioBuffer, locale) {
 }
 
 async function liveTranscribe(audioBuffer, locale) {
-  if (!TRANSCRIBE_ENDPOINT || !TRANSCRIBE_KEY) throw new Error('gpt-live-transcribe sozlanmagan');
+  if (!TRANSCRIBE_ENDPOINT || !TRANSCRIBE_KEY) throw new Error('gpt-live-transcribe is not configured');
   const form = new FormData();
   form.append('file', new Blob([audioBuffer], { type: 'audio/wav' }), 'speech.wav');
   form.append('model', TRANSCRIBE_MODEL);
@@ -133,7 +133,7 @@ async function recognize(audioBuffer, locale) {
   return { text: '', confidence: 0, provider: 'none' };
 }
 
-// Multi-request server: har qatorda JSON o'qiydi
+// Multi-request server: reads one JSON object per line
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -150,7 +150,7 @@ rl.on('line', async (line) => {
     const result = await recognize(audioBuffer, input.locale);
     console.log(JSON.stringify({ status: 'ok', ...result }));
   } catch (err) {
-    console.log(JSON.stringify({ status: 'error', error: err.message || 'STT xatolik' }));
+    console.log(JSON.stringify({ status: 'error', error: err.message || 'STT error' }));
   }
 });
 
