@@ -1,30 +1,30 @@
 # azure-tts
 
-Azure Cognitive Services Speech TTS orqali matnni o'zbek tilida (uz-UZ) ovozga aylantiradi.
+Turns text into speech with Azure Cognitive Services Speech TTS (English by default; Uzbek uz-UZ voices are supported).
 
 ## Tool
 
 ### `azure_tts_speak`
 
-Matnni ovozli faylga aylantiradi (PCM WAV, 24 kHz, mono).
+Converts text to an audio file (PCM WAV, 24 kHz, mono).
 
-**Kirish:**
-- `text` (string, majburiy): O'qilishi kerak bo'lgan matn
-- `voice` (string, ixtiyoriy): Ovoz modeli, masalan `uz-UZ-SardorNeural` yoki `uz-UZ-MadinaNeural`. K boshqa uz-UZ ovozlari qo'llab-quvvatlanadi.
+**Input:**
+- `text` (string, required): the text to speak
+- `voice` (string, optional): the voice, e.g. `en-US-AndrewNeural`, `uz-UZ-SardorNeural` or `uz-UZ-MadinaNeural`. Any Azure neural voice works.
 
-**Chiqish:**
-- `audioFile` (string): Yaratilgan 24 kHz mono PCM WAV fayl yo'li
+**Output:**
+- `audioFile` (string): path of the generated 24 kHz mono PCM WAV file
 - `format` (string): `audio/wav`
-- `status` (string): `ok` yoki `error`
+- `status` (string): `ok` or `error`
 
-**Misol:**
+**Example:**
 ```yaml
 tool: azure_tts_speak
 with:
-  text: "Salom, Jarvis! Bugun nima rejada?"
+  text: "Good evening. What's on the agenda today?"
   voice: "uz-UZ-SardorNeural"
 ```
 
 ## Setup
 
-Kerakli muhit o'zgaruvchilari: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_VOICE`
+Environment variables: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_VOICE`

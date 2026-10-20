@@ -1,26 +1,26 @@
 # claude-code
 
-Murakkab vazifalarni (video montaj/ffmpeg, ancha katta kod ishlari) **Claude Code**'ga topshiradi — u haqiqiy fayl/terminal huquqiga ega, real ishni bajaradi (masalan ffmpeg orqali videoni kesish, matn/subtitr qo'shish, formatni o'zgartirish).
+Hands complex tasks (video editing with ffmpeg, large code jobs) to **Claude Code**, which has real file and terminal access and does the actual work (e.g. cutting video with ffmpeg, adding text or subtitles, changing formats).
 
-## Qachon ishlatish
+## When to use
 
-- Video montaj/tahrirlash kerak bo'lganda (kesish, birlashtirish, subtitr, format o'zgartirish — ffmpeg orqali)
-- O'zingiz (asosiy agent) bajara olmaydigan darajada katta/ko'p bosqichli kod vazifasi bo'lsa
+- Video editing (cutting, joining, subtitles, format conversion with ffmpeg)
+- A code task too large or multi-step for you (the main agent) to do yourself
 
-Oddiy savol-javob, kichik fayl tahriri, brauzer/desktop harakatlari uchun BUNI ishlatmang — buning o'rniga to'g'ridan-to'g'ri o'zingiz (`exec`, `browser`, `desktop-control`) bajaring. `claude-code` faqat haqiqatan chuqur ishlash kerak bo'lganda, oxirgi chora sifatida ishlatiladi — sekin va qimmat.
+Do NOT use this for ordinary questions, small file edits or browser/desktop actions; do those yourself (`exec`, `browser`, `desktop-control`). Use `claude-code` only as a last resort for genuinely deep work: it is slow and expensive.
 
-## Ishlatish
+## Usage
 
 ```bash
-echo '{"task":"Ish papkasidagi clip1.mp4 va clip2.mp4 ni birlashtirib, output.mp4 qil"}' | node skills/claude-code/index.js
+echo '{"task":"Join clip1.mp4 and clip2.mp4 in the work folder into output.mp4"}' | node skills/claude-code/index.js
 ```
 
-Ixtiyoriy: `workDir` — default `~/Desktop/Jarvis-Video-Projects`. Fayllar (video, skript va h.k.) shu papkada bo'lishi kerak.
+Optional: `workDir`, default `~/Desktop/Jarvis-Video-Projects`. The files (video, scripts, etc.) must be in that folder.
 
-**Chiqish:** `{ "status": "ok", "result": "...", "workDir": "..." }` yoki `{ "status": "error", "message": "..." }`
+**Output:** `{ "status": "ok", "result": "...", "workDir": "..." }` or `{ "status": "error", "message": "..." }`
 
-## Xavfsizlik
+## Safety
 
-- Claude Code faqat `workDir` ichidagi fayllarga va cheklangan tool to'plamiga (Bash/Read/Write/Edit) ruxsat bilan ishga tushadi — `--dangerously-skip-permissions` ISHLATILMAYDI, boshqa joylarga kira olmaydi.
-- 10 daqiqagacha davom etishi mumkin (video ishlov berish sekin).
-- Bu haqiqiy Claude Code chaqiruvi — foydalanuvchining Claude obunasi/kvotasidan foydalanadi, shuning uchun faqat chindan kerak bo'lganda ishlating.
+- Claude Code runs with access only to files inside `workDir` and a limited tool set (Bash/Read/Write/Edit); `--dangerously-skip-permissions` is NOT used, so it cannot reach anything else.
+- It can take up to 10 minutes (video processing is slow).
+- This is a real Claude Code call that uses the user's Claude subscription/quota, so use it only when truly needed.

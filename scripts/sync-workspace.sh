@@ -1,42 +1,34 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-# SYNC-WORKSPACE — loyihadagi skill/SOUL.md o'zgarishlarini haqiqiy live
-# agent o'qiydigan ~/.openclaw/workspace ga nusxalaydi.
+# SYNC-WORKSPACE: copies the project's skill/SOUL.md changes into
+# ~/.openclaw/workspace, which is what the live agent actually reads.
 #
-# NEGA KERAK (real topilma, taxmin emas): openclaw agent skill'larni
-# PROJECT_DIR'dan emas, ~/.openclaw/workspace/skills/ dan o'qiydi — bu
-# butunlay ALOHIDA nusxa. Buning oqibati kutilganidan OG'IRROQ chiqdi:
-# faqat "ro'yxatga olingan" (agents.defaults.skills) skill'lar emas, balki
-# agentning `exec` vositasi ham ISHCHI PAPKA sifatida workspace'ni oladi,
-# PROJECT_DIR'ni EMAS. Ya'ni SOUL.md'da "echo ... | node skills/memory/
-# index.js" deb ko'rsatilgan barcha bevosita chaqiruvlar ham shu joydan
-# qidiriladi. Bu real sinovda tasdiqlandi: `skills/memory` (butun tizimdagi
-# ENG KO'P ishlatiladigan — Obsidianga yozish, semantik qidiruv) va
-# `skills/projects` (ko'p bosqichli loyiha yaratish) agent tomonidan
-# "MODULE_NOT_FOUND" bilan MUTLAQO chaqirib bo'lmas holatda edi — avval
-# faqat "ro'yxatga olingan" 8 ta skill bilan cheklangan versiya buni
-# butunlay o'tkazib yuborgan edi.
+# WHY (a real finding, not a guess): the openclaw agent reads skills from
+# ~/.openclaw/workspace/skills/, a completely SEPARATE copy, not PROJECT_DIR. Worse,
+# not only registered skills (agents.defaults.skills) are affected: the agent's `exec`
+# tool also uses the workspace as its WORKING DIRECTORY, so every direct call shown in
+# SOUL.md ("echo ... | node skills/memory/index.js") resolves there too. Confirmed in a
+# real test: `skills/memory` (the most used skill: Obsidian writes, semantic search)
+# and `skills/projects` (multi-step projects) failed with MODULE_NOT_FOUND for the
+# agent; an earlier version that synced only the 8 registered skills missed this.
 #
-# Shuning uchun endi RO'YXAT emas — skills/ ostidagi HAMMA papka
-# sinxronlanadi (kelajakda SOUL.md'ga yangi "skills/X" havolasi
-# qo'shilsa ham, alohida "sync ro'yxatiga qo'sh" deb eslab yurish shart
-# bo'lmasin). Faqat `wakeword` chetlab o'tiladi — 301MB model
-# og'irliklari, sof daemon-ichki modul (require() orqali, hech qachon
-# agent exec orqali chaqirilmaydi), uni nusxalash vaqt/joy isrofi bo'lardi.
+# So instead of a list, EVERY folder under skills/ is synced (a new "skills/X" reference
+# in SOUL.md needs no separate sync-list entry). Only `wakeword` is skipped: 301 MB of
+# model weights in a daemon-internal module (loaded via require(), never through the
+# agent's exec), so copying it would waste time and space.
 #
-# Symlink bilan hal qilishga urinildi — openclaw buni ATAYLAB bloklaydi
-# ("symlink-escape", xavfsizlik uchun to'g'ri qaror). Shuning uchun
-# yagona ishonchli yechim — HAR RESTARTDA avtomatik qayta nusxalash.
+# A symlink was tried, but openclaw DELIBERATELY blocks it ("symlink-escape", the right
+# security call), so the only reliable fix is an automatic re-copy on EVERY restart.
 # ═══════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORKSPACE="${HOME}/.openclaw/workspace"
 EXCLUDE_SKILLS=(wakeword)
-# Eskisi qo'lda saqlanadigan 5 ta faylga cheklangan edi — yangi skill core/dan
-# yangi fayl talab qilganda yana xuddi shu MODULE_NOT_FOUND xatosi takrorlanardi
-# (aynan shu narsa phone-control bilan sodir bo'ldi). Endi skills/ kabi, core/
-# ostidagi BARCHA .js fayl sinxronlanadi — hech kim ro'yxatni eslab yurmaydi.
+# The old version was limited to 5 hand-maintained files, so a new skill that needed a
+# new core/ file hit the same MODULE_NOT_FOUND again (exactly what happened with
+# phone-control). Now, like skills/, EVERY .js file under core/ is synced; nobody has to
+# remember a list.
 
 mkdir -p "${WORKSPACE}/skills"
 mkdir -p "${WORKSPACE}/core"
@@ -62,10 +54,9 @@ for SRC in "${PROJECT_DIR}"/skills/*/; do
   fi
 done
 
-# Workspace'dagi skilllar ../../core orqali shu kichik, secretsiz runtime
-# modullarini require qiladi (core/*.js'da hech qanday maxfiy kalit yo'q —
-# tekshirilgan; ular .env'ni env() orqali ishga tushirish vaqtida o'qiydi).
-# .env ko'chirilmaydi; state/config uchun agentga JARVIS_PROJECT_DIR beriladi.
+# Workspace skills require these small, secret-free runtime modules through ../../core
+# (verified: core/*.js holds no secret keys; they read .env through env() at runtime).
+# .env is not copied; the agent gets JARVIS_PROJECT_DIR for state and config.
 for SRC in "${PROJECT_DIR}"/core/*.js; do
   name="$(basename "${SRC}")"
   DST="${WORKSPACE}/core/${name}"

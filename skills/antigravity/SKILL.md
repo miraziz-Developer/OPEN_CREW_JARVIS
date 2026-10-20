@@ -1,21 +1,21 @@
 ---
 name: antigravity
-description: Gemini Desktop Antigravity integratsiyasi — loyihalar yaratish, kod yozish, refactoring va dasturlash vazifalarini to'liq avtonom bajarish.
+description: Gemini Desktop Antigravity integration — creates projects, writes code, refactors and runs programming tasks fully autonomously.
 ---
 
 # Antigravity Skill
 
-Foydalanuvchi quyidagi vazifalarni so'raganda ishlatiladi:
-- Yangi loyiha (sayt, bot, api, mobil ilova, skript) yaratish.
-- Mavjud loyihada xatolarni tuzatish (debug), refactoring qilish.
-- Murakkab kodlash, test yozish, git amallarini bajarish.
+Use it when the user asks for:
+- A new project (site, bot, API, mobile app, script).
+- Debugging or refactoring an existing project.
+- Complex coding, writing tests, git operations.
 
-## Chaqirish usullari:
+## How to call it:
 
 ```bash
-# Oddiy dasturlash vazifasi:
+# A regular programming task:
 echo '{"action":"executePrompt","prompt":"React-da todo ilova yarat"}' | node skills/antigravity/index.js
 
-# Yangi loyiha boshlash:
+# Start a new project:
 echo '{"action":"createProject","name":"my-app","description":"Telegram mini app"}' | node skills/antigravity/index.js
 ```

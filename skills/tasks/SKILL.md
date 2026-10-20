@@ -1,23 +1,23 @@
 # tasks
 
-Foydalanuvchi tanlagan **kunlik takrorlanuvchi vazifalar** ro'yxatini boshqaradi (Obsidian: `Jarvis/Tasks/DailyTasks.md`). Bu ro'yxat — daemon har kuni ruxsat so'rab, keyin avtomatik bajaradigan vazifalar shabloni.
+Manages the user's chosen list of **recurring daily tasks** (Obsidian: `Jarvis/Tasks/DailyTasks.md`). The daemon works through this list automatically every day.
 
-## Ishlatish
+## Usage
 
-`exec` tool orqali chaqiring:
+Call it through the `exec` tool:
 
 ```bash
-echo '{"action":"add","text":"Emaillarni tekshirish"}' | node skills/tasks/index.js
+echo '{"action":"add","text":"Check email"}' | node skills/tasks/index.js
 echo '{"action":"list"}' | node skills/tasks/index.js
 echo '{"action":"remove","text":"Emaillarni"}' | node skills/tasks/index.js
 ```
 
-Foydalanuvchi "har kuni X qilib qo'y" yoki "vazifalar ro'yxatiga X qo'sh" desa — `add` bilan qo'shing. "O'chir"/"kerak emas" desa — `remove`.
+When the user says "do X every day" or "add X to the task list", use `add`. When they say "remove it" or "not needed", use `remove`.
 
-**Chiqish:** `{ "status": "ok", ... }` yoki `{ "status": "error", "message": "..." }`
+**Output:** `{ "status": "ok", ... }` or `{ "status": "error", "message": "..." }`
 
-## Qanday ishlaydi (avtomatik qism)
+## How it works (automatic part)
 
-- Daemon har kuni bir marta shu ro'yxatni Telegram orqali ko'rsatib, "bugun bajarishga ruxsat berasizmi?" deb so'raydi.
-- Foydalanuvchi tasdiqlasa, daemon kun davomida har bir vazifani navbat bilan agentga topshiradi va natijani xabar qiladi.
-- Ro'yxatdagi vazifalar **doimiy shablon** — har kuni qayta so'raladi, checklist holati kunlik emas.
+- Listed tasks need no separate permission: during the day the daemon hands each task to the agent in turn (timed tasks run at their time).
+- Each result is reported on Telegram, and done tasks are tracked per day.
+- The list is a **standing template**: it repeats every day; the done state is per day.

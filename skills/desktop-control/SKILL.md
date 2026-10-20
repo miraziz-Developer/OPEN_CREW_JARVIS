@@ -1,75 +1,75 @@
 # desktop-control
 
-macOS ilovalarini Accessibility daraxti orqali semantik boshqaradi. Elementlar ekran koordinatasiga emas, nomi/roli/identifier/value holatiga ko‘ra topiladi. Koordinata va klaviatura actionlari faqat fallback sifatida saqlangan.
+Controls macOS apps semantically through the Accessibility tree. Elements are found by name, role, identifier or value, not by screen coordinates. Coordinate and keyboard actions remain only as a fallback.
 
-Brauzer ichidagi harakatlar (sayt ochish, forma to'ldirish, sahifadagi elementga bosish) uchun buning o'rniga o'rnatilgan `browser` tool'ni ishlating — u aniqroq va xavfsizroq. `desktop-control`ni faqat brauzerdan tashqari (istalgan boshqa ilova, Finder, System Preferences va h.k.) ishlarga ishlating.
+For anything inside a web browser (opening sites, filling forms, clicking page elements) use the built-in `browser` tool instead; it is more precise and safer. Use `desktop-control` only for work outside the browser (any other app, Finder, System Settings, etc.).
 
-## Ishlatish
+## Usage
 
-`exec` tool orqali chaqiring, masalan:
+Call it through the `exec` tool, for example:
 
 ```bash
 echo '{"action":"open_app","name":"Safari"}' | node skills/desktop-control/index.js
 ```
 
-## Action'lar
+## Actions
 
-- `open_app` — `{ name: "Safari" }` — ilovani ochadi/oldinga chiqaradi
-- `open_url` — `{ url: "https://..." }` — URL'ni standart brauzerda ochadi
-- `click_at` — `{ x, y, double?: true }` — ekrandagi koordinatga bosadi
-- `type_text` — `{ text: "..." }` — joriy fokusdagi maydonga yozadi
-- `key_press` — `{ key: "return" | "cmd+c" | "cmd+shift+4" | ... }` — tugma/kombinatsiya bosadi
-- `frontmost_app` — hozir oldingi planda turgan ilova nomini qaytaradi
-- `inspect_ui` — `{ app?, query?, limit?, maxDepth?, maxElements? }` — Accessibility daraxtini xavfsiz JSON sifatida qaytaradi; secure text qiymatlari yashiriladi
-- `find_element` — `{ app?, query: { name?, role?, identifier?, value?, enabled? }, index? }` — elementni deterministic score bilan topadi; noaniq teng moslikda bosmaydi
-- `click_element` — `{ app?, query, expect?, timeoutMs?, maxAttempts? }` — semantic elementni bosadi va qayta kuzatadi
-- `focus_element` — `{ app?, query }` — element fokusini Accessibility orqali o‘rnatib tasdiqlaydi
-- `set_text` — `{ app?, query, value }` — maydonni fokuslab AXValue orqali matn o‘rnatadi va qiymatni qayta tekshiradi
-- `toggle_element` — `{ app?, query, expect? }` — checkbox/switchni bosadi
-- `select_menu` — `{ app?, menu, item, expect? }` — menu bar item va menu itemni nomi bilan tanlaydi
-- `scroll` — `{ direction:"up"|"down", query? }` — elementning AXScroll actioni yoki PageUp/PageDown fallback
-- `wait_for_element` — `{ app?, query, absent?, timeoutMs?, intervalMs? }` — element paydo/yo‘q bo‘lishini bounded polling bilan kutadi
-- `observe_context` — oldingi ilova, haqiqiy focused oyna, bounds, browser URL/title va Accessibility fokus elementini world modelga yozib qaytaradi
-- `verified_action` — amalni bajarib, keyingi semantik holatni kutadi va observable dalil bilan tasdiqlaydi:
+- `open_app` — `{ name: "Safari" }` — opens the app or brings it to the front
+- `open_url` — `{ url: "https://..." }` — opens a URL in the default browser
+- `click_at` — `{ x, y, double?: true }` — clicks a screen coordinate
+- `type_text` — `{ text: "..." }` — types into the currently focused field
+- `key_press` — `{ key: "return" | "cmd+c" | "cmd+shift+4" | ... }` — presses a key or key combination
+- `frontmost_app` — returns the name of the frontmost app
+- `inspect_ui` — `{ app?, query?, limit?, maxDepth?, maxElements? }` — returns the Accessibility tree as safe JSON; secure text values are hidden
+- `find_element` — `{ app?, query: { name?, role?, identifier?, value?, enabled? }, index? }` — finds an element with a deterministic score; never clicks on an ambiguous tie
+- `click_element` — `{ app?, query, expect?, timeoutMs?, maxAttempts? }` — clicks a semantic element and observes the result
+- `focus_element` — `{ app?, query }` — focuses an element through Accessibility and confirms it
+- `set_text` — `{ app?, query, value }` — focuses a field, sets its text through AXValue and re-checks the value
+- `toggle_element` — `{ app?, query, expect? }` — clicks a checkbox or switch
+- `select_menu` — `{ app?, menu, item, expect? }` — selects a menu bar menu and item by name
+- `scroll` — `{ direction:"up"|"down", query? }` — the element's AXScroll action, or a PageUp/PageDown fallback
+- `wait_for_element` — `{ app?, query, absent?, timeoutMs?, intervalMs? }` — waits, with bounded polling, until an element appears or disappears
+- `observe_context` — records the frontmost app, the real focused window, its bounds, the browser URL/title and the Accessibility focus in the world model, and returns them
+- `verified_action` — runs an action, waits for the next semantic state and confirms it with observable evidence:
   `{ "action":"verified_action", "command": { "action":"open_url", "url":"https://github.com", "expect": { "app":"Chrome", "url":"github.com" }, "timeoutMs":5000 } }`
 
-`expect` maydonlari: `app`, `windowTitle`, `url`, `focusRole`, `focusValue`, `changed`. Kamida bitta konkret expectation berish afzal. `verified_action` muvaffaqiyatni command exit-code bilan emas, amaldan **oldingi va keyingi world-state** farqi bilan isbotlaydi.
+`expect` fields: `app`, `windowTitle`, `url`, `focusRole`, `focusValue`, `changed`. Prefer giving at least one concrete expectation. `verified_action` proves success with the difference between the world state **before and after** the action, not with a command exit code.
 
-**Chiqish:** `{ "status": "ok", ... }` yoki `{ "status": "error", "message": "..." }`
+**Output:** `{ "status": "ok", ... }` or `{ "status": "error", "message": "..." }`
 
-## Ishlash tartibi
+## Workflow
 
-1. `inspect_ui` yoki `find_element` bilan joriy UI holatini o‘qing.
-2. Semantik actionni konkret `query` va imkon qadar `expect` bilan bajaring.
-3. Action qaytargan Accessibility verification dalilini tekshiring.
-4. Element Accessibility’da yo‘q bo‘lsagina `screen-vision` → `locate_elements` ishlating.
-5. Vision confidence past/noaniq bo‘lsa bosmang. Yetarli bo‘lsa center koordinatani `click_at`ga bering va natijani qayta kuzating. **Bosgandan keyin natija kutilganidek emasligini (noto'g'ri elementga tekkanini) sezsangiz — taxmin qilib davom etmang: yangi skrinshot bilan qayta aniqlang, ko'pi bilan 2 marta qayta urining.**
+1. Read the current UI with `inspect_ui` or `find_element`.
+2. Run the semantic action with a concrete `query` and, whenever possible, an `expect`.
+3. Check the Accessibility verification evidence the action returns.
+4. Use `screen-vision` → `locate_elements` only if the element is missing from Accessibility.
+5. Do not click when vision confidence is low or ambiguous. When it is sufficient, pass the center coordinates to `click_at` and observe the result again. **If the click did not produce the expected result (it hit the wrong element), do not continue on a guess: re-locate with a fresh screenshot and retry at most twice.**
 
-Misollar:
+Examples:
 
 ```bash
 echo '{"action":"find_element","app":"TextEdit","query":{"role":"AXTextArea"}}' | node skills/desktop-control/index.js
-echo '{"action":"set_text","app":"TextEdit","query":{"role":"AXTextArea"},"value":"Salom","expect":{"role":"AXTextArea","value":"Salom"}}' | node skills/desktop-control/index.js
+echo '{"action":"set_text","app":"TextEdit","query":{"role":"AXTextArea"},"value":"Hello","expect":{"role":"AXTextArea","value":"Hello"}}' | node skills/desktop-control/index.js
 echo '{"action":"select_menu","app":"TextEdit","menu":"File","item":"Save"}' | node skills/desktop-control/index.js
 ```
 
-## Koordinata fallback
+## Coordinate fallback
 
-`click_at` koordinata talab qiladi. Buni topish uchun:
+`click_at` needs coordinates. To find them:
 
-1. `screen-vision`ni structured action bilan chaqiring: `{"action":"locate_elements","query":"X elementi"}`.
-2. Qaytgan **xom piksel qiymatlarini** to'g'ridan-to'g'ri `click_at`ga bering — masshtab (Retina 2x va h.k.) `desktop-control` ichida avtomatik hisobga olinadi, o'zingiz bo'lish/ko'paytirish shart emas. **JSON'dagi `center.x`/`center.y` sonlarini AYNAN nusxa oling, ko'z bilan taxmin qilmang yoki yaxlitlamang** — bir necha piksel farq ham noto'g'ri elementga tushirishi mumkin.
-3. Bosish/ochildirish/yozishni imkon qadar `verified_action` orqali bajaring. Accessibility yoki URL/title bilan tekshirib bo'lmaydigan vizual natijada **yana bir marta `screen-vision` bilan tekshiring** — keyingi qadamga faqat shundan keyin o'ting. Hech qachon ko'rmasdan yoki tekshirmasdan bosmang/"bajardim" demang.
-4. **Noto'g'ri joyga tekkan bo'lsa — avtomatik qayta urining.** Vision-koordinata ba'zan bir necha piksel adashishi mumkin, bu normal. Muvaffaqiyatsizlikni ko'rsangiz: agar noto'g'ri maydonga matn ketgan bo'lsa avval uni tozalang (Cmd+A, Delete), so'ng yangi skrinshotdan koordinatani QAYTA hisoblab (avvalgi qiymatni takrorlamang — bir oz to'g'rilab), qayta bosing va qayta tekshiring. Buni **ketma-ket 3 martagacha** avtomatik qiling — foydalanuvchidan so'ramasdan. Faqat 3 urinishdan keyin ham ishlamasa — nima muvaffaqiyatsiz bo'lganini aniq tushuntirib, foydalanuvchidan yordam so'rang.
+1. Call `screen-vision` with the structured action: `{"action":"locate_elements","query":"the X element"}`.
+2. Pass the returned **raw pixel values** straight to `click_at`; scaling (Retina 2x, etc.) is handled inside `desktop-control`, so never divide or multiply them yourself. **Copy the `center.x`/`center.y` numbers from the JSON EXACTLY; do not estimate or round them**, since a few pixels can land on the wrong element.
+3. Click, open and type through `verified_action` whenever possible. For a visual result that Accessibility or the URL/title cannot confirm, **check once more with `screen-vision`** and only then move to the next step. Never click without looking, and never say "done" without checking.
+4. **If you hit the wrong spot, retry automatically.** Vision coordinates are sometimes off by a few pixels; that is normal. On a failure: if text went into the wrong field, clear it first (Cmd+A, Delete), then RE-compute the coordinates from a fresh screenshot (do not repeat the old value; adjust it), click again and check again. Do this **up to 3 times in a row** without asking the user. Only if it still fails after 3 attempts, explain exactly what failed and ask the user for help.
 
 ## Setup
 
-- Kerakli muhit o'zgaruvchisi: `DESKTOP_CONTROL_ENABLED` (default: `true`, `false` qilib o'chirish mumkin)
-- `click_at`/`type_text`/`key_press` uchun macOS **Accessibility** ruxsati kerak: Tizim sozlamalari → Maxfiylik va xavfsizlik → Accessibility → shu jarayonni (Terminal/node) yoqing. Ruxsat bo'lmasa aniq xato qaytaradi.
-- `open_app`/`open_url` uchun maxsus ruxsat kerak emas.
+- Environment variable: `DESKTOP_CONTROL_ENABLED` (default `true`; set `false` to disable)
+- `click_at`/`type_text`/`key_press` need the macOS **Accessibility** permission: System Settings → Privacy & Security → Accessibility → enable this process (Terminal/node). Without it a clear error is returned.
+- `open_app`/`open_url` need no special permission.
 
-## Xavfsizlik
+## Safety
 
-Har doim nima qilayotganingizni foydalanuvchiga tushuntirib bering — sirli, tushuntirmasdan harakat qilmang.
+Be transparent about what you are doing; never act in a hidden, unexplained way.
 
-**`type_text` yuborishdan oldin fokusni tekshiring.** Agar matn kiritish maydoni (input) aniq fokusda emasligi mumkin bo'lsa, harflar ilovaning klaviatura qisqa yo'llari sifatida talqin qilinib, kutilmagan joyga (masalan sozlamalarga) olib borib qo'yishi mumkin — buni real holatda ko'rdik. Shuning uchun: `click_at` bilan aniq matn maydoniga bosgandan keyin, `screen-vision` bilan kursor/fokus o'sha maydonda ekanini tasdiqlang, faqat shundan keyin `type_text` chaqiring. Agar ilovada tanish klaviatura qisqa yo'li bo'lsa (masalan qidiruv uchun Cmd+K) — koordinata taxmin qilishdan ko'ra shuni ishlatgan afzal, lekin baribir natijani skrinshot bilan tasdiqlang.
+**Check the focus before `type_text`.** If a text field may not be clearly focused, the letters can be interpreted as the app's keyboard shortcuts and take you somewhere unexpected (for example into settings); this happened in real use. So after clicking a text field with `click_at`, confirm with `screen-vision` that the cursor/focus is in that field, and only then call `type_text`. If the app has a well-known shortcut (e.g. Cmd+K for search), prefer it over guessing coordinates, but still confirm the result with a screenshot.

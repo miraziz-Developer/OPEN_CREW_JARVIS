@@ -23,11 +23,10 @@ const SINGLE_WORD_INTENTS = new Set([
   'jim', 'bekor', 'cancel', 'stop', 'pause', 'resume', 'continue', 'help'
 ]);
 
-// Karnaydan video/musiqa ovozi chiqayotgan paytda lotin yozuvidagi ingliz,
-// turk va boshqa tillar ham oddiy normalize()dan o'tadi. Bunday rejimda
-// javob yaratish uchun turn ichida kamida bitta o'zbekcha intent belgisi
-// bo'lishini talab qilamiz. Ro'yxat ataylab kundalik so'zlar + buyruqlarni
-// qamraydi; "Chrome och" kabi qisqa real buyruqlar ham o'tadi.
+// While video or music plays from the speakers, English, Turkish and other Latin-script
+// languages also pass plain normalize(). In that mode a turn must contain at least one
+// Uzbek intent marker before a reply is created. The list deliberately covers everyday
+// words and commands, so short real commands like "Chrome och" still pass.
 const UZBEK_TURN_MARKERS = new Set([
   'jarvis', 'salom', 'men', 'sen', 'siz', 'bu', 'shu', 'o‘sha', "o'sha",
   'nima', 'qanday', 'qayer', 'qachon', 'nega', 'necha', 'nechchi', 'kim',
@@ -37,11 +36,10 @@ const UZBEK_TURN_MARKERS = new Set([
   'soat', 'vaqt', 'bugun', 'ertaga', 'kecha', 'hozir', 'yana', 'emas', 'bilan'
 ].map(normalize));
 
-// Inglizcha gap ham to'liq qo'llab-quvvatlanadi, ammo javob tili o'zbekcha.
-// Media rejimida oddiy film/dialog jumlasini emas, yordamchiga qaratilgan
-// savol yoki buyruqni o'tkazish uchun asosan interrogative/imperative
-// markerlar ishlatiladi. Masalan "what time is it" va "open Chrome" o'tadi,
-// "happiness will come to you" kabi fon dialogi o'tmaydi.
+// English speech is fully supported as well. In media mode, interrogative/imperative
+// markers decide what passes, so a question or command addressed to the assistant gets
+// through but ordinary film dialogue does not: "what time is it" and "open Chrome" pass,
+// background lines like "happiness will come to you" do not.
 const ENGLISH_INTENT_MARKERS = new Set([
   'jarvis', 'what', 'when', 'where', 'which', 'who', 'whom', 'whose', 'why', 'how',
   'please', 'tell', 'show', 'find', 'open', 'close', 'start', 'stop', 'pause',
@@ -84,10 +82,10 @@ function similarity(a, b) {
   return common / Math.max(aa.size, bb.size);
 }
 
-// Foydalanuvchi o'zbek/ingliz (lotin) yoki rus (kirill) tilida gapiradi. Xitoy/yapon/koreys/arab va
-// boshqa yozuvlar deyarli har doim xona shovqini yoki noto'g'ri tanilgan nutq (loglarda: "啊，star of those…").
+// The user speaks Uzbek/English (Latin script) or Russian (Cyrillic). Chinese/Japanese/Korean/Arabic and
+// other scripts are almost always room noise or misrecognised speech (seen in logs: "啊，star of those…").
 const FOREIGN_SCRIPT = /[\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF]/;
-// Boshqa ovozli yordamchiga murojaat (TV/telefon "Hey Siri", "Hey Cortana") — JARVIS'ga emas.
+// Addressing another voice assistant (TV/phone "Hey Siri", "Hey Cortana"), not JARVIS.
 const OTHER_ASSISTANT = /\b(?:hey|hi|ok|okay)[,\s]+(?:cortana|siri|alexa|google|gemini|bixby)\b/i;
 
 function classifyUserTurn(text, context = {}) {
@@ -106,12 +104,12 @@ function classifyUserTurn(text, context = {}) {
   }
   if (NOISE_UTTERANCES.has(value)) return { accept: false, reason: 'low-information' };
   const tokens = value.split(' ').filter(Boolean);
-  // Bir bo'g'inli shovqin yoki STTning tasodifiy bitta so'zli taxmini Jarvisni
-  // o'zidan-o'zi gapirtirmasin. Haqiqiy bir-so'zli buyruqlar whitelistda.
-  // Bitta tushunarsiz so'z ("Können.", "Controller.", "Relegates.") — shovqin. Faqat ma'lum bir so'zli buyruqlar
-  // yoki JARVIS hozirgina savol bergan bo'lsa (masalan "Qaysi ilova?" → "Telegram") qabul qilinadi.
+  // A one-syllable noise or STT's random one-word guess must not make JARVIS talk on
+  // its own. Real one-word commands are whitelisted. A single unintelligible word
+  // ("Können.", "Controller.", "Relegates.") is noise; only known one-word commands are
+  // accepted, or any word right after JARVIS asked a question (e.g. "Which app?" → "Telegram").
   if (tokens.length === 1 && !SINGLE_WORD_INTENTS.has(tokens[0])) {
-    // "Jarvis" deb chaqirilgandan keyingi birinchi gap (explicitUserTrigger) — ataylab murojaat, masalan "Salaam".
+    // The first utterance after being called "Jarvis" (explicitUserTrigger) is deliberate, e.g. "Salaam".
     const answeringQuestion = Boolean(context.conversationActive) && /\?\s*$/.test(String(context.lastAssistant || ''));
     if (!(answeringQuestion || context.explicitUserTrigger) || tokens[0].length < 3) return { accept: false, reason: 'low-information' };
   }
@@ -128,15 +126,15 @@ function classifyUserTurn(text, context = {}) {
 function isRepeatedResponse(candidate, previous, threshold = 0.82) {
   const a = normalize(candidate), b = normalize(previous);
   if (a.length < 18 || b.length < 18) return false;
-  // Streaming transcript boshida ikki mutlaqo boshqa javob ham bir xil
-  // ibora bilan boshlanishi mumkin. Eski javobning kamida 70% qismi
-  // kelmaguncha prefix bo'yicha bekor qilmaymiz.
+  // In a streaming transcript two completely different replies can start with the same
+  // phrase. Do not cancel on a prefix match until at least 70% of the old reply has
+  // arrived.
   const enoughForPrefixDecision = a.length >= Math.floor(b.length * 0.7);
   return (enoughForPrefixDecision && (b.startsWith(a) || a.startsWith(b))) || similarity(a, b) >= threshold;
 }
 
-// JARVIS gapirayotganda "boldi", "kerak emas", "aha okay okay", "stop" kabi qisqa to'xtatish/tasdiq gaplari:
-// javob yaratmaydi, faqat gapni to'xtatib yana tinglashga o'tadi (uz/en/ru).
+// Short stop/acknowledgement phrases while JARVIS is speaking ("boldi", "kerak emas", "aha okay okay", "stop"):
+// no reply is created; speech just stops and JARVIS listens again (Uzbek/English/Russian).
 const STOP_CORE = new Set([
   'stop', 'enough', 'quiet', 'hush', 'silence', 'pause', 'wait', 'hold', 'shut', 'all', 'do', 'cancel', 'nevermind',
   'okay', 'ok', 'okey', 'aha', 'yeah', 'yes', 'yep', 'yup', 'right', 'alright', 'sure', 'fine', 'got', 'understood',
@@ -153,13 +151,13 @@ const STOP_FILLER = new Set([
 
 function stopTokens(text) {
   return String(text || '').toLocaleLowerCase('en-US')
-    // Til aniqlash noto'g'ri bo'lganda "aha" ba'zan CJK belgilar ('啊哈') bo'lib keladi — ular shovqin.
+    // When language detection is wrong, "aha" sometimes arrives as CJK characters ('啊哈'): noise.
     .replace(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g, ' ')
     .replace(/[ʻ’‘`´ʼ']/g, '').replace(/[^\p{L}\p{N} ]/gu, ' ')
     .split(/\s+/).filter(Boolean);
 }
 
-// Server "Stop" ni "Top", "Boldi" ni "Boldy" deb eshitishi mumkin: bitta so'zli gapda 1 harf farqqacha qabul qilamiz.
+// The server may hear "Stop" as "Top" or "Boldi" as "Boldy": one-word utterances match within one letter.
 const FUZZY_STOP_WORDS = ['stop', 'boldi'];
 
 function editDistance(a, b) {

@@ -1,12 +1,12 @@
 # gmail
 
-Gmail bilan ishlash: o'qilmagan/muhim xatlarni ko'rish, o'qilgan deb belgilash, yangi xat yuborish.
+Works with Gmail: view unread/important mail, mark it as read, send new mail.
 
 ## Oldindan shart
 
-Foydalanuvchi bir marta `node scripts/google-oauth-setup.js` orqali ulangan bo'lishi kerak.
+The user must have connected once with `node scripts/google-oauth-setup.js`.
 
-## Ishlatish
+## Usage
 
 ```bash
 echo '{"action":"list_messages","query":"is:unread","maxResults":10}' | node skills/gmail/index.js
@@ -16,6 +16,6 @@ echo '{"action":"send_message","to":"someone@example.com","subject":"...","body"
 
 `query` — Gmail qidiruv sintaksisi (masalan `is:unread is:important`, `from:someone@example.com`).
 
-## Xavfsizlik — MUHIM
+## Safety — IMPORTANT
 
-Xat yuborish **qaytarib bo'lmaydigan** amal — noto'g'ri odamga yoki noto'g'ri matn bilan ketishi mumkin. Foydalanuvchi to'liq (o'qish+yozish+yuborish) ruxsatni ongli tanlagan bo'lsa-da: xat yuborishdan oldin, agar bu SIZNING o'z tashabbusingiz (so'ralmagan) bo'lsa — kimga va nima yozilishini avval ko'rsatib tasdiqlatib oling (SOUL.md'dagi umumiy xabar yuborish qoidasi bilan bir xil). Foydalanuvchi to'g'ridan-to'g'ri "X ga Y deb yoz" desa — qayta tasdiqlash shart emas.
+Sending mail is **irreversible**: it can reach the wrong person or carry the wrong text. Even though the user deliberately granted full (read+write+send) access, when sending is YOUR OWN initiative (not requested), show who it goes to and what it says and get confirmation first (the same as the general messaging rule in SOUL.md). If the user directly says "write Y to X", no extra confirmation is needed.

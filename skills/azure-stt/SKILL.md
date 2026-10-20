@@ -1,26 +1,26 @@
 # azure-stt
 
-Azure Speech REST API bilan ovozni matnga aylantiradi (Speech-to-Text). Qisqa nutq (single-shot) uchun qulay.
+Turns speech into text with the Azure Speech REST API (speech-to-text). Suited to short, single-shot speech.
 
 ## Tool
 
 ### `azure_stt_recognize`
 
-Ovozli audio faylni matnga aylantiradi. Aniqlikni oshirish uchun bir nechta tilni (masalan o'zbek + ingliz) parallel tekshiradi va eng mos natijani tanlaydi — foydalanuvchi ingliz so'z aralashtirib gapirsa ham tushunadi. Tillar orasidagi confidence solishtirib bo'lmagani uchun o'zbek tiliga ustunlik beriladi (ingliz faqat sezilarli aniqroq bo'lsa tanlanadi).
+Converts an audio file to text. For accuracy it checks several languages in parallel (e.g. Uzbek + English) and picks the best result, so mixed-language speech is still understood.
 
-**Kirish:**
-- `audioFile` (string, ixtiyoriy): WAV fayl yo'li (16000 Hz, 16-bit, mono)
+**Input:**
+- `audioFile` (string, optional): WAV file path (16000 Hz, 16-bit, mono)
 - `audioBase64` (string, ixtiyoriy): Base64 formatda kodlangan audio (wav)
-- `locales` (string[], ixtiyoriy): Tekshiriladigan tillar ro'yxati, masalan `["uz-UZ","en-US"]` (default: shu ikkalasi)
+- `locales` (string[], optional): languages to check, e.g. `["uz-UZ","en-US"]` (default: these two)
 
-`audioFile` yoki `audioBase64` maydonlaridan biri kerak.
+One of `audioFile` or `audioBase64` is required.
 
-**Chiqish:**
+**Output:**
 - `text` (string): Tanilgan matn
 - `confidence` (number): 0 dan 1 gacha aniqlik darajasi
-- `status` (string): `ok` yoki `error`
+- `status` (string): `ok` or `error`
 
-**Misol:**
+**Example:**
 ```yaml
 tool: azure_stt_recognize
 with:
@@ -29,8 +29,8 @@ with:
 
 ## Setup
 
-Kerakli muhit o'zgaruvchilari: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_LANGUAGE`
+Environment variables: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_LANGUAGE`
 
-## Eslatmalar
-- Uzun nutq uchun audioni 10-15 soniyali qismlarga bo'lib chaqiring.
+## Notes
+- For long speech, split the audio into 10-15 second chunks.
 - Audio format: WAV, 16 kHz, 16-bit, mono — Microsoft Speech SDK standarti.

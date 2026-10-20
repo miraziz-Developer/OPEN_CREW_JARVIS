@@ -1,18 +1,18 @@
 # Memory OS
 
-Jarvis xotirasi besh qatlamga ajratiladi: `working`, `episodic`, `semantic`,
-`procedural`, `user_profile`. Eski Obsidian Markdown interfeysi backward-compatible
-dual-write sifatida saqlanadi; structured store confidence, expiry, contradiction,
-entity graph va secret redaction metadata bilan ishlaydi.
+JARVIS memory is split into five layers: `working`, `episodic`, `semantic`,
+`procedural`, `user_profile`. The older Obsidian Markdown interface is kept as a backward-compatible
+dual-write; the structured store tracks confidence, expiry, contradictions,
+an entity graph and secret-redaction metadata.
 
 ```bash
-echo '{"action":"remember","layer":"semantic","title":"Project stack","content":"Jarvis Node.js ishlatadi","fact":{"subject":"Jarvis","predicate":"runtime","object":"Node.js"},"confidence":0.9}' | node skills/memory/index.js
+echo '{"action":"remember","layer":"semantic","title":"Project stack","content":"Jarvis runs on Node.js","fact":{"subject":"Jarvis","predicate":"runtime","object":"Node.js"},"confidence":0.9}' | node skills/memory/index.js
 echo '{"action":"retrieve","query":"Jarvis runtime","layers":["semantic"],"limit":5}' | node skills/memory/index.js
 echo '{"action":"migrate_legacy"}' | node skills/memory/index.js
 echo '{"action":"purge_expired"}' | node skills/memory/index.js
 ```
 
-Parol, token va API key qiymatlari persistence’dan oldin avtomatik redakt qilinadi.
+Passwords, tokens and API key values are redacted automatically before they are stored.
 
 ## Legacy Obsidian compatibility
 
