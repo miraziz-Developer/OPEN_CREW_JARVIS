@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 /**
- * DEEP THINK — reasoning so'rovlarini latency/complexity tieriga yo'naltiradi.
+ * DEEP THINK: routes reasoning requests to a latency/complexity tier.
  *
- * Nega kerak: jonli suhbatda barcha savol-javobga realtime voice modeli
- * javob berardi. U ovoz uchun optimallashtirilgan — fikrlash uchun emas.
- * Grok fast oddiy expert javoblarini past latency bilan beradi; GPT-5.6 Sol
- * architecture, strategiya va ko'p bosqichli rejalashni bajaradi. Oddiy
- * suhbat realtime modelda qoladi.
+ * Why: in live conversation the realtime voice model used to answer everything, and it is
+ * optimised for voice, not reasoning. Grok fast gives ordinary expert answers with low
+ * latency; GPT-5.6 Sol handles architecture, strategy and multi-step planning. Ordinary
+ * conversation stays on the realtime model.
  *
- * MUHIM: bu `run_task` EMAS. run_task to'liq agentni (barcha skilllar,
- * brauzer, fayl tizimi) ishga tushiradi va 15-25 soniya oladi. Bu esa
- * modelga to'g'ridan-to'g'ri bitta chaqiruv — hech qanday tool halqasi
- * yo'q, shuning uchun tez.
+ * IMPORTANT: this is NOT `run_task`. run_task starts the full agent (every skill, browser,
+ * file system) and takes 15-25 seconds. This is a single direct model call with no tool
+ * loop, so it is fast.
  */
 
 const fs = require('fs');
@@ -29,15 +27,14 @@ function env(k, def) {
 }
 
 const MAIN_DEPLOYMENT = env('AZURE_OPENAI_DEPLOYMENT', 'gpt-5-mini');
-const FAST_MODEL = env('DEEP_THINK_FAST_MODEL') || MAIN_DEPLOYMENT; // mavjud bo'lmagan nomga urinib, keyin zaxiraga tushmaymiz
+const FAST_MODEL = env('DEEP_THINK_FAST_MODEL') || MAIN_DEPLOYMENT; // never try a non-existent name and then fall back
 const COMPLEX_MODEL = env('DEEP_THINK_COMPLEX_MODEL') || env('AGENT_STRONG_MODEL', 'gpt-6-sol');
 const TIMEOUT_MS = Math.max(30000, parseInt(env('DEEP_THINK_TIMEOUT_MS'), 10) || 240000);
 const MAX_TOKENS = parseInt(env('DEEP_THINK_MAX_TOKENS'), 10) || 1200;
 
-// Javob OG'ZAKI o'qiladi — shuning uchun markdown (sarlavha, **qalin**,
-// raqamli ro'yxat) mutlaqo yaramaydi: ular ovozda "yulduzcha yulduzcha"
-// bo'lib eshitiladi yoki g'alati pauzalar hosil qiladi. Model buni
-// bilishi shart, aks holda odatdagi chiroyli formatlangan matn qaytaradi.
+// The answer is read ALOUD, so markdown (headings, **bold**, numbered lists) is useless:
+// it is heard as "asterisk asterisk" or causes odd pauses. The model must know this,
+// otherwise it returns its usual nicely formatted text.
 const SYSTEM_PROMPT =
   "You are Jarvis, an English-speaking personal assistant. Your answer will be spoken aloud, so:\n" +
   "- Use no markdown, headings, bullets, tables, or code fences.\n" +
@@ -68,7 +65,7 @@ function reasoningProviders(question) {
 function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
   const gemini = require('../../core/gemini');
   const instructions = context
-    ? SYSTEM_PROMPT + '\n\nSuhbat konteksti (foydalanuvchi haqida ma\'lum bo\'lgan narsalar):\n' + String(context).slice(0, 4000)
+    ? SYSTEM_PROMPT + '\n\nConversation context (what is known about the user):\n' + String(context).slice(0, 4000)
     : SYSTEM_PROMPT;
 
   const KEY = provider.key;
@@ -85,7 +82,7 @@ function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
   }
 
   return new Promise((resolve, reject) => {
-    if (!KEY || !BASE) return reject(new Error(provider.name + ' endpoint/key yo\'q'));
+    if (!KEY || !BASE) return reject(new Error(provider.name + ' endpoint/key is missing'));
     const payload = JSON.stringify({
       model: provider.model,
       instructions,
@@ -103,9 +100,9 @@ function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
           const p = JSON.parse(d);
           if (p.error) return reject(new Error(p.error.message));
           const txt = extractOutputText(p);
-          if (!txt) return reject(new Error('bo\'sh javob'));
+          if (!txt) return reject(new Error('empty reply'));
           resolve(stripMarkdown(txt));
-        } catch (e) { reject(new Error('javobni o\'qib bo\'lmadi: ' + String(d).slice(0, 150))); }
+        } catch (e) { reject(new Error('could not parse the reply: ' + String(d).slice(0, 150))); }
       });
     });
     req.on('error', reject);
@@ -115,7 +112,7 @@ function requestExpert(question, context, provider, timeoutMs = TIMEOUT_MS) {
 }
 
 async function askExpert(question, context) {
-  // Lokal rejim: chuqur tahlil — Bonsai 27B (qiyin vazifa), RAM'da bittadan (Brain hakami orqali).
+  // Local mode: deep analysis on Bonsai 27B (hard tasks), one model in RAM at a time (via the brain arbiter).
   if (String(env('JARVIS_BRAIN', '')).toLowerCase() === 'local') {
     const system = context ? SYSTEM_PROMPT + '\n\nSuhbat konteksti:\n' + String(context).slice(0, 4000) : SYSTEM_PROMPT;
     const r = await require('../../core/brain/client').think({ system, user: String(question).slice(0, 8000), hard: true, maxTokens: MAX_TOKENS });
@@ -133,7 +130,7 @@ async function askExpert(question, context) {
     try { return await requestExpert(question, context, provider, attemptTimeout); }
     catch (error) { lastError = error; }
   }
-  throw lastError || new Error('reasoning provider sozlanmagan');
+  throw lastError || new Error('no reasoning provider configured');
 }
 
 function extractOutputText(response) {
@@ -147,16 +144,16 @@ function extractOutputText(response) {
     .trim();
 }
 
-// Yo'riqnomaga qaramay model ba'zan markdown qo'shib yuboradi — ovozda
-// g'alati eshitilmasligi uchun qo'shimcha, ishonchli tozalash.
+// Despite the instructions the model sometimes adds markdown; extra, reliable cleanup so it
+// does not sound odd when spoken.
 function stripMarkdown(s) {
   return String(s)
     .replace(/^#{1,6}\s*/gm, '')        // sarlavhalar
     .replace(/\*\*(.+?)\*\*/g, '$1')    // qalin
     .replace(/\*(.+?)\*/g, '$1')        // kursiv
     .replace(/`{1,3}([^`]*)`{1,3}/g, '$1')
-    .replace(/^\s*[-*+]\s+/gm, '')      // ro'yxat belgilari
-    .replace(/^\s*\d+[.)]\s+/gm, '')    // raqamli ro'yxat
+    .replace(/^\s*[-*+]\s+/gm, '')      // list markers
+    .replace(/^\s*\d+[.)]\s+/gm, '')    // numbered lists
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -164,7 +161,7 @@ function stripMarkdown(s) {
 function main() {
   let input = {};
   try { input = JSON.parse(fs.readFileSync(0, 'utf8').trim() || '{}'); } catch (e) {}
-  if (!input.question) { console.log(JSON.stringify({ status: 'error', message: 'question kerak' })); return; }
+  if (!input.question) { console.log(JSON.stringify({ status: 'error', message: 'question is required' })); return; }
   const provider = reasoningProviders(input.question)[0];
   askExpert(input.question, input.context)
     .then(answer => console.log(JSON.stringify({ status: 'ok', model: provider.model, answer })))

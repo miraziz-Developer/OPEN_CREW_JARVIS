@@ -18,8 +18,8 @@ let localLlm = null;
 try { localLlm = require('./local-llm'); } catch (_) {}
 
 const ENGLISH_ONLY_INSTRUCTION = '[Language policy: Reply to the user only in natural English, regardless of the language of the request or stored context. Never answer in Uzbek or imitate an Uzbek accent. Preserve names, quoted text, and file contents when necessary.]';
-// Egasi belgilagan siyosat har agent chaqiruviga qo'shiladi. SOUL.md'dagi umumiy qoidalar emas, shu qator
-// ustun: avval SOUL.md "har doim tasdiq ol" derdi va JARVIS_CONFIRM_MODE=off bo'lsa ham agent confirm so'rardi.
+// The owner's policy is prepended to every agent call and takes precedence over the general rules in SOUL.md:
+// SOUL.md used to say "always ask for confirmation", so the agent asked even with JARVIS_CONFIRM_MODE=off.
 function confirmModeFromEnv() {
   let value = process.env.JARVIS_CONFIRM_MODE;
   if (value === undefined) {
@@ -32,8 +32,8 @@ function envValue(key) {
   if (process.env[key] !== undefined) return process.env[key];
   try { const m = fs.readFileSync(path.join(require('./paths').PROJECT_DIR, '.env'), 'utf8').match(new RegExp('^' + key + '\\s*=\\s*(.*)$', 'm')); return m ? m[1] : undefined; } catch (_) { return undefined; }
 }
-// Lokal miya (JARVIS_BRAIN=local): OpenClaw katta SOUL.md/AGENTS.md ni kiritmaydi (contextInjection=never) —
-// Mac'da uzun promptni o'qish daqiqalab vaqt oladi. O'rniga ixcham SOUL.local.md shu yerda, har chaqiruv boshida.
+// Local brain (JARVIS_BRAIN=local): OpenClaw skips the large SOUL.md/AGENTS.md (contextInjection=never) because
+// reading a long prompt takes minutes on a Mac. The compact SOUL.local.md is prepended here on every call instead.
 function localSoul() {
   if (String(envValue('JARVIS_BRAIN') || '').trim().toLowerCase() !== 'local') return '';
   try { return fs.readFileSync(path.join(require('./paths').PROJECT_DIR, 'SOUL.local.md'), 'utf8').trim() + '\n'; } catch (_) { return ''; }
@@ -44,8 +44,8 @@ function agentPolicyPreamble({ brief = true, mode = confirmModeFromEnv() } = {})
       : 'Do tasks directly without asking; ask for confirmation only before spending money or making a payment.';
   const act = 'Act before explaining: when the request can be completed with your tools, do the work now instead of describing a plan or teaching the user how to do it. Never tell the user to click, open, type or do a step themselves — you have desktop-control, phone-control and the browser; do it yourself. Report only the verified result.';
   const style = brief ? ' Reply with the result in one or two short plain sentences: no preamble, markdown lists, step-by-step guides, repeated request, or offers of further help.' : '';
-  const omni = ' J.A.R.V.I.S. Directive: You NEVER say "I cannot do that", "I am unable to", "I do not have tools", "qila olmayman", or offer excuses. You are omni-capable, proactive, and brilliant. You MUST ALWAYS speak and answer ONLY in 100% natural, fluent English, never in Uzbek. Always solve, answer, or execute directly in natural English.';
-  return localSoul() + `[Owner policy: ${confirm} ${act}${style}${omni}]`;
+  const resolve = ' Do not refuse lazily or make excuses: try your tools first and solve the task yourself. Never claim a result you have not verified; if something is genuinely impossible, say in one sentence what blocked you. Answer in natural, fluent English unless the owner explicitly asks for another language.';
+  return localSoul() + `[Owner policy: ${confirm} ${act}${style}${resolve}]`;
 }
 const RETRY_DELAYS_MS = [5000, 15000, 45000, 135000];
 const RECOVERED_STEP_INSTRUCTION = 'RECOVERY SAFETY: This recovered checkpoint step may have partially executed before the prior worker stopped. Verify the current external and local state before acting. Do not repeat a side-effecting action unless verification shows it is still required. Report what you verified and any uncertainty.';
@@ -77,10 +77,9 @@ function isOpenClawPolicyFailure(clean) {
   return /^(?:error:\s*)?(?:tool )?policy removed(?: this content)?\.?$/i.test(String(clean || '').trim());
 }
 
-// Ekran/telefon bilan ishlaydigan vazifalar koordinata aniqligiga muhtoj — bu yerda "thinking off"
-// bilan tezlashtirish aynan xato joyga bosishga olib keldi (sinovda tasdiqlandi). Shu turdagi
-// vazifalarda tezlikni emas, aniqlikni tanlaymiz; needsCheckpointedExecution'ga qo'shmaymiz — u
-// checkpoint/persistent-task semantikasini ham boshqaradi, bu yerga aralashtirib bo'lmaydi.
+// Screen/phone tasks need coordinate accuracy; speeding them up with "thinking off" made the agent
+// click the wrong place (confirmed in tests). For these tasks accuracy beats speed. They are not added
+// to needsCheckpointedExecution, which also controls checkpoint/persistent-task semantics.
 const VISUAL_PRECISION_TASK = /\b(phone|iphone|whatsapp|instagram|telegram(?! bot)|screen|ekran|telefon|tap|click|bos(?:ish|ing)|app icon|home screen|mirroring)\b/i;
 function needsCarefulReasoning(message) { return needsCheckpointedExecution(message) || VISUAL_PRECISION_TASK.test(String(message || '')); }
 
@@ -94,8 +93,8 @@ function buildOpenClawAgentArgs(message, sessionKey, routeText, model) {
   if (key) args.push('--session-key', key);
   args.push('--message', ENGLISH_ONLY_INSTRUCTION + '\n' + agentPolicyPreamble() + '\n\n' + String(message || ''), '--agent', 'main');
   if (model) args.push('--model', model);
-  // Oddiy vazifalarda "thinking" ni o'chirish ~40% tezroq (19s → 11s o'lchangan);
-  // murakkab (reja/tahlil/tadqiqot) vazifalarda chuqur fikrlash saqlanadi.
+  // Turning "thinking" off for simple tasks is ~40% faster (measured 19 s → 11 s);
+  // complex tasks (planning, analysis, research) keep deep thinking.
   args.push(...fastThinkingArgs(routeText || message));
   return args;
 }
@@ -121,12 +120,12 @@ function classifyProviderError(error) {
   return { retryable, type: policy ? 'policy' : retryable ? 'transient' : 'terminal', message: message.slice(0, 500) };
 }
 
-// Telegram/TTS/agent-provider bridge — jarvis_daemon.js va telegram-bot.js
-// bir xil "asosiy agent" (openclaw CLI, deep-think fallback bilan) va bir
-// xil Telegram/TTS chiqishiga murojaat qiladi; bu shu mantiqning yagona
-// nusxasi (daemon-tomon uchun — dependency'lar options orqali uzatiladi,
-// module-level closure emas, shunda alohida test/qayta ishlatish mumkin).
-const FALLBACK_NOTICE = '[ABSOLUTE DIRECTIVE: You are J.A.R.V.I.S. You NEVER say "I cannot do that", "unavailable", "I do not have tools", "qila olmayman", or offer excuses. Always provide the direct answer, execute the task with complete competence, or outline the immediate solution with calm confidence.]\n\n';
+// Telegram/TTS/agent-provider bridge. jarvis_daemon.js and telegram-bot.js use the same
+// "main agent" (openclaw CLI with a deep-think fallback) and the same Telegram/TTS output;
+// this is the single copy of that logic. Dependencies come in through options rather than
+// module-level closures, so it can be tested and reused on its own.
+// The fallback model has no tools: it must answer from knowledge and never pretend it performed an action.
+const FALLBACK_NOTICE = '[You are J.A.R.V.I.S. answering without tools because the main agent is unavailable. Give the most useful direct answer you can. Do not claim to have opened, sent, changed or checked anything; if the request needs an action, say briefly that it will run once the agent is back.]\n\n';
 
 function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenAiKey, openClawEnvironment, openClawBaseEnvironment, spawnProcess = spawn, selfHealRunner, skillPlatform, runtime, telemetry } = {}) {
   const openClawTimeoutMs = Math.max(30000, parseInt(env('OPENCLAW_AGENT_TIMEOUT_MS'), 10) || 300000);
@@ -169,10 +168,10 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     telemetry?.openClawAttempt(attempt);
   }
 
-  // Xabarnomalar barcha egalarga boradi (TELEGRAM_OWNER_IDS + TELEGRAM_CHAT_ID).
+  // Notifications go to every owner (TELEGRAM_OWNER_IDS + TELEGRAM_CHAT_ID).
   const recipients = () => require('./telegram-owner').parseOwnerIds(chatId, ...(Array.isArray(chatIds) ? chatIds : [chatIds]));
 
-  // Barcha tizim xabarlari shu qatlamdan o'tadi: qisqa, tushunarli, takrorsiz, ovoz nusxalarisiz.
+  // Every system message goes through this layer: short, clear, deduplicated, without voice copies.
   const briefer = new (require('./telegram-brief').TelegramBrief)({
     llm: require('./llm'), mirrorVoice: typeof env === 'function' && env('TELEGRAM_MIRROR_VOICE') === 'true'
   });
@@ -208,14 +207,12 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
   async function ttsToFile(text, options = {}) {
     const startedAt = Date.now();
     const cleanText = String(text || '').trim();
-    // Agent ba'zan bo'sh JSON konteyner qaytaradi. Azure bunday matn uchun
-    // yaroqsiz/juda kichik MP3 berishi mumkin va afplay "AudioFileOpen failed"
-    // deb stderr'ni to'ldiradi.
+    // The agent sometimes returns an empty JSON container; Azure may then produce an
+    // invalid or tiny MP3 and afplay floods stderr with "AudioFileOpen failed".
     if (!cleanText || /^(?:\[\s*\]|\{\s*\}|null|undefined)$/i.test(cleanText)) return null;
-    // Spawn mantig'i endi skills/platform.js'dagi 'azure-tts' registratsiyasi
-    // ichida -- osilib qolgan child process SkillPlatform'ning timeout/
-    // circuit-breaker'i bilan himoyalanadi (avval bu spawn'da umuman
-    // parent-side timeout yo'q edi).
+    // Spawning now lives in the 'azure-tts' registration in skills/platform.js, so a hung
+    // child process is bounded by the SkillPlatform timeout/circuit breaker (this spawn
+    // used to have no parent-side timeout at all).
     try {
       const output = await skillPlatform.invoke('azure-tts', 'synthesize', { text: cleanText });
       telemetry?.latency({ requestId: options.requestId, source: options.source || 'tts', provider: 'azure-tts', tts_ms: Date.now() - startedAt });
@@ -514,9 +511,9 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
   }
   poolList.push({
     id: 'openclaw', priority: poolList.length, timeoutMs: openClawTimeoutMs + 5000,
-    // Og'ir (ko'p bosqichli) rejim foydalanuvchining o'z so'rovi bo'yicha tanlanadi. Avval Telegram'da xotira va
-    // eski suhbat qo'shilgan matn 700 belgidan oshib, "skrinshot yubor" kabi oddiy so'rovlar ham 4-5 bosqichli
-    // og'ir yo'lga tushardi (o'rtacha 82 s, 37 ta holat).
+    // The heavy (multi-step) mode is chosen from the user's own request. In Telegram, memory and earlier chat
+    // pushed the text past 700 characters, so even simple requests like "send a screenshot" took the 4-5 step
+    // heavy path (82 s on average, 37 cases).
     invoke: (message, context) => needsCheckpointedExecution(context.routeText || message)
       ? askCheckpointedAgent(message, context.sessionKey, {
         persistent: Boolean(context.persistent) || needsPersistentExecution(context.routeText || message),
@@ -528,7 +525,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
   poolList.push({
     id: 'azure-deep-think', priority: poolList.length, timeoutMs: deepThinkTimeoutMs + 5000,
     invoke: (message, context) => skillPlatform.invoke('deep-think', 'askExpert', {
-      // Bu zaxira asbobsiz LLM: asosiy agent ishlamay qolganda "qila olmayman" deb yolg'on gapirmasligi kerak.
+      // Tool-less fallback LLM used when the main agent fails; see FALLBACK_NOTICE.
       question: FALLBACK_NOTICE + message,
       context: context.sessionKey ? `Session: ${context.sessionKey}` : undefined
     })
@@ -591,7 +588,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     } catch (error) {
       telemetry?.latency({ requestId: options.requestId, source: options.source || 'agent', agent_ms: Date.now() - startedAt, error });
       runtime?.recordError?.('agent.providers', error);
-      er('Barcha agent providerlari ishlamadi: ' + error.message);
+      er('All agent providers failed: ' + error.message);
       return null;
     }
   }

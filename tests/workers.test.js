@@ -45,7 +45,7 @@ test('BabyAGI and AutoGPT workers report a clear error when their environments a
     if (fs.existsSync(path.join(root, venv, 'bin', 'python'))) continue;
     const result = await workers[name].run({ prompt: 'x', mission: { id: 'm-test' }, task: { id: 't1' }, timeoutMs: 1000 });
     assert.equal(result.ok, false);
-    assert.match(result.error, /o'rnatilmagan/);
+    assert.match(result.error, /not installed/);
   }
 });
 

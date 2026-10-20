@@ -252,7 +252,7 @@ startListener();
 setInterval(() => {
   if (!fnProc || fnProc.exitCode !== null || fnProc.killed) {
     broadcastToBroker('RESET');
-    scheduleListenerRestart(0, 'watchdog child yo\'q');
+    scheduleListenerRestart(0, 'watchdog: child missing');
   }
 }, 5000).unref();
 

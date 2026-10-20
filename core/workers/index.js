@@ -23,7 +23,7 @@ function runProcess(command, args, options = {}) {
       proc = spawnFn(command, args, { cwd: options.cwd, env: options.env, stdio: ['pipe', 'pipe', 'pipe'], detached: options.detached !== false });
     } catch (error) { return resolve({ code: -1, stdout: '', stderr: error.message, timedOut: false }); }
     const timer = setTimeout(() => { killTree(); finish({ code: -1, stdout, stderr, timedOut: true }); }, options.timeoutMs || 20 * 60 * 1000);
-    // Jim qolish: hech qanday chiqish bo'lmasa (LLM oqimi qotib qolgan) — kutib o'tirmaymiz.
+    // Stall detection: with no output at all (a hung LLM stream) we do not keep waiting.
     if (options.stallMs) {
       stallTimer = setInterval(() => {
         if (Date.now() - lastActivity > options.stallMs) { killTree(); finish({ code: -1, stdout, stderr, timedOut: true, stalled: true }); }
@@ -50,7 +50,7 @@ function parseJsonWorker(result, name) {
   try {
     const parsed = JSON.parse(line);
     return { ok: Boolean(parsed.ok), output: String(parsed.output || '').slice(-6000), error: parsed.error || '' };
-  } catch (error) { return { ok: false, output: '', error: `${name} javobi o'qilmadi` }; }
+  } catch (error) { return { ok: false, output: '', error: `could not parse the ${name} reply` }; }
 }
 
 function workspace(mission) {
@@ -64,7 +64,7 @@ function createWorkers(options = {}) {
   const spawnFn = options.spawn || spawn;
   const azureKey = () => env('AZURE_OPENAI_KEY');
   const azureBase = () => env('AZURE_OPENAI_ENDPOINT');
-  // OpenClaw gateway tokeni launchd muhitida yo'q — loyihaning .env faylidan olinadi.
+  // The OpenClaw gateway token is not in the launchd environment; it is read from the project's .env.
   const openClawEnv = () => {
     try { return resolveOpenClawEnvironment({ projectDir: PROJECT_DIR }); }
     catch (_) { return { ...process.env, AZURE_OPENAI_KEY: azureKey(), JARVIS_PROJECT_DIR: PROJECT_DIR }; }
@@ -73,11 +73,11 @@ function createWorkers(options = {}) {
   const venvPython = name => path.join(PROJECT_DIR, name, 'bin', 'python');
   const hasVenv = name => fs.existsSync(venvPython(name));
 
-  // 1) To'liq OpenClaw agenti: barcha skill'lar (kalendar, pochta, Telegram, fayl, ilovalar, veb qidiruv, xotira)
+  // 1) Full OpenClaw agent: every skill (calendar, mail, Telegram, files, apps, web search, memory)
   const agent = {
     async run({ prompt, mission, task, timeoutMs }) {
       const sessionKey = `agent:main:mission-${mission.id}-${task.id}`;
-      // Missiya ishchisi: egasi siyosati (tasdiq/avtonomiya) — lekin qisqalik talabisiz, chunki tekshiruv dvigateli dalilga muhtoj.
+      // Mission worker: the owner's policy (confirmation/autonomy) but without the brevity rule, because the verifier needs evidence.
       const policy = require('../agent-bridge').agentPolicyPreamble({ brief: false });
       const result = await runProcess('openclaw', ['agent', '--session-key', sessionKey, '--message', policy + '\n\n' + prompt, '--agent', 'main'], {
         spawn: spawnFn, cwd: PROJECT_DIR, timeoutMs, stallMs: 15 * 60 * 1000,
@@ -90,8 +90,8 @@ function createWorkers(options = {}) {
     }
   };
 
-  // 2) Open Interpreter: kod, terminal, skriptlar, fayllar, ma'lumot, lokal serverlar — Azure gpt-5-mini bilan.
-  //    Python API orqali past reasoning_effort (CLI'da yo'q): ~8 s, avval ~200 s.
+  // 2) Open Interpreter: code, terminal, scripts, files, data, local servers, with Azure gpt-5-mini.
+  //    Low reasoning_effort via the Python API (the CLI lacks it): ~8 s instead of ~200 s.
   const interpreter = {
     available: () => Boolean(env('INTERPRETER_PYTHON')) || hasVenv('.venv-interpreter'),
     async run({ prompt, mission, timeoutMs }) {
@@ -108,7 +108,7 @@ function createWorkers(options = {}) {
       try {
         const parsed = JSON.parse(line);
         return { ok: Boolean(parsed.ok), output: String(parsed.output || '').slice(-6000), error: parsed.error || '' };
-      } catch (error) { return { ok: false, output: '', error: 'interpreter javobi o\'qilmadi' }; }
+      } catch (error) { return { ok: false, output: '', error: 'could not parse the interpreter reply' }; }
     }
   };
 
@@ -117,23 +117,23 @@ function createWorkers(options = {}) {
     available: () => hasVenv('.venv-workers'),
     async run({ prompt, timeoutMs }) {
       const python = path.join(PROJECT_DIR, '.venv-workers', 'bin', 'python');
-      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'Browser-use o\'rnatilmagan (scripts/install-workers.sh)' };
+      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'Browser-use is not installed (scripts/install-workers.sh)' };
       const result = await runProcess(python, [path.join(__dirname, 'browser_worker.py')], {
         spawn: spawnFn, cwd: PROJECT_DIR, timeoutMs, stallMs: 300000, input: JSON.stringify({ task: prompt, max_steps: 40, headless: env('BROWSER_WORKER_HEADLESS', 'false') === 'true', use_profile: env('BROWSER_WORKER_USE_PROFILE', 'true') !== 'false' }),
         env: { ...process.env, AZURE_OPENAI_KEY: azureKey(), AZURE_OPENAI_ENDPOINT: azureBase(), BROWSER_WORKER_MODEL: agentModel(), ANONYMIZED_TELEMETRY: 'false', BROWSER_USE_LOGGING_LEVEL: 'error' }
       });
       const line = cleanOutput(result.stdout).split('\n').filter(l => l.trim().startsWith('{')).pop();
       if (result.timedOut) return { ok: false, output: '', error: 'browser timeout' };
-      if (!line) return { ok: false, output: '', error: cleanOutput(result.stderr).slice(-400) || 'browser worker javob bermadi' };
+      if (!line) return { ok: false, output: '', error: cleanOutput(result.stderr).slice(-400) || 'the browser worker did not respond' };
       try {
         const parsed = JSON.parse(line);
         return { ok: Boolean(parsed.ok), output: String(parsed.output || ''), error: parsed.error || (parsed.errors || []).join('; ') };
-      } catch (error) { return { ok: false, output: '', error: 'browser worker javobi o\'qilmadi' }; }
+      } catch (error) { return { ok: false, output: '', error: 'could not parse the browser worker reply' }; }
     }
   };
 
-  // 4) GUI worker: ko'rinadigan interfeys. UI-TARS/OmniParser (GPU, ko'p GB) o'rniga Azure vision
-  //    (screen-vision locate_elements) + desktop-control click_at + har harakatdan keyin tekshiruv — agent orqali.
+  // 4) GUI worker: the visible interface. Instead of UI-TARS/OmniParser (GPU, many GB) it uses Azure vision
+  //    (screen-vision locate_elements) + desktop-control click_at + a check after every action, through the agent.
   const gui = {
     async run({ prompt, mission, task, timeoutMs }) {
       const brief = 'Use the gui-worker procedure: prefer desktop-control semantic actions; only if the control cannot be found semantically, ' +
@@ -143,9 +143,9 @@ function createWorkers(options = {}) {
     }
   };
 
-  // Bog'langan iPhone'ni (iPhone Mirroring) boshqarish — phone-control SKILL.md'dagi tartib bilan bir xil:
-  // screenshot -> screen-vision locate_elements o'sha rasm bilan -> xom piksel koordinatani tap'ga -> har
-  // bosishdan keyin yangi screenshot bilan tekshirish. gui-worker'dan farqi: Mac oynasi emas, real qurilma.
+  // Controls the paired iPhone (iPhone Mirroring) with the same procedure as phone-control SKILL.md:
+  // screenshot -> screen-vision locate_elements on that image -> raw pixel coordinates to tap -> verify
+  // with a fresh screenshot after every tap. Unlike gui-worker it drives a real device, not a Mac window.
   const phone = {
     async run({ prompt, mission, task, timeoutMs }) {
       const brief = "Use the phone-control procedure (see skills/phone-control/SKILL.md): first check is_connected. " +
@@ -159,13 +159,13 @@ function createWorkers(options = {}) {
     }
   };
 
-  // 4b) BabyAGI (yoheinakajima/babyagi, functionz): vazifani funksiyalarga bo'lib, kodini o'zi yozadi, ro'yxatga oladi va
-  //     ishga tushiradi. O'rganilgan funksiyalar doimiy papkada to'planadi (o'zini-o'zi quruvchi kutubxona).
+  // 4b) BabyAGI (yoheinakajima/babyagi, functionz): splits the task into functions, writes, registers and runs
+  //     their code itself. Learned functions accumulate in a persistent folder (a self-building library).
   const babyagi = {
     available: () => hasVenv('.venv-babyagi'),
     async run({ prompt, timeoutMs }) {
       const python = path.join(PROJECT_DIR, '.venv-babyagi', 'bin', 'python');
-      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'BabyAGI o\'rnatilmagan (.venv-babyagi)' };
+      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'BabyAGI is not installed (.venv-babyagi)' };
       const cwd = path.join(PROJECT_DIR, '.run', 'agents', 'babyagi');
       fs.mkdirSync(cwd, { recursive: true });
       const result = await runProcess(python, [path.join(__dirname, 'babyagi_worker.py')], {
@@ -178,13 +178,13 @@ function createWorkers(options = {}) {
     }
   };
 
-  // 4c) AutoGPT (Significant-Gravitas/Auto-GPT): maqsadga qarab fikrlash -> buyruq -> natija tsikli (continuous rejim).
-  //     Xavfsizlik: ishchi papka bilan cheklangan, lokal shell o'chiq, iteratsiya chegarasi bor.
+  // 4c) AutoGPT (Significant-Gravitas/Auto-GPT): a goal-driven think -> command -> result loop (continuous mode).
+  //     Safety: confined to its working folder, local shell disabled, iteration limit.
   const autogpt = {
     available: () => hasVenv('.venv-autogpt'),
     async run({ prompt, mission, task, timeoutMs }) {
       const python = path.join(PROJECT_DIR, '.venv-autogpt', 'bin', 'python');
-      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'AutoGPT o\'rnatilmagan (.venv-autogpt)' };
+      if (!fs.existsSync(python)) return { ok: false, output: '', error: 'AutoGPT is not installed (.venv-autogpt)' };
       const cwd = path.join(workspace(mission), `autogpt-${task.id}`);
       fs.mkdirSync(cwd, { recursive: true });
       const result = await runProcess(python, [path.join(__dirname, 'autogpt_worker.py')], {
@@ -206,8 +206,8 @@ function createWorkers(options = {}) {
     }
   };
 
-  // 6) Antigravity Worker: Gemini Desktop ichidagi Antigravity dasturchi agenti orqali
-  //    loyihalarni yaratish, kod yozish, refactoring va dasturlash vazifalarini bajarish.
+  // 6) Antigravity worker: the Antigravity coding agent from Gemini Desktop, for creating
+  //    projects, writing code, refactoring and other programming tasks.
   const antigravity = {
     available: () => require('../../skills/antigravity').status().available,
     async run({ prompt, mission, task, timeoutMs }) {
