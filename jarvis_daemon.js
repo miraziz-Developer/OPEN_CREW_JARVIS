@@ -649,8 +649,8 @@ async function mainLoop() {
     // parallel as a fallback: this catches both plain/accented "Jarvis" and
     // the known cross-locale phonetic fingerprint without adding serial wait.
     Promise.all([
-      _sttPool.recognize(wavBuf, 'en-US'),
-      _sttPool.recognize(wavBuf, 'uz-UZ')
+      _sttPool.recognize(wavBuf, 'en-US', { localOnly: true }),
+      _sttPool.recognize(wavBuf, 'uz-UZ', { localOnly: true })
     ]).then(results => {
       const heard = results.filter(r => r && r.status === 'ok' && r.text);
       if (heard.length) {
