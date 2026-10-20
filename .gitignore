@@ -1,7 +1,8 @@
 # ─── Maxfiy ma'lumotlar ───
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+.jarvis-protocol.json
 *.key
 *.pem
 secrets/
