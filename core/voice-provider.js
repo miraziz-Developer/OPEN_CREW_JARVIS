@@ -107,6 +107,10 @@ function buildVoiceProviders(env) {
       id: 'gemini-live',
       autoResponds: true,
       voice,
+      // Measured: Gemini delivers audio at real-time speed with gaps up to ~900 ms, so
+      // starting playback on the first ~300 ms chunk underruns. Wait for the second chunk.
+      playbackPrebufferMs: 450,
+      playbackMaxWaitMs: 700,
       createSocket: () => new (require('./gemini-live-adapter').GeminiLiveSocket)({ apiKey: geminiKey, model, voice })
     };
     if (String(env('REALTIME_VOICE_PROVIDER', '')).trim().toLowerCase() === 'gemini') providers.unshift(gemini);

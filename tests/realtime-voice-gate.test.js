@@ -1154,3 +1154,15 @@ test('Fn hands-free follow-up during media cannot launch media without the wake 
   assert.equal(session._acceptTranscript('Play "Shadhani".'), false);
   assert.equal(session._acceptTranscript('Jarvis, play Shadhani'), true);
 });
+
+test('Gemini Live gets a jitter buffer large enough for real-time streaming', () => {
+  const session = new RealtimeSession({ speakText: async () => {} });
+  session.playbackBuffer = { prebufferMs: 0, maxWaitMs: 0 };
+  session.provider = { id: 'gemini-live', playbackPrebufferMs: 450, playbackMaxWaitMs: 700 };
+  session._applyPlaybackJitter();
+  assert.deepEqual(session.playbackBuffer, { prebufferMs: 450, maxWaitMs: 700 });
+  // Providers without their own value keep the .env defaults (never shrink below them).
+  session.provider = { id: 'voice-live' };
+  session._applyPlaybackJitter();
+  assert.ok(session.playbackBuffer.prebufferMs < 450);
+});

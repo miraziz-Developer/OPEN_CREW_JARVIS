@@ -1011,7 +1011,7 @@ async function collectGrounding(query, options = {}) {
     }
   } catch (e) {}
   try {
-    const mac = require('../../core/macos-context').collectMacOSContext();
+    const mac = await require('../../core/macos-context').collectMacOSContextAsync();
     const current = [mac?.app, mac?.window?.title, mac?.browser?.title, mac?.browser?.url].filter(Boolean).join(' | ');
     if (current) blocks.push('JORIY MACOS KONTEKSTI:\n' + current.slice(0, 900));
   } catch (e) {}
@@ -1217,6 +1217,7 @@ class RealtimeSession extends EventEmitter {
     }
     this._providerIndex = index;
     this.provider = provider;
+    this._applyPlaybackJitter();
     this._connecting = true;
     const socket = typeof provider.createSocket === 'function'
       ? provider.createSocket()
@@ -2797,12 +2798,26 @@ class RealtimeSession extends EventEmitter {
     stats.maxResidual = Math.max(stats.maxResidual, Math.round(processed.residualRms || 0));
     if (now - stats.since < 5000) return;
     if (stats.sent || this.assistantSpeaking) {
+      // A stalled event loop starves the speaker queue (audible gaps mid-sentence).
+      const loop = this._loopDelay();
       this.emit('telemetry', 'gate.stats', {
         sent: stats.sent, dropped: stats.dropped, maxResidualRms: stats.maxResidual,
-        thresholdRms: processed.speechThresholdRms, assistantSpeaking: this.assistantSpeaking
+        thresholdRms: processed.speechThresholdRms, assistantSpeaking: this.assistantSpeaking,
+        eventLoopMaxMs: loop
       });
     }
     this._gateStats = { sent: 0, dropped: 0, maxResidual: 0, since: now };
+  }
+
+  _loopDelay() {
+    if (!this._loopHistogram) {
+      this._loopHistogram = require('perf_hooks').monitorEventLoopDelay({ resolution: 20 });
+      this._loopHistogram.enable();
+      return null;
+    }
+    const maxMs = Math.round(this._loopHistogram.max / 1e6);
+    this._loopHistogram.reset();
+    return maxMs;
   }
 
   _feedTrailingSilence(bytes24k) {
@@ -2836,14 +2851,21 @@ class RealtimeSession extends EventEmitter {
     });
     this.playbackBuffer = new PcmPlaybackBuffer({
       sampleRate: OUT_RATE,
-      prebufferMs: PLAYBACK_PREBUFFER_MS,
-      maxWaitMs: PLAYBACK_MAX_WAIT_MS,
       onData: audio => this._writePlayback(audio)
     });
+    this._applyPlaybackJitter();
     this.playProc.on('error', () => {});
     // An unhandled stdin EPIPE (e.g. the player process dies unexpectedly) would
     // crash the whole daemon, so it is swallowed here.
     this.playProc.stdin.on('error', () => {});
+  }
+
+  // Providers that stream at real-time speed (Gemini Live) leave no slack in the
+  // speaker queue, so they declare a larger jitter buffer than the .env default.
+  _applyPlaybackJitter() {
+    if (!this.playbackBuffer) return;
+    this.playbackBuffer.prebufferMs = Math.max(PLAYBACK_PREBUFFER_MS, this.provider?.playbackPrebufferMs || 0);
+    this.playbackBuffer.maxWaitMs = Math.max(PLAYBACK_MAX_WAIT_MS, this.provider?.playbackMaxWaitMs || 0);
   }
 
   _playChunk(buf) {
@@ -2913,6 +2935,7 @@ class RealtimeSession extends EventEmitter {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this._loopHistogram?.disable();
     if (this._pendingAuthoritativeTurn?.timer) clearTimeout(this._pendingAuthoritativeTurn.timer);
     this._pendingAuthoritativeTurn = null;
     clearInterval(this._wakeSyncTimer);
