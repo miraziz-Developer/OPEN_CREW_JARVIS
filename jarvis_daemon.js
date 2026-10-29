@@ -148,6 +148,9 @@ const WAKE_STT_MIN_SPEECH_MS = 480;
 const hasVoiceProviders = Boolean(buildVoiceProviders(env).length);
 const REALTIME_ENABLED = hasVoiceProviders && (env('REALTIME_ENABLED') || 'true') !== 'false'; // true realtime (speech-to-speech) conversation mode
 const NATIVE_AEC = (env('JARVIS_NATIVE_AEC') || 'true') !== 'false';
+// Tool names safe to store in voice telemetry (free-form run_task descriptions are not).
+const TELEMETRY_TOOL_NAMES = new Set(['background_agent', 'fast_action', 'communication', 'ask_expert', 'recall_memory', 'save_memory',
+  'manage_tasks', 'cancel_task', 'close_app', 'file_op', 'undo_last', 'web_open', 'see_screen']);
 // Always-listening is active only when a cloud realtime provider is available
 const ALWAYS_LISTEN = hasVoiceProviders && (env('JARVIS_ALWAYS_LISTEN') || 'true') !== 'false';
 const ALWAYS_LISTEN_MAX_AGE_MS = Math.max(5, parseInt(env('ALWAYS_LISTEN_MAX_AGE_MIN'), 10) || 25) * 60000;
@@ -1025,7 +1028,10 @@ async function mainLoop() {
     session.on('tool_call', (description, callId) => {
       markRealtimeActivity();
       activeToolCount += 1;
-      flightRecorder.event('tool.started', { description, callId });
+      // Only the tool-name prefix ("fast_action", "see_screen"), never user text, so slow tools can be found.
+      const prefix = /^([a-z_]+):/.exec(String(description || ''))?.[1];
+      const tool = TELEMETRY_TOOL_NAMES.has(prefix) ? prefix : 'run_task';
+      flightRecorder.event('tool.started', { description, callId, tool });
       runtime.requestTask(description, { id: callId, source: 'realtime' });
       runtime.transitionTask(callId, 'running');
       beginSingleStepMission(description, {

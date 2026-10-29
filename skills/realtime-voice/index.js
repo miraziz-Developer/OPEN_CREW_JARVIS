@@ -117,6 +117,10 @@ const GROUNDING_FOLLOWUP_MAX_MS = parseInt(env('GROUNDING_FOLLOWUP_MAX_MS'), 10)
 const NATIVE_BARGE_IN_RMS = parseInt(env('REALTIME_NATIVE_BARGE_IN_RMS'), 10) || 450;
 const NATIVE_MIC_MUTE_GRACE_MS = 150;
 const NATIVE_BARGE_IN_CONFIRM_MS = parseInt(env('REALTIME_NATIVE_BARGE_IN_CONFIRM_MS'), 10) || 250;
+// macOS Voice Processing needs a moment to adapt when playback starts; echo leaking
+// in that window paused replies ~0.7 s in. Require longer evidence right after start.
+const NATIVE_AEC_SETTLE_MS = 1200;
+const NATIVE_BARGE_IN_SETTLE_CONFIRM_MS = 700;
 const NATIVE_PREROLL_BYTES = 24000 * 2 * 1.2;
 const STOP_QUIET_MS = 6000;
 // Always-listening: while idle, the local energy gate sends only speech (+ the preceding 450 ms) to the cloud.
@@ -2635,7 +2639,7 @@ class RealtimeSession extends EventEmitter {
         this._bargeInGapMs = 0;
         this._bargeInCandidate.push(Buffer.from(processed.audio));
         this._bargeInCandidateMs += chunkMs;
-        const confirmMs = this._nativeAec ? NATIVE_BARGE_IN_CONFIRM_MS : BARGE_IN_CONFIRM_MS;
+        const confirmMs = this._bargeInConfirmMs(now);
         if (this._bargeInCandidateMs < confirmMs) return;
 
         const candidate = this._nativeAec && this._nativePreRoll.length
@@ -2653,7 +2657,7 @@ class RealtimeSession extends EventEmitter {
         this._bargeInConfirmed = true;
         this._bargeInEvidenceAt = now;
         this.emit('telemetry', 'barge_in.confirmed', {
-          confirmationMs: this._nativeAec ? NATIVE_BARGE_IN_CONFIRM_MS : BARGE_IN_CONFIRM_MS,
+          confirmationMs: confirmMs,
           source: this._nativeAec ? 'native-aec' : 'local-duplex'
         });
         this._sendInputAudio(candidate);
@@ -2809,6 +2813,12 @@ class RealtimeSession extends EventEmitter {
     this._gateStats = { sent: 0, dropped: 0, maxResidual: 0, since: now };
   }
 
+  _bargeInConfirmMs(now) {
+    if (!this._nativeAec) return BARGE_IN_CONFIRM_MS;
+    const settling = this._playbackStartedAt && now - this._playbackStartedAt < NATIVE_AEC_SETTLE_MS;
+    return settling ? NATIVE_BARGE_IN_SETTLE_CONFIRM_MS : NATIVE_BARGE_IN_CONFIRM_MS;
+  }
+
   _loopDelay() {
     if (!this._loopHistogram) {
       this._loopHistogram = require('perf_hooks').monitorEventLoopDelay({ resolution: 20 });
@@ -2887,6 +2897,7 @@ class RealtimeSession extends EventEmitter {
       const writable = this.playProc.stdin.write(buf);
       if (!this._playbackStartedForTurn) {
         this._playbackStartedForTurn = true;
+        this._playbackStartedAt = now;
         this.emit('telemetry', 'playback.started', { queuedAudioMs: durationMs });
       }
       return writable;

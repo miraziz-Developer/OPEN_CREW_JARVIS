@@ -154,3 +154,28 @@ test('missing Voice Processing helper is built in the background, present one is
   assert.equal(again, 'present');
   assert.equal(spawned.length, 1);
 });
+
+test('right after playback starts, native barge-in needs longer evidence while the echo canceller settles', () => {
+  const session = new RealtimeSession();
+  session.ready = true;
+  session.ws = { send() {} };
+  session.playProc = { kill() {} };
+  session.enableNativeAec();
+  session.assistantSpeaking = true;
+  const loud = Buffer.alloc(3200); for (let i = 0; i < loud.length; i += 2) loud.writeInt16LE(i % 4 ? 4000 : -4000, i);
+
+  session._playbackStartedAt = Date.now();          // reply just started
+  for (let i = 0; i < 4; i++) session.feedAudio(loud); // 400 ms of loud audio: echo leak, not enough
+  assert.equal(session._duck, null);
+  for (let i = 0; i < 3; i++) session.feedAudio(loud); // 700 ms total: a real interruption still works
+  assert.ok(session._duck);
+  session.close();
+
+  const later = new RealtimeSession();
+  later.ready = true; later.ws = { send() {} }; later.playProc = { kill() {} };
+  later.enableNativeAec(); later.assistantSpeaking = true;
+  later._playbackStartedAt = Date.now() - 5000;     // well into the reply: normal 250 ms
+  for (let i = 0; i < 3; i++) later.feedAudio(loud);
+  assert.ok(later._duck);
+  later.close();
+});

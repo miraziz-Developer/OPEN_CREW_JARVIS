@@ -56,6 +56,44 @@ function summarizeStages(samples) {
   return result;
 }
 
+// What the listener actually experiences: replies paused or cut by false
+// interruptions, and daemon stalls while speaking (audible gaps).
+const STALL_MS = 150;
+function summarizeQuality(events) {
+  const count = (type, test = () => true) => events.filter(event => event.type === type && test(event.data || {})).length;
+  const speakingLoops = events
+    .filter(event => event.type === 'gate.stats' && event.data?.assistantSpeaking && Number.isFinite(event.data?.eventLoopMaxMs))
+    .map(event => event.data.eventLoopMaxMs);
+  const cancelled = {};
+  for (const event of events.filter(item => item.type === 'response.done' && item.data?.status === 'cancelled')) {
+    const reason = event.data.reason || 'unknown';
+    cancelled[reason] = (cancelled[reason] || 0) + 1;
+  }
+  const started = new Map(events.filter(event => event.type === 'tool.started' && event.data?.callId).map(event => [event.data.callId, event]));
+  const toolDurations = {};
+  for (const done of events.filter(event => event.type === 'tool.completed' && started.has(event.data?.callId))) {
+    const begin = started.get(done.data.callId);
+    const tool = begin.data.tool || 'unknown';
+    (toolDurations[tool] ??= []).push(done.at - begin.at);
+  }
+  const toolLatency = {};
+  for (const [tool, values] of Object.entries(toolDurations)) {
+    toolLatency[tool] = { calls: values.length, p50Ms: percentile(values, 0.5), p95Ms: percentile(values, 0.95) };
+  }
+  return {
+    toolLatency,
+    repliesPlayed: count('playback.started'),
+    falseInterruptions: count('barge_in.resumed', data => data.reason === 'timeout-no-speech'),
+    confirmedInterruptions: count('barge_in.committed'),
+    cancelledResponses: cancelled,
+    sessions: count('session.started'),
+    nativeEchoCancellation: count('native_aec.enabled'),
+    speakingStalls: speakingLoops.filter(ms => ms >= STALL_MS).length,
+    speakingLoopMaxMs: speakingLoops.length ? Math.max(...speakingLoops) : null,
+    speakingLoopSamples: speakingLoops.length
+  };
+}
+
 function summarizeVoiceTelemetry(records) {
   const summaries = records.filter(record => record.type === 'turn.summary').map(record => record.data || {});
   const events = records.filter(record => record.type !== 'turn.summary');
@@ -136,6 +174,7 @@ function summarizeVoiceTelemetry(records) {
       stages: summarizeStages(stageSamples.map(sample => sample.stages)),
       stagesByRoute: stageLatencyByRoute
     },
+    quality: summarizeQuality(events),
     eventCounts,
     suppressionReasons: reasons,
     recentTurns: summaries.slice(-20).reverse()
@@ -146,4 +185,4 @@ function loadVoiceTelemetry(file, options) {
   return summarizeVoiceTelemetry(readRecords(file, options));
 }
 
-module.exports = { readRecords, summarizeVoiceTelemetry, loadVoiceTelemetry };
+module.exports = { readRecords, summarizeVoiceTelemetry, summarizeQuality, loadVoiceTelemetry, STALL_MS };
