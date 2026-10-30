@@ -350,3 +350,8 @@ test('a Gemini API key alone does not put the tool-less Gemini model ahead of th
   });
   assert.deepEqual(bridge.agentProviders.snapshot().map(p => p.id).slice(0, 1), ['openclaw']);
 });
+
+test('the agent is told to use the owner\'s signed-in Chrome for Gmail and other logins', () => {
+  assert.match(agentPolicyPreamble(), /profile="user"/);
+  assert.match(agentPolicyPreamble(), /Gmail/);
+});

@@ -1166,3 +1166,10 @@ test('Gemini Live gets a jitter buffer large enough for real-time streaming', ()
   session._applyPlaybackJitter();
   assert.ok(session.playbackBuffer.prebufferMs < 450);
 });
+
+test('without Google API tokens the voice model is not told it cannot read Gmail', () => {
+  const { loadInstructions } = require('../skills/realtime-voice');
+  const text = loadInstructions();
+  assert.doesNotMatch(text, /CANNOT:[^.]*read Gmail/);
+  assert.match(text, /Gmail/);
+});

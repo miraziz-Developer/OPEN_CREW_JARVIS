@@ -364,7 +364,9 @@ function selfKnowledgeBlock() {
     if (phoneConnected) can.push('see and control the user\'s connected iPhone (tap, type, open apps) via run_task');
     const workers = ['babyagi:.venv-babyagi', 'autogpt:.venv-autogpt', 'browser:.venv-workers', 'interpreter:.venv-workers'].filter(w => exists(w.split(':')[1])).map(w => w.split(':')[0]);
     const cannot = [];
-    if (!exists('.google-tokens.json')) cannot.push('read Gmail or Calendar (Google is not connected yet)');
+    // Without Google API tokens, Gmail and Calendar still work through the owner's signed-in Chrome.
+    if (exists('.google-tokens.json')) can.push('read and manage Gmail and Calendar');
+    else can.push('read Gmail, Calendar and other signed-in sites through the owner\'s own Chrome via run_task (slower than the API)');
     if (!phoneConnected) cannot.push('control the phone right now (iPhone Mirroring is not connected — it needs the phone unlocked nearby once)');
     cannot.push('see the screen continuously (only on request or ambient app name)');
     return '\n\nYOUR REAL ABILITIES RIGHT NOW (generated from the live system; do not claim more): ' + can.join('; ') + '.' +

@@ -43,9 +43,12 @@ function agentPolicyPreamble({ brief = true, mode = confirmModeFromEnv() } = {})
     : mode === 'strict' ? 'Ask for confirmation only before sending messages, deleting data, submitting applications, payments or other irreversible external actions; do everything else directly.'
       : 'Do tasks directly without asking; ask for confirmation only before spending money or making a payment.';
   const act = 'Act before explaining: when the request can be completed with your tools, do the work now instead of describing a plan or teaching the user how to do it. Never tell the user to click, open, type or do a step themselves — you have desktop-control, phone-control and the browser; do it yourself. Report only the verified result.';
+  // The owner's own Chrome already has their logins (Gmail, Google, social sites); the isolated
+  // browser profile does not, which made the agent report "not connected".
+  const browser = ' For sites that need the owner\'s login (Gmail and other Google apps, social networks, accounts), use the browser tool with profile="user": it is the owner\'s own signed-in Chrome. Use the default isolated browser for anonymous browsing.';
   const style = brief ? ' Reply with the result in one or two short plain sentences: no preamble, markdown lists, step-by-step guides, repeated request, or offers of further help.' : '';
   const resolve = ' Do not refuse lazily or make excuses: try your tools first and solve the task yourself. Never claim a result you have not verified; if something is genuinely impossible, say in one sentence what blocked you. Answer in natural, fluent English unless the owner explicitly asks for another language.';
-  return localSoul() + `[Owner policy: ${confirm} ${act}${style}${resolve}]`;
+  return localSoul() + `[Owner policy: ${confirm} ${act}${browser}${style}${resolve}]`;
 }
 const RETRY_DELAYS_MS = [5000, 15000, 45000, 135000];
 const RECOVERED_STEP_INSTRUCTION = 'RECOVERY SAFETY: This recovered checkpoint step may have partially executed before the prior worker stopped. Verify the current external and local state before acting. Do not repeat a side-effecting action unless verification shows it is still required. Report what you verified and any uncertainty.';
