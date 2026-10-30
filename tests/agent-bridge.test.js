@@ -300,3 +300,53 @@ test('heavy multi-step routing and thinking follow the user request, not the mem
   assert.equal(needsCheckpointedExecution('Send me screenshot'), false);
   assert.ok(buildOpenClawAgentArgs(enriched, 'k', 'Send me screenshot').includes('off'));  // thinking o'chiq — oddiy so'rov
 });
+
+function fakeOpenClaw(calls, reply) {
+  return (command, args) => {
+    calls.push(args);
+    const proc = new EventEmitter();
+    proc.pid = 9000 + calls.length;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    process.nextTick(() => {
+      const { stdout, stderr, code } = reply(args, calls.length);
+      if (stdout) proc.stdout.emit('data', Buffer.from(stdout));
+      if (stderr) proc.stderr.emit('data', Buffer.from(stderr));
+      proc.emit('close', code, null);
+    });
+    return proc;
+  };
+}
+
+test('a rejected model override retries with the gateway default instead of failing the task', async () => {
+  const calls = [];
+  const bridge = createAgentBridge({
+    projectDir: fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-override-')),
+    env: name => (name === 'AGENT_FAST_MODEL' ? 'gpt-4.1-mini' : ''),
+    openClawEnvironment: {}, skillPlatform: { invoke: async () => null }, runtime: {},
+    spawnProcess: fakeOpenClaw(calls, args => args.includes('--model')
+      ? { stderr: 'Error: Model override "kimi-azure/gpt-4.1-mini" is not allowed for agent "main".', code: 1 }
+      : { stdout: 'Opened skyscanner.net and found 5 745 000 UZS.', code: 0 })
+  });
+  assert.equal(await bridge.askOpenClaw('find flights on skyscanner'), 'Opened skyscanner.net and found 5 745 000 UZS.');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].includes('--model'));
+  assert.ok(!calls[1].includes('--model'));
+  // Later tasks skip the rejected override right away.
+  await bridge.askOpenClaw('open gmail');
+  assert.equal(calls.length, 3);
+  assert.ok(!calls[2].includes('--model'));
+});
+
+test('a Gemini API key alone does not put the tool-less Gemini model ahead of the OpenClaw agent', t => {
+  const previous = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = 'test-key-for-voice-only';
+  t.after(() => { if (previous === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = previous; });
+  assert.equal(require('../core/gemini').hasGemini(), true);
+  const bridge = createAgentBridge({
+    projectDir: fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-brain-')),
+    env: name => (name === 'JARVIS_BRAIN' ? 'azure' : ''),
+    openClawEnvironment: {}, skillPlatform: { invoke: async () => null }, runtime: {}
+  });
+  assert.deepEqual(bridge.agentProviders.snapshot().map(p => p.id).slice(0, 1), ['openclaw']);
+});

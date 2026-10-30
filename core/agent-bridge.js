@@ -223,7 +223,22 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     }
   }
 
-  function askOpenClaw(message, sessionKey, options = {}) {
+  // The OpenClaw gateway may only allow its own configured models. When it rejects
+  // JARVIS's model choice, use the gateway default from then on instead of failing
+  // every task over to the tool-less fallback (which can only say "I can't").
+  let modelOverrideRejected = false;
+  async function askOpenClaw(message, sessionKey, options = {}) {
+    try {
+      return await runOpenClaw(message, sessionKey, options);
+    } catch (error) {
+      if (modelOverrideRejected || !/model override .* is not allowed/i.test(String(error.message || error))) throw error;
+      modelOverrideRejected = true;
+      wrn('OpenClaw rejected the model override; using the gateway default model: ' + String(error.message).slice(0, 160));
+      return runOpenClaw(message, sessionKey, options);
+    }
+  }
+
+  function runOpenClaw(message, sessionKey, options = {}) {
     return new Promise((resolve, reject) => {
       const task = options.task;
       const step = options.step;
@@ -250,7 +265,7 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
       };
       const childEnvironment = openClawEnvironment || resolveOpenClawEnvironment({ projectDir, env: openClawBaseEnvironment || process.env });
       const routeText = options.routeText || message;
-      const model = options.model || selectAgentModel(routeText, env);
+      const model = modelOverrideRejected ? undefined : (options.model || selectAgentModel(routeText, env));
       const proc = spawnProcess('openclaw', buildOpenClawAgentArgs(message, sessionKey, routeText, model), {
         cwd: projectDir,
         env: childEnvironment,
@@ -458,7 +473,9 @@ function createAgentBridge({ chatId, chatIds, token, projectDir, env, azureOpenA
     }
   }
 
-  const isGeminiBrain = String(envValue('JARVIS_BRAIN') || '').trim().toLowerCase() === 'gemini' || (gemini && gemini.hasGemini());
+  // Only an explicit JARVIS_BRAIN=gemini puts the tool-less Gemini model first: GEMINI_API_KEY
+  // alone (set for Gemini Live voice) must not send tool tasks away from the OpenClaw agent.
+  const isGeminiBrain = String(envValue('JARVIS_BRAIN') || '').trim().toLowerCase() === 'gemini';
   const poolList = [];
   if (isGeminiBrain && gemini && gemini.hasGemini()) {
     poolList.push({
