@@ -1015,7 +1015,7 @@ async function collectGrounding(query, options = {}) {
     }
   } catch (e) {}
   try {
-    const mac = await require('../../core/macos-context').collectMacOSContextAsync();
+    const mac = await require('../../core/macos-context').collectMacOSContextAsync({ light: true });
     const current = [mac?.app, mac?.window?.title, mac?.browser?.title, mac?.browser?.url].filter(Boolean).join(' | ');
     if (current) blocks.push('JORIY MACOS KONTEKSTI:\n' + current.slice(0, 900));
   } catch (e) {}

@@ -27,6 +27,21 @@ else if (result.app === 'Arc') { var a = Application('Arc'); result.browser = sa
 JSON.stringify(result);
 `;
 
+// Background callers (screen monitor every 90 s, voice grounding) only need the app,
+// window title and browser URL. Reading the focused element and enumerating windows
+// makes Chromium/Electron apps (Chrome, Claude, VS Code) build their accessibility
+// tree, which can stall them; only action verification needs those.
+const FOCUS_LINES = [
+  "  if (!win) win = safe(() => proc.windows().filter(w => safe(() => w.subrole(), '') === 'AXStandardWindow')[0], null);\n",
+  "  var el = safe(() => proc.attributes.byName('AXFocusedUIElement').value(), null);\n",
+  "  if (el) result.focus = { role: safe(() => el.role(), ''), title: safe(() => el.title(), ''), value: safe(() => el.value(), ''), description: safe(() => el.description(), '') };\n"
+];
+const LIGHT_CONTEXT_SCRIPT = FOCUS_LINES.reduce((script, line) => {
+  if (!script.includes(line)) throw new Error('macos-context: light script is out of sync with CONTEXT_SCRIPT');
+  return script.replace(line, '');
+}, CONTEXT_SCRIPT);
+const scriptFor = options => (options.light ? LIGHT_CONTEXT_SCRIPT : CONTEXT_SCRIPT);
+
 function parseJxaJson(output) {
   try {
     const parsed = JSON.parse(String(output || '').trim());
@@ -50,7 +65,7 @@ function contextError(error) {
 function collectMacOSContext(options = {}) {
   const exec = options.execFileSync || execFileSync;
   try {
-    return parseContextOutput(exec('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CONTEXT_SCRIPT], { encoding: 'utf8', timeout: options.timeout || 5000 }).trim());
+    return parseContextOutput(exec('/usr/bin/osascript', ['-l', 'JavaScript', '-e', scriptFor(options)], { encoding: 'utf8', timeout: options.timeout || 5000 }).trim());
   } catch (error) {
     throw contextError(error);
   }
@@ -61,11 +76,11 @@ function collectMacOSContext(options = {}) {
 function collectMacOSContextAsync(options = {}) {
   const exec = options.execFile || execFile;
   return new Promise((resolve, reject) => {
-    exec('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CONTEXT_SCRIPT], { encoding: 'utf8', timeout: options.timeout || 5000 }, (error, stdout, stderr) => {
+    exec('/usr/bin/osascript', ['-l', 'JavaScript', '-e', scriptFor(options)], { encoding: 'utf8', timeout: options.timeout || 5000 }, (error, stdout, stderr) => {
       if (error) return reject(contextError(Object.assign(error, { stderr })));
       try { resolve(parseContextOutput(stdout)); } catch (parseError) { reject(contextError(parseError)); }
     });
   });
 }
 
-module.exports = { collectMacOSContext, collectMacOSContextAsync, parseJxaJson, CONTEXT_SCRIPT };
+module.exports = { collectMacOSContext, collectMacOSContextAsync, parseJxaJson, CONTEXT_SCRIPT, LIGHT_CONTEXT_SCRIPT };

@@ -162,7 +162,7 @@ function getFrontWindow() {
 }
 
 function observeWorld(screen) {
-  const context = collectMacOSContext();
+  const context = collectMacOSContext({ light: true });
   if (screen) context.screen = screen;
   return worldModel.observe(context, { type: screen ? 'screen.analyzed' : 'context.observed' });
 }
